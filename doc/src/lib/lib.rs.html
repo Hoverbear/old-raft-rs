@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="Source to the Rust file `src/lib.rs`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang">
+
+    <title>lib.rs.html -- source</title>
+
+    <link rel="stylesheet" type="text/css" href="../../main.css">
+
+    
+    
+</head>
+<body class="rustdoc">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <section class="sidebar">
+        
+        
+    </section>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press 'S' to search, '?' for more options..."
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content source"><pre class="line-numbers"><span id="1">  1</span>
+<span id="2">  2</span>
+<span id="3">  3</span>
+<span id="4">  4</span>
+<span id="5">  5</span>
+<span id="6">  6</span>
+<span id="7">  7</span>
+<span id="8">  8</span>
+<span id="9">  9</span>
+<span id="10"> 10</span>
+<span id="11"> 11</span>
+<span id="12"> 12</span>
+<span id="13"> 13</span>
+<span id="14"> 14</span>
+<span id="15"> 15</span>
+<span id="16"> 16</span>
+<span id="17"> 17</span>
+<span id="18"> 18</span>
+<span id="19"> 19</span>
+<span id="20"> 20</span>
+<span id="21"> 21</span>
+<span id="22"> 22</span>
+<span id="23"> 23</span>
+<span id="24"> 24</span>
+<span id="25"> 25</span>
+<span id="26"> 26</span>
+<span id="27"> 27</span>
+<span id="28"> 28</span>
+<span id="29"> 29</span>
+<span id="30"> 30</span>
+<span id="31"> 31</span>
+<span id="32"> 32</span>
+<span id="33"> 33</span>
+<span id="34"> 34</span>
+<span id="35"> 35</span>
+<span id="36"> 36</span>
+<span id="37"> 37</span>
+<span id="38"> 38</span>
+<span id="39"> 39</span>
+<span id="40"> 40</span>
+<span id="41"> 41</span>
+<span id="42"> 42</span>
+<span id="43"> 43</span>
+<span id="44"> 44</span>
+<span id="45"> 45</span>
+<span id="46"> 46</span>
+<span id="47"> 47</span>
+<span id="48"> 48</span>
+<span id="49"> 49</span>
+<span id="50"> 50</span>
+<span id="51"> 51</span>
+<span id="52"> 52</span>
+<span id="53"> 53</span>
+<span id="54"> 54</span>
+<span id="55"> 55</span>
+<span id="56"> 56</span>
+<span id="57"> 57</span>
+<span id="58"> 58</span>
+<span id="59"> 59</span>
+<span id="60"> 60</span>
+<span id="61"> 61</span>
+<span id="62"> 62</span>
+<span id="63"> 63</span>
+<span id="64"> 64</span>
+<span id="65"> 65</span>
+<span id="66"> 66</span>
+<span id="67"> 67</span>
+<span id="68"> 68</span>
+<span id="69"> 69</span>
+<span id="70"> 70</span>
+<span id="71"> 71</span>
+<span id="72"> 72</span>
+<span id="73"> 73</span>
+<span id="74"> 74</span>
+<span id="75"> 75</span>
+<span id="76"> 76</span>
+<span id="77"> 77</span>
+<span id="78"> 78</span>
+<span id="79"> 79</span>
+<span id="80"> 80</span>
+<span id="81"> 81</span>
+<span id="82"> 82</span>
+<span id="83"> 83</span>
+<span id="84"> 84</span>
+<span id="85"> 85</span>
+<span id="86"> 86</span>
+<span id="87"> 87</span>
+<span id="88"> 88</span>
+<span id="89"> 89</span>
+<span id="90"> 90</span>
+<span id="91"> 91</span>
+<span id="92"> 92</span>
+<span id="93"> 93</span>
+<span id="94"> 94</span>
+<span id="95"> 95</span>
+<span id="96"> 96</span>
+<span id="97"> 97</span>
+<span id="98"> 98</span>
+<span id="99"> 99</span>
+<span id="100">100</span>
+<span id="101">101</span>
+<span id="102">102</span>
+<span id="103">103</span>
+<span id="104">104</span>
+<span id="105">105</span>
+<span id="106">106</span>
+<span id="107">107</span>
+<span id="108">108</span>
+<span id="109">109</span>
+<span id="110">110</span>
+<span id="111">111</span>
+<span id="112">112</span>
+</pre><pre class='rust '>
+
+<span class='doccomment'>//! The Raft Module.</span>
+<span class='kw'>mod</span> <span class='ident'>Raft</span> {
+    <span class='doccomment'>/// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:</span>
+    <span class='doccomment'>///   * `append_entries` which is used as both a heartbeat (with no payload) and the primary</span>
+    <span class='doccomment'>///     interface for requests.</span>
+    <span class='doccomment'>///   * `request_vote` which is used by candidates during campaigns to obtain a vote.</span>
+    <span class='kw'>pub</span> <span class='kw'>trait</span> <span class='ident'>Raft</span> {
+        <span class='comment'>// Returns (term, success)</span>
+        <span class='kw'>fn</span> <span class='ident'>append_entries</span>(<span class='ident'>term</span>: <span class='ident'>usize</span>, <span class='ident'>leader_id</span>: <span class='ident'>usize</span>, <span class='ident'>prev_log_index</span>: <span class='ident'>usize</span>,
+                          <span class='ident'>prev_log_term</span>: <span class='ident'>usize</span>, <span class='ident'>entries</span>: <span class='ident'>Vec</span><span class='op'>&lt;</span><span class='ident'>String</span><span class='op'>&gt;</span>,
+                          <span class='ident'>leader_commit</span>: <span class='ident'>usize</span>) <span class='op'>-&gt;</span> (<span class='ident'>usize</span>, <span class='ident'>bool</span>);
+
+        <span class='comment'>// Returns (term, voteGranted)</span>
+        <span class='kw'>fn</span> <span class='ident'>request_vote</span>(<span class='ident'>term</span>: <span class='ident'>usize</span>, <span class='ident'>candidate_id</span>: <span class='ident'>usize</span>, <span class='ident'>last_log_index</span>: <span class='ident'>usize</span>,
+                        <span class='ident'>last_log_term</span>: <span class='ident'>usize</span>) <span class='op'>-&gt;</span> (<span class='ident'>usize</span>, <span class='ident'>bool</span>);
+    }
+
+    <span class='doccomment'>/// A `RaftNode` acts as a replicated state machine. The server&#39;s role in the cluster depends on it&#39;s</span>
+    <span class='doccomment'>/// own status. It will maintain both volatile state (which can be safely lost) and persistent</span>
+    <span class='doccomment'>/// state (which must be carefully stored and kept safe).</span>
+    <span class='kw'>struct</span> <span class='ident'>RaftNode</span> {
+        <span class='comment'>// Raft related.</span>
+        <span class='ident'>state</span>: <span class='ident'>NodeState</span>,
+        <span class='ident'>persistent_state</span>: <span class='ident'>PersistentState</span>,
+        <span class='ident'>volatile_state</span>: <span class='ident'>VolatileState</span>,
+        <span class='comment'>// Auxilary Data.</span>
+        <span class='comment'>// TODO: This should probably be split off.</span>
+        <span class='comment'>// All nodes need to know this otherwise they can&#39;t effectively lead or hold elections.</span>
+        <span class='ident'>known_nodes</span>: <span class='ident'>Vec</span><span class='op'>&lt;</span><span class='ident'>String</span><span class='op'>&gt;</span>, <span class='comment'>// TODO: Make IP Address structs.</span>
+    }
+
+    <span class='doccomment'>/// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be</span>
+    <span class='doccomment'>/// done via `::new(node_list)`.</span>
+    <span class='doccomment'>///</span>
+    <span class='doccomment'>/// ```</span>
+    <span class='doccomment'>/// RaftNode::new(Vec!([&#39;192.168.0.100&#39;, &#39;192.168.0.101&#39;]))</span>
+    <span class='doccomment'>///` ```</span>
+    <span class='kw'>impl</span> <span class='ident'>RaftNode</span> {
+        <span class='kw'>fn</span> <span class='ident'>new</span>(<span class='kw-2'>&amp;</span><span class='self'>self</span>, <span class='ident'>node_list</span>: <span class='ident'>Vec</span><span class='op'>&lt;</span><span class='ident'>String</span><span class='op'>&gt;</span>) <span class='op'>-&gt;</span> <span class='ident'>RaftNode</span> {
+            <span class='ident'>RaftNode</span> {
+                <span class='ident'>state</span>: <span class='ident'>NodeState</span>::<span class='ident'>Follower</span>,
+                <span class='ident'>persistent_state</span>: <span class='ident'>PersistentState</span> {
+                    <span class='ident'>current_term</span>: <span class='number'>0</span>, <span class='comment'>// TODO: Double Check.</span>
+                    <span class='ident'>voted_for</span>: <span class='number'>0</span>, <span class='comment'>// TODO: Better type?</span>
+                    <span class='ident'>log</span>: <span class='ident'>Vec</span>::<span class='op'>&lt;</span><span class='ident'>String</span><span class='op'>&gt;</span>::<span class='ident'>new</span>(),
+                },
+                <span class='ident'>volatile_state</span>: <span class='ident'>VolatileState</span> {
+                    <span class='ident'>commit_index</span>: <span class='number'>0</span>,
+                    <span class='ident'>last_applied</span>: <span class='number'>0</span>,
+                },
+                <span class='ident'>known_nodes</span>: <span class='ident'>node_list</span>
+            }
+        }
+    }
+
+    <span class='doccomment'>/// The RPC calls required by the Raft protocol.</span>
+    <span class='kw'>impl</span> <span class='ident'>Raft</span> <span class='kw'>for</span> <span class='ident'>RaftNode</span> {
+        <span class='comment'>// Returns (term, success)</span>
+        <span class='kw'>fn</span> <span class='ident'>append_entries</span>(<span class='ident'>term</span>: <span class='ident'>usize</span>, <span class='ident'>leader_id</span>: <span class='ident'>usize</span>, <span class='ident'>prev_log_index</span>: <span class='ident'>usize</span>,
+                          <span class='ident'>prev_log_term</span>: <span class='ident'>usize</span>, <span class='ident'>entries</span>: <span class='ident'>Vec</span><span class='op'>&lt;</span><span class='ident'>String</span><span class='op'>&gt;</span>,
+                          <span class='ident'>leader_commit</span>: <span class='ident'>usize</span>) <span class='op'>-&gt;</span> (<span class='ident'>usize</span>, <span class='ident'>bool</span>) {
+            (<span class='number'>0</span>, <span class='boolval'>false</span>) <span class='comment'>// TODO: Implement</span>
+        }
+        <span class='comment'>// Returns (term, voteGranted)</span>
+        <span class='kw'>fn</span> <span class='ident'>request_vote</span>(<span class='ident'>term</span>: <span class='ident'>usize</span>, <span class='ident'>candidate_id</span>: <span class='ident'>usize</span>, <span class='ident'>last_log_index</span>: <span class='ident'>usize</span>,
+                        <span class='ident'>last_log_term</span>: <span class='ident'>usize</span>) <span class='op'>-&gt;</span> (<span class='ident'>usize</span>, <span class='ident'>bool</span>) {
+            (<span class='number'>0</span>, <span class='boolval'>false</span>) <span class='comment'>// TODO: Implement</span>
+        }
+    }
+
+    <span class='doccomment'>/// Nodes can either be:</span>
+    <span class='doccomment'>///   * A `Follower`, which replicates AppendEntries requests and votes for it&#39;s leader.</span>
+    <span class='doccomment'>///   * A `Leader`, which leads the cluster by serving incoming requests, ensuring data is</span>
+    <span class='doccomment'>///     replicated, and issuing heartbeats..</span>
+    <span class='doccomment'>///   * A `Candidate`, which campaigns in an election and may become a `Leader` (if it gets enough</span>
+    <span class='doccomment'>///     votes) or a `Follower`, if it hears from a `Leader`.</span>
+    <span class='kw'>enum</span> <span class='ident'>NodeState</span> {
+        <span class='ident'>Follower</span>,
+        <span class='ident'>Leader</span>(<span class='ident'>LeaderState</span>),
+        <span class='ident'>Candidate</span>,
+    }
+
+    <span class='doccomment'>/// Persistent state</span>
+    <span class='doccomment'>/// **Must be updated to stable storage before RPC response.**</span>
+    <span class='kw'>struct</span> <span class='ident'>PersistentState</span> {
+        <span class='ident'>current_term</span>: <span class='ident'>usize</span>,
+        <span class='ident'>voted_for</span>: <span class='ident'>usize</span>, <span class='comment'>// Better way? Can we use a IpAddr?</span>
+        <span class='ident'>log</span>: <span class='ident'>Vec</span><span class='op'>&lt;</span><span class='ident'>String</span><span class='op'>&gt;</span>, <span class='comment'>// TODO: Make less suck.</span>
+    }
+
+    <span class='doccomment'>/// Volatile state</span>
+    <span class='kw'>struct</span> <span class='ident'>VolatileState</span> {
+        <span class='ident'>commit_index</span>: <span class='ident'>usize</span>,
+        <span class='ident'>last_applied</span>: <span class='ident'>usize</span>
+    }
+
+    <span class='doccomment'>/// Leader Only</span>
+    <span class='doccomment'>/// **Reinitialized after election.**</span>
+    <span class='kw'>struct</span> <span class='ident'>LeaderState</span> {
+        <span class='ident'>next_index</span>: <span class='ident'>Vec</span><span class='op'>&lt;</span><span class='ident'>usize</span><span class='op'>&gt;</span>,
+        <span class='ident'>match_index</span>: <span class='ident'>Vec</span><span class='op'>&lt;</span><span class='ident'>usize</span><span class='op'>&gt;</span>
+    }
+}
+
+<span class='comment'>// Does stuff.</span>
+<span class='kw'>fn</span> <span class='ident'>main</span>() {
+
+}
+
+<span class='attribute'>#[<span class='ident'>cfg</span>(<span class='ident'>test</span>)]</span>
+<span class='kw'>mod</span> <span class='ident'>tests</span> {}
+</pre>
+</section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <div id="help" class="hidden">
+        <div class="shortcuts">
+            <h1>Keyboard shortcuts</h1>
+            <dl>
+                <dt>?</dt>
+                <dd>Show this help dialog</dd>
+                <dt>S</dt>
+                <dd>Focus the search field</dd>
+                <dt>&larrb;</dt>
+                <dd>Move up in search results</dd>
+                <dt>&rarrb;</dt>
+                <dd>Move down in search results</dd>
+                <dt>&#9166;</dt>
+                <dd>Go to active search result</dd>
+            </dl>
+        </div>
+        <div class="infos">
+            <h1>Search tricks</h1>
+            <p>
+                Prefix searches with a type followed by a colon (e.g.
+                <code>fn:</code>) to restrict the search to a given type.
+            </p>
+            <p>
+                Accepted types are: <code>fn</code>, <code>mod</code>,
+                <code>struct</code>, <code>enum</code>,
+                <code>trait</code>, <code>typedef</code> (or
+                <code>tdef</code>).
+            </p>
+        </div>
+    </div>
+
+    
+
+    <script>
+        window.rootPath = "../../";
+        window.currentCrate = "lib";
+        window.playgroundUrl = "";
+    </script>
+    <script src="../../jquery.js"></script>
+    <script src="../../main.js"></script>
+    
+    <script async src="../../search-index.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+[package]
+
+name = "raft"
+version = "0.0.1"
+authors = ["Andrew Hobden <andrew@hoverbear.org>"]
