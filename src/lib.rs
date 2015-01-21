@@ -1,8 +1,14 @@
 #![crate_name = "raft"]
 #![crate_type="lib"]
 
-//! Some module level stuff here.
-use std::io::net::ip::IpAddr;
+use std::io::net::ip::SocketAddr;
+use std::io::net::udp::UdpSocket;
+use std::thread::Thread;
+use std::sync::mpsc::{channel, Sender, Receiver};
+use std::str;
+
+// The maximum size of the read buffer.
+const BUFFER_SIZE: usize = 2048;
 
 /// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
 ///
@@ -32,38 +38,60 @@ pub struct RaftNode {
     // Auxilary Data.
     // TODO: This should probably be split off.
     // All nodes need to know this otherwise they can't effectively lead or hold elections.
-    known_nodes: Vec<IpAddr>, // TODO: Make IP Address structs.
+    known_nodes: Vec<SocketAddr>,
+    own_socket: SocketAddr,
 }
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
-/// done via `::new(node_list)`.
+/// done via `::new()`.
 ///
 /// ```
 /// use raft::RaftNode;
-/// use std::io::net::ip::IpAddr;
-/// 
-/// RaftNode::new(vec![
-///     "192.168.0.100".parse::<IpAddr>().unwrap(),
-///     "192.168.0.101".parse::<IpAddr>().unwrap()
-/// ]);
-/// 
+/// use std::io::net::ip::SocketAddr;
+/// use std::io::net::ip::IpAddr::Ipv4Addr;
+/// let my_node = RaftNode::new(
+///     // This node's address.
+///     SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 },
+///     // The list of nodes.
+///     vec![
+///     SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 },
+///     SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11113 }
+///     ]);
 /// ```
 impl RaftNode {
     /// Creates a new RaftNode with the neighbors specified.
-    pub fn new(node_list: Vec<IpAddr>) -> RaftNode {
+    pub fn new(own_socket: SocketAddr, node_list: Vec<SocketAddr>) -> RaftNode {
         RaftNode {
             state: NodeState::Follower,
             persistent_state: PersistentState {
                 current_term: 0, // TODO: Double Check.
-                voted_for: 0, // TODO: Better type?
+                voted_for: 0,    // TODO: Better type?
                 log: Vec::<String>::new(),
             },
             volatile_state: VolatileState {
                 commit_index: 0,
                 last_applied: 0,
             },
-            known_nodes: node_list
+            known_nodes: node_list,
+            own_socket: own_socket
         }
+    }
+    /// Spins up a thread that listens and handles RPCs.
+    pub fn spinup(&self) -> Receiver<String> {
+        let (sender, reciever) = channel::<String>();
+        // Need to clone the SocketAddr for lifetime reasons.
+        let mut socket = UdpSocket::bind(self.own_socket)
+                .unwrap(); // TODO: Can we do better?
+        Thread::spawn(move || {
+            let mut read_buffer = [0; BUFFER_SIZE];
+            let (num_read, source) = socket.recv_from(&mut read_buffer)
+                .unwrap(); // TODO: Can we do better?
+            let message = str::from_utf8(&read_buffer)
+                .map(|val| String::from_str(val))
+                .unwrap_or("FAIL".to_string()); // TODO: Can we do better?
+            sender.send(message).unwrap();
+        });
+        reciever
     }
 }
 
@@ -117,4 +145,35 @@ pub struct LeaderState {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use std::io::net::ip::SocketAddr;
+    use std::io::net::udp::UdpSocket;
+    use std::io::net::ip::IpAddr::Ipv4Addr;
+    use std::thread::Thread;
+    use std::sync::mpsc::{channel, Sender, Receiver};
+    use std::str;
+    use super::*;
+
+    #[test]
+    fn basic_functionality() {
+        // Create the node.
+        let my_node = RaftNode::new(
+            // This node's address.
+            SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 },
+            // The list of nodes.
+            vec![
+            SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 },
+            SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11113 }
+            ]);
+        // Start up the node.
+        let my_channel = my_node.spinup();
+        // Make a test send to that port.
+        let sender = SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 1112 };
+        let mut out = UdpSocket::bind(sender).unwrap();
+        out.send_to("foo".as_bytes(), SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111}).unwrap();
+        // Get the result.
+        let event = my_channel.recv().unwrap();
+        println!("{}", event);
+    }
+
+}
