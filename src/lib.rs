@@ -78,33 +78,45 @@ impl RaftNode {
                 last_applied: 0,
             },
             known_nodes: node_list,
-            own_socket: own_socket
+            own_socket: own_socket,
         }
     }
     /// Spins up a thread that listens and handles RPCs.
-    pub fn spinup(&self) -> Receiver<String> {
-        let (sender, reciever) = channel::<String>();
+    pub fn spinup(&self) -> (Sender<(RemoteProcedureCall, SocketAddr)>, Receiver<String>) {
+        let (entry_sender, entry_reciever) = channel::<String>();
+        let (rpc_sender, rpc_reciever) = channel::<(RemoteProcedureCall, SocketAddr)>();
         // Need to clone the SocketAddr for lifetime reasons.
         let mut socket = UdpSocket::bind(self.own_socket)
             .unwrap(); // TODO: Can we do better?
+        socket.set_read_timeout(Some(0));
         Thread::spawn(move || {
             let mut read_buffer = [0; BUFFER_SIZE];
-            let (num_read, source) = socket.recv_from(&mut read_buffer)
-                .unwrap(); // TODO: Can we do better?
-            let string_slice = str::from_utf8(read_buffer.slice_to_mut(num_read))
-                .unwrap(); // TODO: Can we do better?
-            let data =  json::decode::<RemoteProcedureCall>(string_slice)
-                .unwrap(); // TODO: Can we do better?
-            match data {
-                RemoteProcedureCall::AppendEntries { .. } => {
-                    sender.send("Got AppendEntries".to_string()).unwrap();
-                },
-                RemoteProcedureCall::RequestVote { .. } => {
-                    sender.send("Got RequestVote".to_string()).unwrap();
+            loop {
+                match socket.recv_from(&mut read_buffer) {
+                    Ok((num_read, source)) => {
+                        let string_slice = str::from_utf8(read_buffer.slice_to_mut(num_read))
+                            .unwrap(); // TODO: Can we do better?
+                        let rpc = json::decode::<RemoteProcedureCall>(string_slice)
+                            .unwrap(); // TODO: Can we do better?
+                        entry_sender.send(format!("{:?}", rpc));
+                    },
+                    // TODO: Maybe need to handle this better.
+                    Err(_) => (),
+                }
+                // Write anything in the channel out to the network.
+                match rpc_reciever.try_recv() {
+                    Ok((rpc, target)) => {
+                        println!("Sending things!");
+                        let encoded = json::encode::<RemoteProcedureCall>(&rpc);
+                        socket.send_to(encoded.as_bytes(), target)
+                            .unwrap(); // TODO: Can we do better?
+                    },
+                    // TODO: Maybe need to handle this better.
+                    Err(_) => (),
                 }
             }
         });
-        reciever
+        (rpc_sender, entry_reciever)
     }
 }
 
@@ -124,7 +136,7 @@ impl Raft for RaftNode {
 }
 
 /// Data interchange format for RPC calls.
-#[derive(RustcEncodable, RustcDecodable, Show)]
+#[derive(RustcEncodable, RustcDecodable, Show, Clone)]
 pub enum RemoteProcedureCall {
     AppendEntries {
         term: usize,
@@ -188,29 +200,33 @@ mod tests {
 
     #[test]
     fn accepts_request_vote() {
-        let recieve_node = SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 };
-        let send_node = SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 };
+        let send_addr = SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 };
+        let recieve_addr = SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 };
         // Create the node.
-        let my_node = RaftNode::new(
-            recieve_node,
+        let send_node = RaftNode::new(
+            send_addr, // The node's address.
             vec![
-                send_node,
+            recieve_addr, // The neighbor.
+            ]);
+        let recieve_node = RaftNode::new(
+            recieve_addr, // The node's address.
+            vec![
+            send_addr, // The neighbor.
             ]);
         // Start up the node.
-        let my_channel = my_node.spinup();
+        let (_, log_reciever) = recieve_node.spinup();
+        let (rpc_sender, _) = send_node.spinup();
         // Make a test send to that port.
-        let mut out = UdpSocket::bind(send_node).unwrap();
         let test_value = RemoteProcedureCall::RequestVote {
             term: 0,
             candidate_id: 0,
             last_log_index: 0,
             last_log_term: 0,
         };
-        let test_json = json::encode::<RemoteProcedureCall>(&test_value);
-        out.send_to(test_json.as_bytes(), recieve_node).unwrap();
+        rpc_sender.send((test_value.clone(), recieve_addr)).unwrap();
         // Get the result.
-        let event = my_channel.recv().unwrap();
-        assert_eq!(event, "Got RequestVote".to_string());
+        let event = log_reciever.recv().unwrap();
+        assert_eq!(event, format!("{:?}", test_value));
     }
 
 }
