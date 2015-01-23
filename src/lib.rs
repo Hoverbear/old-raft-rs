@@ -14,6 +14,7 @@ use std::sync::mpsc::{channel, Sender, Receiver};
 use std::str;
 use rustc_serialize::{json, Encodable, Decodable};
 use RemoteProcedureCall::{AppendEntries, RequestVote};
+use NodeState::{Leader, Follower, Candidate};
 
 // The maximum size of the read buffer.
 const BUFFER_SIZE: usize = 4096;
@@ -51,7 +52,7 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     known_nodes: Vec<SocketAddr>,
     leader_node: Option<SocketAddr>,
     own_socket: SocketAddr,
-    heartbeat: Timer,
+    heartbeat: Receiver<()>,
 }
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
@@ -74,6 +75,9 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
 impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     /// Creates a new RaftNode with the neighbors specified.
     pub fn new(own_socket: SocketAddr, node_list: Vec<SocketAddr>) -> RaftNode<T> {
+        // I'd rather not have to create these, but c'este la vie
+        let mut rng = thread_rng();
+        let mut timer = Timer::new().unwrap();
         RaftNode {
             state: NodeState::Follower,
             persistent_state: PersistentState {
@@ -89,7 +93,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             leader_node: None,
             own_socket: own_socket,
             // Blank timer for now.
-            heartbeat: Timer::new().unwrap(), // If this fails we're in trouble.
+            heartbeat: timer.oneshot(Duration::milliseconds(rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX))), // If this fails we're in trouble.
         }
     }
     /// Spins up a thread that listens and handles RPCs.
@@ -102,58 +106,110 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             let mut socket = UdpSocket::bind(self.own_socket)
                 .unwrap(); // TODO: Can we do better?
             socket.set_read_timeout(Some(0));
-            // Start up a RNG.
+            // Start up a RNG and Timer
             let mut rng = thread_rng();
-            self.heartbeat.oneshot(Duration::milliseconds(rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX)));
+            let mut timer = Timer::new().unwrap();
             // We need a read buffer.
             let mut read_buffer = [0; BUFFER_SIZE];
             loop {
-                // Read anything from the socket and handle it.
-                match socket.recv_from(&mut read_buffer) {
-                    Ok((num_read, source)) => {
-                        println!("Got something from socket");
-                        let string_slice = str::from_utf8(read_buffer.slice_to_mut(num_read))
-                            .unwrap(); // TODO: Can we do better?
-                        let mut rpc = json::decode::<RemoteProcedureCall<T>>(string_slice)
-                            .unwrap(); // TODO: Can we do better?
-                        match rpc {
-                            AppendEntries { entries: mut entries, .. } => {
-                                // TODO: Log data properly.
-                                for entry in entries.iter_mut() {
-                                    node_in.send(entry.clone());
+                match &self.state {
+                    &Leader(ref leader_state) => {
+                        // If socket has data.
+                        match socket.recv_from(&mut read_buffer) {
+                            Ok((num_read, source)) => { // Something on the socket.
+                                // TODO
+                            },
+                            Err(_) => (),               // Nothing on the socket.
+                        }
+                        // If channel has data.
+                        match node_out.try_recv() {
+                            Ok(entry) => {              // Something in channel.
+
+                            },
+                            Err(_) => (),               // Nothing in channel.
+                        }
+                        // If timer has fired.
+                        match self.heartbeat.try_recv() {
+                            Ok(_) => {                  // Timer has fired.
+
+                            },
+                            Err(_) => (),               // Timer hasn't fired.
+                        }
+                    },
+                    &Follower => {
+                        // If socket has data.
+                        match socket.recv_from(&mut read_buffer) {
+                            Ok((num_read, source)) => { // Something on the socket.
+                                // TODO
+                                println!("Got something from socket");
+                                let string_slice = str::from_utf8(read_buffer.slice_to_mut(num_read))
+                                    .unwrap(); // TODO: Can we do better?
+                                let mut rpc = json::decode::<RemoteProcedureCall<T>>(string_slice)
+                                    .unwrap(); // TODO: Can we do better?
+                                match rpc {
+                                    AppendEntries { entries: mut entries, .. } => {
+                                        // TODO: Log data properly.
+                                        for entry in entries.iter_mut() {
+                                            node_in.send(entry.clone());
+                                        }
+                                    },
+                                    RequestVote { .. } => {
+                                        // TODO: Do something.
+                                    },
                                 }
                             },
-                            RequestVote { .. } => {
-                                // TODO: Do something.
+                            Err(_) => (),               // Nothing on the socket.
+                        }
+                        // If channel has data.
+                        match node_out.try_recv() {
+                            Ok(entry) => {              // Something in channel.
+                                println!("Sending things!");
+                                let rpc = AppendEntries {
+                                    term: 0,
+                                    leader_id: 0,
+                                    prev_log_index: 0,
+                                    entries: vec![entry],
+                                    leader_commit: 0,
+                                };
+                                let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc);
+                                for node in self.known_nodes.iter() {
+                                    socket.send_to(encoded.as_bytes(), *node)
+                                        .unwrap(); // TODO: Can we do better?
+                                }
                             },
+                            Err(_) => (),               // Nothing in channel.
+                        }
+                        // If timer has fired.
+                        match self.heartbeat.try_recv() {
+                            Ok(_) => {                  // Timer has fired.
+
+                            },
+                            Err(_) => (),               // Timer hasn't fired.
                         }
                     },
-                    // TODO: Maybe need to handle this better.
-                    Err(_) => (),
-                }
-                // If there is something in the reciever we need to handle it.
-                match (node_out.try_recv(), &self.state) {
-                    (Ok(entry), &NodeState::Leader(_)) => {
-                        println!("Sending things!");
-                        let rpc = AppendEntries {
-                            term: 0,
-                            leader_id: 0,
-                            prev_log_index: 0,
-                            entries: vec![entry],
-                            leader_commit: 0,
-                        };
-                        let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc);
-                        for node in self.known_nodes.iter() {
-                            socket.send_to(encoded.as_bytes(), *node)
-                                .unwrap(); // TODO: Can we do better?
+                    &Candidate => {
+                        // If socket has data.
+                        match socket.recv_from(&mut read_buffer) {
+                            Ok((num_read, source)) => { // Something on the socket.
+                                // TODO
+                            },
+                            Err(_) => (),               // Nothing on the socket.
+                        }
+                        // If channel has data.
+                        match node_out.try_recv() {
+                            Ok(entry) => {              // Something in channel.
+
+                            },
+                            Err(_) => (),               // Nothing in channel.
+                        }
+                        // If timer has fired.
+                        match self.heartbeat.try_recv() {
+                            Ok(_) => {                  // Timer has fired.
+
+                            },
+                            Err(_) => (),               // Timer hasn't fired.
                         }
                     },
-                    // Need to deal with election issues.
-                    (Ok(entry), _) => {
-                        println!("Got entry, not leader");
-                    },
-                    // TODO: Maybe need to handle this better.
-                    (Err(_), _) => (),
                 }
             }
         });
