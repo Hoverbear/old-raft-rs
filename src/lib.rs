@@ -6,7 +6,10 @@ extern crate "rustc-serialize" as rustc_serialize;
 
 use std::io::net::ip::SocketAddr;
 use std::io::net::udp::UdpSocket;
+use std::io::timer::Timer;
+use std::time::Duration;
 use std::thread::Thread;
+use std::rand::{thread_rng, Rng};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::str;
 use rustc_serialize::{json, Encodable, Decodable};
@@ -14,6 +17,8 @@ use RemoteProcedureCall::{AppendEntries, RequestVote};
 
 // The maximum size of the read buffer.
 const BUFFER_SIZE: usize = 4096;
+const HEARTBEAT_MIN: i64 = 150;
+const HEARTBEAT_MAX: i64 = 300;
 
 /// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
 ///
@@ -44,7 +49,9 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     // TODO: This should probably be split off.
     // All nodes need to know this otherwise they can't effectively lead or hold elections.
     known_nodes: Vec<SocketAddr>,
+    leader_node: Option<SocketAddr>,
     own_socket: SocketAddr,
+    heartbeat: Timer,
 }
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
@@ -79,23 +86,32 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 last_applied: 0,
             },
             known_nodes: node_list,
+            leader_node: None,
             own_socket: own_socket,
+            // Blank timer for now.
+            heartbeat: Timer::new().unwrap(), // If this fails we're in trouble.
         }
     }
     /// Spins up a thread that listens and handles RPCs.
-    pub fn spinup(&self) -> (Sender<(RemoteProcedureCall<T>, SocketAddr)>, Receiver<T>) {
-        let (entry_sender, entry_reciever) = channel::<T>();
-        let (rpc_sender, rpc_reciever) = channel::<(RemoteProcedureCall<T>, SocketAddr)>();
+    pub fn spinup(mut self) -> (Sender<T>, Receiver<T>) {
+        let (client_in, node_out) = channel::<T>();
+        let (node_in, client_out) = channel::<T>();
         // Need to clone the SocketAddr for lifetime reasons.
-        let mut socket = UdpSocket::bind(self.own_socket)
-            .unwrap(); // TODO: Can we do better?
-        socket.set_read_timeout(Some(0));
         Thread::spawn(move || {
+            // Setup the socket, make it not block.
+            let mut socket = UdpSocket::bind(self.own_socket)
+                .unwrap(); // TODO: Can we do better?
+            socket.set_read_timeout(Some(0));
+            // Start up a RNG.
+            let mut rng = thread_rng();
+            self.heartbeat.oneshot(Duration::milliseconds(rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX)));
+            // We need a read buffer.
             let mut read_buffer = [0; BUFFER_SIZE];
             loop {
                 // Read anything from the socket and handle it.
                 match socket.recv_from(&mut read_buffer) {
                     Ok((num_read, source)) => {
+                        println!("Got something from socket");
                         let string_slice = str::from_utf8(read_buffer.slice_to_mut(num_read))
                             .unwrap(); // TODO: Can we do better?
                         let mut rpc = json::decode::<RemoteProcedureCall<T>>(string_slice)
@@ -104,7 +120,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                             AppendEntries { entries: mut entries, .. } => {
                                 // TODO: Log data properly.
                                 for entry in entries.iter_mut() {
-                                    entry_sender.send(entry.clone());
+                                    node_in.send(entry.clone());
                                 }
                             },
                             RequestVote { .. } => {
@@ -115,20 +131,33 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     // TODO: Maybe need to handle this better.
                     Err(_) => (),
                 }
-                // Write anything in the channel out to the network.
-                match rpc_reciever.try_recv() {
-                    Ok((rpc, target)) => {
+                // If there is something in the reciever we need to handle it.
+                match (node_out.try_recv(), &self.state) {
+                    (Ok(entry), &NodeState::Leader(_)) => {
                         println!("Sending things!");
+                        let rpc = AppendEntries {
+                            term: 0,
+                            leader_id: 0,
+                            prev_log_index: 0,
+                            entries: vec![entry],
+                            leader_commit: 0,
+                        };
                         let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc);
-                        socket.send_to(encoded.as_bytes(), target)
-                            .unwrap(); // TODO: Can we do better?
+                        for node in self.known_nodes.iter() {
+                            socket.send_to(encoded.as_bytes(), *node)
+                                .unwrap(); // TODO: Can we do better?
+                        }
+                    },
+                    // Need to deal with election issues.
+                    (Ok(entry), _) => {
+                        println!("Got entry, not leader");
                     },
                     // TODO: Maybe need to handle this better.
-                    Err(_) => (),
+                    (Err(_), _) => (),
                 }
             }
         });
-        (rpc_sender, entry_reciever)
+        (client_in, client_out)
     }
 }
 
@@ -227,16 +256,12 @@ mod tests {
             ]);
         // Start up the node.
         let (_, log_reciever) = recieve_node.spinup();
-        let (rpc_sender, _) = send_node.spinup();
+        let (log_sender, _) = send_node.spinup();
         // Make a test send to that port.
-        let test_value = RemoteProcedureCall::AppendEntries {
-            term: 0,
-            leader_id: 0,
-            prev_log_index: 0,
-            entries: vec!["foo".to_string()],
-            leader_commit: 0,
-        };
-        rpc_sender.send((test_value.clone(), recieve_addr)).unwrap();
+        let test_value = "foo".to_string();
+        println!("About to send");
+        log_sender.send(test_value.clone()).unwrap();
+        println!("After send!");
         // Get the result.
         let event = log_reciever.recv().unwrap();
         assert_eq!(event, "foo".to_string());
