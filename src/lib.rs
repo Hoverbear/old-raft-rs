@@ -13,7 +13,10 @@ use std::rand::{thread_rng, Rng};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::str;
 use rustc_serialize::{json, Encodable, Decodable};
+use std::collections::HashMap;
+
 use RemoteProcedureCall::{AppendEntries, RequestVote};
+use NodeState::{Follower, Leader, Candidate};
 
 // The maximum size of the read buffer.
 const BUFFER_SIZE: usize = 4096;
@@ -28,13 +31,13 @@ const HEARTBEAT_MAX: i64 = 300;
 ///
 pub trait Raft<T: Encodable + Decodable + Send + Clone> {
     /// Returns (term, success)
-    fn append_entries(term: usize, leader_id: usize, prev_log_index: usize,
-                      prev_log_term: usize, entries: Vec<T>,
-                      leader_commit: usize) -> (usize, bool);
+    fn append_entries(term: u64, leader_id: u64, prev_log_index: u64,
+                      prev_log_term: u64, entries: Vec<T>,
+                      leader_commit: u64) -> (u64, bool);
 
     /// Returns (term, voteGranted)
-    fn request_vote(term: usize, candidate_id: usize, last_log_index: usize,
-                    last_log_term: usize) -> (usize, bool);
+    fn request_vote(term: u64, candidate_id: u64, last_log_index: u64,
+                    last_log_term: u64) -> (u64, bool);
 }
 
 /// A `RaftNode` acts as a replicated state machine. The server's role in the cluster depends on it's
@@ -48,9 +51,9 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     // Auxilary Data.
     // TODO: This should probably be split off.
     // All nodes need to know this otherwise they can't effectively lead or hold elections.
-    known_nodes: Vec<SocketAddr>,
     leader_node: Option<SocketAddr>,
-    own_socket: SocketAddr,
+    own_id: u64,
+    nodes: HashMap<u64, SocketAddr>,
     heartbeat: Timer,
 }
 
@@ -72,10 +75,13 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
 ///     ]);
 /// ```
 impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
-    /// Creates a new RaftNode with the neighbors specified.
-    pub fn new(own_socket: SocketAddr, node_list: Vec<SocketAddr>) -> RaftNode<T> {
+    /// Creates a new RaftNode with the neighbors specified. `id` should be a valid index into
+    /// `nodes`. The idea is that you can use the same `nodes` on all of the clients and only vary
+    /// `id`.
+    pub fn new(id: u64, nodes: HashMap<u64, SocketAddr>) -> RaftNode<T> {
+        // TODO: Check index.
         RaftNode {
-            state: NodeState::Follower,
+            state: Follower,
             persistent_state: PersistentState {
                 current_term: 0, // TODO: Double Check.
                 voted_for: 0,    // TODO: Better type?
@@ -85,9 +91,9 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 commit_index: 0,
                 last_applied: 0,
             },
-            known_nodes: node_list,
             leader_node: None,
-            own_socket: own_socket,
+            own_id: id,
+            nodes: nodes,
             // Blank timer for now.
             heartbeat: Timer::new().unwrap(), // If this fails we're in trouble.
         }
@@ -99,7 +105,9 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         // Need to clone the SocketAddr for lifetime reasons.
         Thread::spawn(move || {
             // Setup the socket, make it not block.
-            let mut socket = UdpSocket::bind(self.own_socket)
+            let own_socket_addr = self.nodes.get(&mut self.own_id)
+                .unwrap(); // TODO: Can we do better?
+            let mut socket = UdpSocket::bind(*own_socket_addr)
                 .unwrap(); // TODO: Can we do better?
             socket.set_read_timeout(Some(0));
             // Start up a RNG.
@@ -142,8 +150,10 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                             entries: vec![entry],
                             leader_commit: 0,
                         };
-                        let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc);
-                        for node in self.known_nodes.iter() {
+                        let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc)
+                            .unwrap(); // TODO: Can we do better?
+                        for (id, node) in self.nodes.iter() {
+                            println!("Sending to {} on {}", id, node);
                             socket.send_to(encoded.as_bytes(), *node)
                                 .unwrap(); // TODO: Can we do better?
                         }
@@ -164,14 +174,14 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
 /// The RPC calls required by the Raft protocol.
 impl<T: Encodable + Decodable + Send + Clone> Raft<T> for RaftNode<T> {
     /// Returns (term, success)
-    fn append_entries(term: usize, leader_id: usize, prev_log_index: usize,
-                      prev_log_term: usize, entries: Vec<T>,
-                      leader_commit: usize) -> (usize, bool) {
+    fn append_entries(term: u64, leader_id: u64, prev_log_index: u64,
+                      prev_log_term: u64, entries: Vec<T>,
+                      leader_commit: u64) -> (u64, bool) {
         (0, false) // TODO: Implement
     }
     /// Returns (term, voteGranted)
-    fn request_vote(term: usize, candidate_id: usize, last_log_index: usize,
-                    last_log_term: usize) -> (usize, bool) {
+    fn request_vote(term: u64, candidate_id: u64, last_log_index: u64,
+                    last_log_term: u64) -> (u64, bool) {
         (0, false) // TODO: Implement
     }
 }
@@ -180,17 +190,17 @@ impl<T: Encodable + Decodable + Send + Clone> Raft<T> for RaftNode<T> {
 #[derive(RustcEncodable, RustcDecodable, Show, Clone)]
 pub enum RemoteProcedureCall<T> {
     AppendEntries {
-        term: usize,
-        leader_id: usize,
-        prev_log_index: usize,
+        term: u64,
+        leader_id: u64,
+        prev_log_index: u64,
         entries: Vec<T>,
-        leader_commit: usize,
+        leader_commit: u64,
     },
     RequestVote {
-        term: usize,
-        candidate_id: usize,
-        last_log_index: usize,
-        last_log_term: usize,
+        term: u64,
+        candidate_id: u64,
+        last_log_index: u64,
+        last_log_term: u64,
     },
 }
 
@@ -210,22 +220,22 @@ pub enum NodeState {
 /// Persistent state
 /// **Must be updated to stable storage before RPC response.**
 pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
-    current_term: usize,
-    voted_for: usize, // Better way? Can we use a IpAddr?
+    current_term: u64,
+    voted_for: u64, // Better way? Can we use a IpAddr?
     log: Vec<T>,
 }
 
 /// Volatile state
 pub struct VolatileState {
-    commit_index: usize,
-    last_applied: usize
+    commit_index: u64,
+    last_applied: u64
 }
 
 /// Leader Only
 /// **Reinitialized after election.**
 pub struct LeaderState {
-    next_index: Vec<usize>,
-    match_index: Vec<usize>
+    next_index: Vec<u64>,
+    match_index: Vec<u64>
 }
 
 #[cfg(test)]
@@ -234,34 +244,26 @@ mod tests {
     use std::io::net::udp::UdpSocket;
     use std::io::net::ip::IpAddr::Ipv4Addr;
     use std::thread::Thread;
+    use std::collections::HashMap;
     use rustc_serialize::json;
     use std::sync::mpsc::{channel, Sender, Receiver};
     use std::str;
     use super::*;
-
+    
     #[test]
     fn basic_test() {
-        let send_addr = SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 };
-        let recieve_addr = SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 };
-        // Create the node.
-        let send_node = RaftNode::<String>::new(
-            send_addr, // The node's address.
-            vec![
-            recieve_addr, // The neighbor.
-            ]);
-        let recieve_node = RaftNode::<String>::new(
-            recieve_addr, // The node's address.
-            vec![
-            send_addr, // The neighbor.
-            ]);
+        let mut nodes = HashMap::new();
+        nodes.insert(1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 });
+        nodes.insert(2, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 });
+        // Create the nodes.
+        let send_node = RaftNode::<String>::new(1, nodes.clone());
+        let recieve_node = RaftNode::<String>::new(2, nodes.clone());
         // Start up the node.
         let (_, log_reciever) = recieve_node.spinup();
         let (log_sender, _) = send_node.spinup();
         // Make a test send to that port.
         let test_value = "foo".to_string();
-        println!("About to send");
         log_sender.send(test_value.clone()).unwrap();
-        println!("After send!");
         // Get the result.
         let event = log_reciever.recv().unwrap();
         assert_eq!(event, "foo".to_string());
