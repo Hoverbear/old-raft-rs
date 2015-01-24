@@ -16,7 +16,7 @@ use rustc_serialize::{json, Encodable, Decodable};
 use std::collections::HashMap;
 
 use RemoteProcedureCall::{AppendEntries, RequestVote};
-use NodeState::{Follower, Leader, Candidate};
+use NodeState::{Leader, Follower, Candidate};
 
 // The maximum size of the read buffer.
 const BUFFER_SIZE: usize = 4096;
@@ -54,7 +54,7 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     leader_node: Option<SocketAddr>,
     own_id: u64,
     nodes: HashMap<u64, SocketAddr>,
-    heartbeat: Timer,
+    heartbeat: Receiver<()>,
 }
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
@@ -64,15 +64,13 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
 /// use raft::RaftNode;
 /// use std::io::net::ip::SocketAddr;
 /// use std::io::net::ip::IpAddr::Ipv4Addr;
+/// use std::collections::HashMap;
 ///
-/// let my_node = RaftNode::<String>::new(
-///     // This node's address.
-///     SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 },
-///     // The list of nodes.
-///     vec![
-///     SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 },
-///     SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11113 }
-///     ]);
+/// let mut nodes = HashMap::new();
+/// nodes.insert(1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 });
+/// nodes.insert(2, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 });
+/// // Create the nodes.
+/// let send_node = RaftNode::<String>::new(1, nodes.clone());
 /// ```
 impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     /// Creates a new RaftNode with the neighbors specified. `id` should be a valid index into
@@ -80,6 +78,9 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     /// `id`.
     pub fn new(id: u64, nodes: HashMap<u64, SocketAddr>) -> RaftNode<T> {
         // TODO: Check index.
+        // I'd rather not have to create these, but c'este la vie
+        let mut rng = thread_rng();
+        let mut timer = Timer::new().unwrap();
         RaftNode {
             state: Follower,
             persistent_state: PersistentState {
@@ -95,7 +96,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             own_id: id,
             nodes: nodes,
             // Blank timer for now.
-            heartbeat: Timer::new().unwrap(), // If this fails we're in trouble.
+            heartbeat: timer.oneshot(Duration::milliseconds(rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX))), // If this fails we're in trouble.
         }
     }
     /// Spins up a thread that listens and handles RPCs.
@@ -110,60 +111,151 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             let mut socket = UdpSocket::bind(*own_socket_addr)
                 .unwrap(); // TODO: Can we do better?
             socket.set_read_timeout(Some(0));
-            // Start up a RNG.
+            // Start up a RNG and Timer
             let mut rng = thread_rng();
-            self.heartbeat.oneshot(Duration::milliseconds(rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX)));
+            let mut timer = Timer::new().unwrap();
             // We need a read buffer.
             let mut read_buffer = [0; BUFFER_SIZE];
+            // This is the main, strongly typed state machine. It loops indefinitely for now. It
+            // would be nice if this was event based.
             loop {
-                // Read anything from the socket and handle it.
-                match socket.recv_from(&mut read_buffer) {
-                    Ok((num_read, source)) => {
-                        println!("Got something from socket");
-                        let string_slice = str::from_utf8(read_buffer.slice_to_mut(num_read))
-                            .unwrap(); // TODO: Can we do better?
-                        let mut rpc = json::decode::<RemoteProcedureCall<T>>(string_slice)
-                            .unwrap(); // TODO: Can we do better?
-                        match rpc {
-                            AppendEntries { entries: mut entries, .. } => {
-                                // TODO: Log data properly.
-                                for entry in entries.iter_mut() {
-                                    node_in.send(entry.clone());
+                match &self.state {
+                    &Leader(ref leader_state) => {
+                        // If socket has data.
+                        match socket.recv_from(&mut read_buffer) {
+                            Ok((num_read, source)) => { // Something on the socket.
+                                // This is possibly an RPC from another node. Try to parse it out
+                                // and determine what to do based on it's variant.
+                                // Possible Variants: 
+                                //   * `RemoteProcedureCall::RequestVote`,
+                                //   * `RemoteProcedureCall::AppendEntries`
+                                // TODO
+                            },
+                            Err(_) => (),               // Nothing on the socket.
+                        }
+                        // If channel has data.
+                        match node_out.try_recv() {
+                            Ok(entry) => {              // Something in channel.
+                                // This is an entry that the client wants commited.
+                                // Announce this change to the cluster as soon as possible and
+                                // return the same value on the channel back to them.
+                                // TODO
+                            },
+                            Err(_) => (),               // Nothing in channel.
+                        }
+                        // If timer has fired.
+                        match self.heartbeat.try_recv() {
+                            Ok(_) => {                  // Timer has fired.
+                                // It's time to announce a heartbeat. Fire off UDP packets to the
+                                // cluster to maintain authority and update logs. Use an
+                                // `RemoteProcedureCall::AppendEntries` variant.
+                                // TODO
+                            },
+                            Err(_) => (),               // Timer hasn't fired.
+                        }
+                    },
+                    &Follower => {
+                        // If socket has data.
+                        match socket.recv_from(&mut read_buffer) {
+                            Ok((num_read, source)) => { // Something on the socket.
+                                // Sweet! We got a packet. This is probably a `RemoteProcedureCall`
+                                // variant. If it's a `RequestVote` respond either with the current
+                                // leader, or a vote. If it's an `AppendEntries` we need to work
+                                // with the log and **update the heartbeat timer**.
+                                // TODO
+                                println!("Got something from socket");
+                                let string_slice = str::from_utf8(read_buffer.slice_to_mut(num_read))
+                                    .unwrap(); // TODO: Can we do better?
+                                let mut rpc = json::decode::<RemoteProcedureCall<T>>(string_slice)
+                                    .unwrap(); // TODO: Can we do better?
+                                match rpc {
+                                    AppendEntries { entries: mut entries, .. } => {
+                                        // TODO: Log data properly.
+                                        for entry in entries.iter_mut() {
+                                            node_in.send(entry.clone());
+                                        }
+                                    },
+                                    RequestVote { .. } => {
+                                        // TODO: Do something.
+                                    },
                                 }
                             },
-                            RequestVote { .. } => {
-                                // TODO: Do something.
+                            Err(_) => (),               // Nothing on the socket.
+                        }
+                        // If channel has data.
+                        match node_out.try_recv() {
+                            Ok(entry) => {              // Something in channel.
+                                // The client program is asking for something to be done. For now,
+                                // this is only really possibly a new entry for the log. It might
+                                // be better to provide other variants like `ShowIndexes(x,y)` or
+                                // something then handle those.
+                                println!("Sending things!");
+                                let rpc = AppendEntries {
+                                    term: 0,
+                                    leader_id: 0,
+                                    prev_log_index: 0,
+                                    entries: vec![entry],
+                                    leader_commit: 0,
+                                };
+                                let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc)
+                                    .unwrap();
+                                for (id, node) in self.nodes.iter() {
+                                    socket.send_to(encoded.as_bytes(), *node)
+                                        .unwrap(); // TODO: Can we do better?
+                                }
                             },
+                            Err(_) => (),               // Nothing in channel.
+                        }
+                        // If timer has fired.
+                        match self.heartbeat.try_recv() {
+                            Ok(_) => {                  // Timer has fired.
+                                // This means we haven't heard from the Leader! It's probably time
+                                // to start an campaign and become a `Candidate`. We'll either 
+                                // hear back that there is a`Leader`, or get enough votes to become one.
+
+                            },
+                            Err(_) => (),               // Timer hasn't fired.
                         }
                     },
-                    // TODO: Maybe need to handle this better.
-                    Err(_) => (),
-                }
-                // If there is something in the reciever we need to handle it.
-                match (node_out.try_recv(), &self.state) {
-                    (Ok(entry), &NodeState::Leader(_)) => {
-                        println!("Sending things!");
-                        let rpc = AppendEntries {
-                            term: 0,
-                            leader_id: 0,
-                            prev_log_index: 0,
-                            entries: vec![entry],
-                            leader_commit: 0,
-                        };
-                        let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc)
-                            .unwrap(); // TODO: Can we do better?
-                        for (id, node) in self.nodes.iter() {
-                            println!("Sending to {} on {}", id, node);
-                            socket.send_to(encoded.as_bytes(), *node)
-                                .unwrap(); // TODO: Can we do better?
+                    &Candidate => {
+                        // If socket has data.
+                        match socket.recv_from(&mut read_buffer) {
+                            Ok((num_read, source)) => { // Something on the socket.
+                                // As a candidate, we're going to be listening for responses to
+                                // our `RemoteProcedureCall::RequestVote` requests. If a node
+                                // suggests there is a `Leader` and tells us the ID, become of a
+                                // `Follower` of that node.
+                                //
+                                // If we recieve a `RemoteProcedureCall::AppendEntries` it means
+                                // someone thinks we're the `Leader`.
+                                // 
+                                // If we recieve a `RemoteProcedureCall::RequestVote` it means
+                                // there is another `Candidate` campaigning.
+                                // TODO
+                            },
+                            Err(_) => (),               // Nothing on the socket.
+                        }
+                        // If channel has data.
+                        match node_out.try_recv() {
+                            Ok(entry) => {              // Something in channel.
+                                // The client program wants something to be done. Possible
+                                // improvements need to be made here as they have no way to
+                                // interface with the log.
+
+                            },
+                            Err(_) => (),               // Nothing in channel.
+                        }
+                        // If timer has fired.
+                        match self.heartbeat.try_recv() {
+                            Ok(_) => {                  // Timer has fired.
+                                // We don't really care about the heartbeat as a `Candidate` as our
+                                // heartbeat already timed out, this is how we became a `Candidate`
+                                // in the first place.
+
+                            },
+                            Err(_) => (),               // Timer hasn't fired.
                         }
                     },
-                    // Need to deal with election issues.
-                    (Ok(entry), _) => {
-                        println!("Got entry, not leader");
-                    },
-                    // TODO: Maybe need to handle this better.
-                    (Err(_), _) => (),
                 }
             }
         });
