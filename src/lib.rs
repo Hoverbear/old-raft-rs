@@ -164,7 +164,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // with the log and **update the heartbeat timer**.
                                 // TODO
                                 println!("Got something from socket");
-                                let string_slice = str::from_utf8(read_buffer.slice_to_mut(num_read))
+                                let string_slice = str::from_utf8(&mut read_buffer[.. num_read])
                                     .unwrap(); // TODO: Can we do better?
                                 let mut rpc = json::decode::<RemoteProcedureCall<T>>(string_slice)
                                     .unwrap(); // TODO: Can we do better?
@@ -194,6 +194,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                     term: 0,
                                     leader_id: 0,
                                     prev_log_index: 0,
+                                    prev_log_term: entry.clone(),
                                     entries: vec![entry],
                                     leader_commit: 0,
                                 };
@@ -278,13 +279,15 @@ impl<T: Encodable + Decodable + Send + Clone> Raft<T> for RaftNode<T> {
     }
 }
 
-/// Data interchange format for RPC calls.
-#[derive(RustcEncodable, RustcDecodable, Show, Clone)]
+/// Data interchange format for RPC calls. These should match directly to the Raft paper's RPC
+/// descriptions.
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub enum RemoteProcedureCall<T> {
     AppendEntries {
         term: u64,
         leader_id: u64,
         prev_log_index: u64,
+        prev_log_term: T,
         entries: Vec<T>,
         leader_commit: u64,
     },
@@ -294,6 +297,20 @@ pub enum RemoteProcedureCall<T> {
         last_log_index: u64,
         last_log_term: u64,
     },
+}
+
+/// Data interchange format for RPC responses.
+/// * `VoteAccepted` and `EntriesAccepted` mean that it worked.
+/// * `VoteRejected` means that `rpc.term < node.persistent_state.current_term`. The caller should
+/// follow the `current_leader` it is directed to.
+/// * `EntriesRejected` means that either `rpc.term < node.persistent_state.current_term` or if the
+/// Node's `log` doesn't contain the entry at `rpc.prev_log_index` that maches `prev_log_term`.
+#[derive(RustcEncodable, RustcDecodable, Debug, Copy)]
+pub enum RemoteProcedureResponse {
+    VoteAccepted { term: u64 },
+    VoteRejected { term: u64, current_leader: u64 },
+    EntriesAccepted { term: u64 },
+    EntriesRejected { term: u64 },
 }
 
 /// Nodes can either be:
@@ -318,6 +335,7 @@ pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
 }
 
 /// Volatile state
+#[derive(Copy)]
 pub struct VolatileState {
     commit_index: u64,
     last_applied: u64
