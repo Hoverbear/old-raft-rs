@@ -100,9 +100,9 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         }
     }
     /// Spins up a thread that listens and handles RPCs.
-    pub fn spinup(mut self) -> (Sender<T>, Receiver<T>) {
-        let (client_in, node_out) = channel::<T>();
-        let (node_in, client_out) = channel::<T>();
+    pub fn spinup(mut self) -> (Sender<ClientRequest<T>>, Receiver<ClientResponse<T>>) {
+        let (client_in, node_out) = channel::<ClientRequest<T>>();
+        let (node_in, client_out) = channel::<ClientResponse<T>>();
         // Need to clone the SocketAddr for lifetime reasons.
         Thread::spawn(move || {
             // Setup the socket, make it not block.
@@ -169,11 +169,12 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 let mut rpc = json::decode::<RemoteProcedureCall<T>>(string_slice)
                                     .unwrap(); // TODO: Can we do better?
                                 match rpc {
-                                    AppendEntries { entries: mut entries, .. } => {
+                                    AppendEntries { entries: mut entries, prev_log_index: mut idx, .. } => {
                                         // TODO: Log data properly.
-                                        for entry in entries.iter_mut() {
-                                            node_in.send(entry.clone());
-                                        }
+                                        node_in.send(ClientResponse::Accepted { 
+                                            entries: entries.clone(),
+                                            last_index: idx,
+                                        });
                                     },
                                     RequestVote { .. } => {
                                         // TODO: Do something.
@@ -189,20 +190,27 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // this is only really possibly a new entry for the log. It might
                                 // be better to provide other variants like `ShowIndexes(x,y)` or
                                 // something then handle those.
-                                println!("Sending things!");
-                                let rpc = AppendEntries {
-                                    term: 0,
-                                    leader_id: 0,
-                                    prev_log_index: 0,
-                                    prev_log_term: entry.clone(),
-                                    entries: vec![entry],
-                                    leader_commit: 0,
-                                };
-                                let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc)
-                                    .unwrap();
-                                for (id, node) in self.nodes.iter() {
-                                    socket.send_to(encoded.as_bytes(), *node)
-                                        .unwrap(); // TODO: Can we do better?
+                                match entry {
+                                    ClientRequest::IndexRange { .. } => {
+                                    },
+                                    ClientRequest::AppendEntries { entries: mut entries, .. } => {
+                                        println!("Sending things!");
+                                        let rpc = AppendEntries {
+                                            term: 0,
+                                            leader_id: 0,
+                                            prev_log_index: 0,
+                                            prev_log_term: entries.get(0).unwrap().clone(),
+                                            entries: entries,
+                                            leader_commit: 0,
+                                        };
+                                        let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc)
+                                            .unwrap();
+                                        for (id, node) in self.nodes.iter() {
+                                            socket.send_to(encoded.as_bytes(), *node)
+                                                .unwrap(); // TODO: Can we do better?
+                                        }
+
+                                    },
                                 }
                             },
                             Err(_) => (),               // Nothing in channel.
@@ -305,12 +313,42 @@ pub enum RemoteProcedureCall<T> {
 /// follow the `current_leader` it is directed to.
 /// * `EntriesRejected` means that either `rpc.term < node.persistent_state.current_term` or if the
 /// Node's `log` doesn't contain the entry at `rpc.prev_log_index` that maches `prev_log_term`.
+/// TODO: Can we make this just `Accepted` or `Rejected(term, leader)`?
 #[derive(RustcEncodable, RustcDecodable, Debug, Copy)]
 pub enum RemoteProcedureResponse {
     VoteAccepted { term: u64 },
     VoteRejected { term: u64, current_leader: u64 },
     EntriesAccepted { term: u64 },
     EntriesRejected { term: u64 },
+}
+
+/// Data interchange request format for Client <-> Node Communication.
+/// Each variant of this is a command which can be asked of the `RaftNode` after it is spun up with
+/// `node.spinup()` The node attached to this application will poll it's channel regularly and
+/// return results on the channel.
+/// If you're wondering where vote requesting is, it's hidden within the module.
+/// TODO: Currently requests are not queued or gaurenteed to serviced in order. This is probably a
+/// bad thing as most clients will `.send()` then `.recv()`. We can probably make a service queue for this.
+#[derive(Debug, Clone)]
+pub enum ClientRequest<T> {
+    /// Gets the log entries from start to end.
+    IndexRange { start_index: u64, end_index: u64 },
+    /// Asks the node to append an entry after a given entry.
+    /// TODO: This interface might be bad.
+    AppendEntries { prev_log_index: u64, prev_log_term: T, entries: Vec<T> },
+}
+
+/// Data interchange response format for Client <-> Node communication.
+/// Each variant of this is a response to a `ClientRequest`.
+#[derive(Debug, Clone)]
+pub enum ClientResponse<T> {
+    /// Returns the entries requested as well as the index of the last item (thus the rest can be
+    /// trivially calculated.) Note this will only return entries that have been commited by the
+    /// majority of nodes, and will not necessarily reflect the most up to date information.
+    Accepted { entries: Vec<T>, last_index: u64 },
+    /// Returns the reason why it failed.
+    /// TODO: This probably shouldn't be a string.
+    Rejected { reason: String },
 }
 
 /// Nodes can either be:
@@ -359,7 +397,7 @@ mod tests {
     use std::sync::mpsc::{channel, Sender, Receiver};
     use std::str;
     use super::*;
-    
+
     #[test]
     fn basic_test() {
         let mut nodes = HashMap::new();
@@ -372,11 +410,20 @@ mod tests {
         let (_, log_reciever) = recieve_node.spinup();
         let (log_sender, _) = send_node.spinup();
         // Make a test send to that port.
-        let test_value = "foo".to_string();
-        log_sender.send(test_value.clone()).unwrap();
+        let test_command = ClientRequest::AppendEntries {
+            entries: vec!["foo".to_string()],
+            prev_log_index: 0,
+            prev_log_term: "foo".to_string(),
+        };
+        log_sender.send(test_command.clone()).unwrap();
         // Get the result.
         let event = log_reciever.recv().unwrap();
-        assert_eq!(event, "foo".to_string());
+        match event {
+            ClientResponse::Accepted { entries: entries, .. } => {
+                assert_eq!(entries, vec!["foo".to_string()]);
+            },
+            _ => panic!("Didn't return the right thing"),
+        }
     }
 
 }
