@@ -1,6 +1,6 @@
 # Raft #
 
-Author: Andrew Hobden (V00788452)
+Author: Andrew Hobden
 
 ## Problem and Importance ##
 
