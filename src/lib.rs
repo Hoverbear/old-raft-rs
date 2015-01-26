@@ -277,6 +277,9 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         });
         (client_in, client_out)
     }
+    pub fn lookup(&self, index: u64) -> Option<&SocketAddr> {
+        self.nodes.get(&index)
+    }
 }
 
 /// The RPC calls required by the Raft protocol.
@@ -315,18 +318,14 @@ pub enum RemoteProcedureCall<T> {
 }
 
 /// Data interchange format for RPC responses.
-/// * `VoteAccepted` and `EntriesAccepted` mean that it worked.
-/// * `VoteRejected` means that `rpc.term < node.persistent_state.current_term`. The caller should
-/// follow the `current_leader` it is directed to.
-/// * `EntriesRejected` means that either `rpc.term < node.persistent_state.current_term` or if the
+/// * `Accepted` mean that it worked.
+/// * `Rejected` means that `rpc.term < node.persistent_state.current_term` or if the
 /// Node's `log` doesn't contain the entry at `rpc.prev_log_index` that maches `prev_log_term`.
-/// TODO: Can we make this just `Accepted` or `Rejected(term, leader)`?
+/// The caller should follow the `current_leader` it is directed to.
 #[derive(RustcEncodable, RustcDecodable, Debug, Copy)]
 pub enum RemoteProcedureResponse {
-    VoteAccepted { term: u64 },
-    VoteRejected { term: u64, current_leader: u64 },
-    EntriesAccepted { term: u64 },
-    EntriesRejected { term: u64 },
+    Accepted { term: u64 },
+    Rejected { term: u64, current_leader: u64 },
 }
 
 /// Data interchange request format for Client <-> Node Communication.
