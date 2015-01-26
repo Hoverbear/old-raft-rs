@@ -130,6 +130,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 //   * `RemoteProcedureCall::RequestVote`,
                                 //   * `RemoteProcedureCall::AppendEntries`
                                 // TODO
+                                unimplemented!()
                             },
                             Err(_) => (),               // Nothing on the socket.
                         }
@@ -140,6 +141,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // Announce this change to the cluster as soon as possible and
                                 // return the same value on the channel back to them.
                                 // TODO
+                                unimplemented!()
                             },
                             Err(_) => (),               // Nothing in channel.
                         }
@@ -150,6 +152,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // cluster to maintain authority and update logs. Use an
                                 // `RemoteProcedureCall::AppendEntries` variant.
                                 // TODO
+                                unimplemented!()
                             },
                             Err(_) => (),               // Timer hasn't fired.
                         }
@@ -221,6 +224,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // This means we haven't heard from the Leader! It's probably time
                                 // to start an campaign and become a `Candidate`. We'll either 
                                 // hear back that there is a`Leader`, or get enough votes to become one.
+                                unimplemented!()
 
                             },
                             Err(_) => (),               // Timer hasn't fired.
@@ -241,6 +245,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // If we recieve a `RemoteProcedureCall::RequestVote` it means
                                 // there is another `Candidate` campaigning.
                                 // TODO
+                                unimplemented!()
                             },
                             Err(_) => (),               // Nothing on the socket.
                         }
@@ -250,6 +255,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // The client program wants something to be done. Possible
                                 // improvements need to be made here as they have no way to
                                 // interface with the log.
+                                unimplemented!()
 
                             },
                             Err(_) => (),               // Nothing in channel.
@@ -260,6 +266,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // We don't really care about the heartbeat as a `Candidate` as our
                                 // heartbeat already timed out, this is how we became a `Candidate`
                                 // in the first place.
+                                unimplemented!()
 
                             },
                             Err(_) => (),               // Timer hasn't fired.
