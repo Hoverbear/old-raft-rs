@@ -16,6 +16,7 @@ use rustc_serialize::{json, Encodable, Decodable};
 use std::collections::HashMap;
 
 use RemoteProcedureCall::{AppendEntries, RequestVote};
+use RemoteProcedureResponse::{Accepted, Rejected};
 use NodeState::{Leader, Follower, Candidate};
 
 // The maximum size of the read buffer.
@@ -126,11 +127,19 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                             Ok((num_read, source)) => { // Something on the socket.
                                 // This is possibly an RPC from another node. Try to parse it out
                                 // and determine what to do based on it's variant.
-                                // Possible Variants: 
-                                //   * `RemoteProcedureCall::RequestVote`,
-                                //   * `RemoteProcedureCall::AppendEntries`
-                                // TODO
-                                unimplemented!()
+                                let data = str::from_utf8(&mut read_buffer[.. num_read])
+                                    .unwrap();
+                                if let Ok(rpc) = json::decode::<RemoteProcedureCall<T>>(data) {
+                                    match rpc {
+                                        RequestVote { .. } => unimplemented!(),
+                                        AppendEntries { .. } => unimplemented!(),
+                                    }
+                                } else if let Ok(rpr) = json::decode::<RemoteProcedureResponse>(data) {
+                                    match rpr {
+                                        Accepted { .. } => unimplemented!(),
+                                        Rejected { .. } => unimplemented!(),
+                                    }
+                                }
                             },
                             Err(_) => (),               // Nothing on the socket.
                         }
@@ -166,22 +175,24 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // leader, or a vote. If it's an `AppendEntries` we need to work
                                 // with the log and **update the heartbeat timer**.
                                 // TODO
-                                println!("Got something from socket");
-                                let string_slice = str::from_utf8(&mut read_buffer[.. num_read])
-                                    .unwrap(); // TODO: Can we do better?
-                                let mut rpc = json::decode::<RemoteProcedureCall<T>>(string_slice)
-                                    .unwrap(); // TODO: Can we do better?
-                                match rpc {
-                                    AppendEntries { entries: mut entries, prev_log_index: mut idx, .. } => {
-                                        // TODO: Log data properly.
-                                        node_in.send(ClientResponse::Accepted { 
-                                            entries: entries.clone(),
-                                            last_index: idx,
-                                        });
-                                    },
-                                    RequestVote { .. } => {
-                                        // TODO: Do something.
-                                    },
+                                let data = str::from_utf8(&mut read_buffer[.. num_read])
+                                    .unwrap();
+                                if let Ok(rpc) = json::decode::<RemoteProcedureCall<T>>(data) {
+                                    match rpc {
+                                        RequestVote { .. } => unimplemented!(),
+                                        AppendEntries { entries: mut entries, prev_log_index: mut idx, .. } => {
+                                            // TODO: Log data properly.
+                                            node_in.send(ClientResponse::Accepted { 
+                                                entries: entries.clone(),
+                                                last_index: idx,
+                                            });
+                                        },
+                                    }
+                                } else if let Ok(rpr) = json::decode::<RemoteProcedureResponse>(data) {
+                                    match rpr {
+                                        Accepted { .. } => unimplemented!(),
+                                        Rejected { .. } => unimplemented!(),
+                                    }
                                 }
                             },
                             Err(_) => (),               // Nothing on the socket.
@@ -189,10 +200,8 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                         // If channel has data.
                         match node_out.try_recv() {
                             Ok(entry) => {              // Something in channel.
-                                // The client program is asking for something to be done. For now,
-                                // this is only really possibly a new entry for the log. It might
-                                // be better to provide other variants like `ShowIndexes(x,y)` or
-                                // something then handle those.
+                                // The client program is asking for something to be done. This will
+                                // be a `ClientRequest` which needs to be appropriately acted upon.
                                 match entry {
                                     ClientRequest::IndexRange { .. } => {
                                     },
@@ -240,23 +249,36 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // `Follower` of that node.
                                 //
                                 // If we recieve a `RemoteProcedureCall::AppendEntries` it means
-                                // someone thinks we're the `Leader`.
+                                // someone thinks we're the `Leader`. (Because in this
+                                // implementation we're allowing Followers to relay AppendEntries
+                                // from their client programs.)
                                 // 
                                 // If we recieve a `RemoteProcedureCall::RequestVote` it means
                                 // there is another `Candidate` campaigning.
                                 // TODO
-                                unimplemented!()
+                                let data = str::from_utf8(&mut read_buffer[.. num_read])
+                                    .unwrap();
+                                if let Ok(rpc) = json::decode::<RemoteProcedureCall<T>>(data) {
+                                    match rpc {
+                                        RequestVote { .. } => unimplemented!(),
+                                        AppendEntries { .. } => unimplemented!(),
+                                    }
+                                } else if let Ok(rpr) = json::decode::<RemoteProcedureResponse>(data) {
+                                    match rpr {
+                                        Accepted { .. } => unimplemented!(),
+                                        Rejected { .. } => unimplemented!(),
+                                    }
+                                }
                             },
                             Err(_) => (),               // Nothing on the socket.
                         }
                         // If channel has data.
                         match node_out.try_recv() {
                             Ok(entry) => {              // Something in channel.
-                                // The client program wants something to be done. Possible
-                                // improvements need to be made here as they have no way to
-                                // interface with the log.
+                                // The client program wants something to be done. Since we are a
+                                // candidate right now there isn't much we can do as the cluster
+                                // does not have a leader as far as we can tell.
                                 unimplemented!()
-
                             },
                             Err(_) => (),               // Nothing in channel.
                         }
@@ -266,8 +288,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                                 // We don't really care about the heartbeat as a `Candidate` as our
                                 // heartbeat already timed out, this is how we became a `Candidate`
                                 // in the first place.
-                                unimplemented!()
-
+                                panic!("Should not get a timer fire while a Candidate.")
                             },
                             Err(_) => (),               // Timer hasn't fired.
                         }
@@ -277,9 +298,27 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         });
         (client_in, client_out)
     }
+    /// A lookup for index -> SocketAddr
     pub fn lookup(&self, index: u64) -> Option<&SocketAddr> {
         self.nodes.get(&index)
     }
+    /// When a `Follower`'s heartbeat times out it's time to start a campaign for election and
+    /// become a `Candidate`. If successful, the `RaftNode` will transistion state into a `Leader`,
+    /// otherwise it will become `Follower` again.
+    /// This function accepts a `Follower` and transforms it into a `Candidate` then attempts to
+    /// issue `RequestVote` remote procedure calls to other known nodes. If a majority come back
+    /// accepted, it will become the leader.
+    fn campaign(&mut self) {
+        self.state = match self.state {
+            Follower => Candidate,
+            _ => panic!("Should not campaign while not a follower!")
+        };
+        // TODO: Issue `RequestVote` to known nodes.
+        unimplemented!()
+            // We rely on the loop to handle incoming responses regarding `RequestVote`, don't worry
+            // about that here.
+    }
+
 }
 
 /// The RPC calls required by the Raft protocol.
@@ -364,6 +403,7 @@ pub enum ClientResponse<T> {
 ///     replicated, and issuing heartbeats..
 ///   * A `Candidate`, which campaigns in an election and may become a `Leader` (if it gets enough
 ///     votes) or a `Follower`, if it hears from a `Leader`.
+#[derive(PartialEq, Eq)]
 pub enum NodeState {
     Follower,
     Leader(LeaderState),
@@ -387,6 +427,7 @@ pub struct VolatileState {
 
 /// Leader Only
 /// **Reinitialized after election.**
+#[derive(PartialEq, Eq)]
 pub struct LeaderState {
     next_index: Vec<u64>,
     match_index: Vec<u64>
