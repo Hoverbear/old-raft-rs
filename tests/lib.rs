@@ -1,4 +1,6 @@
+extern crate "rustc-serialize" as rustc_serialize;
 extern crate raft;
+
 use raft::RaftNode;
 use raft::interchange::{ClientRequest, ClientResponse};
 
@@ -17,11 +19,8 @@ fn basic_test() {
     nodes.insert(1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 });
     nodes.insert(2, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 });
     // Create the nodes.
-    let send_node = RaftNode::<String>::new(1, nodes.clone());
-    let recieve_node = RaftNode::<String>::new(2, nodes.clone());
-    // Start up the node.
-    let (_, log_reciever) = recieve_node.spinup();
-    let (log_sender, _) = send_node.spinup();
+    let (log_sender, _) = RaftNode::<String>::start(1, nodes.clone());
+    let (_, log_reciever) = RaftNode::<String>::start(2, nodes.clone());
     // Make a test send to that port.
     let test_command = ClientRequest::AppendEntries {
         entries: vec!["foo".to_string()],
@@ -38,4 +37,3 @@ fn basic_test() {
         _ => panic!("Didn't return the right thing"),
     }
 }
-
