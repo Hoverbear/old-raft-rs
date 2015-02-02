@@ -21,7 +21,7 @@ pub struct AppendEntries<T> {
 }
 
 
-#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone, Copy)]
 pub struct RequestVote {
     pub term: u64,
     pub candidate_id: u64,
@@ -82,7 +82,7 @@ pub enum ClientRequest<T> {
     AppendRequest(AppendRequest<T>),
 }
 
-#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone, Copy)]
 pub struct IndexRange {
     pub start_index: u64,
     pub end_index: u64,
