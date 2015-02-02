@@ -17,7 +17,9 @@ use std::collections::HashMap;
 use rustc_serialize::{json, Encodable, Decodable};
 
 
-use interchange::{RemoteProcedureCall, RemoteProcedureResponse, ClientRequest, ClientResponse};
+use interchange::{RemoteProcedureCall, AppendEntries, RequestVote};
+use interchange::{ClientRequest, AppendRequest, IndexRange};
+use interchange::{RemoteProcedureResponse};
 use NodeState::{Leader, Follower, Candidate};
 
 // The maximum size of the read buffer.
@@ -53,13 +55,13 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     // Auxilary Data.
     // TODO: This should probably be split off.
     // All nodes need to know this otherwise they can't effectively lead or hold elections.
-    leader_node: Option<SocketAddr>,
+    leader_id: Option<u64>,
     own_id: u64,
     nodes: HashMap<u64, SocketAddr>,
     heartbeat: Receiver<()>,
     socket: UdpSocket,
     req_recv: Receiver<ClientRequest<T>>,
-    res_send: Sender<ClientResponse<T>>
+    res_send: Sender<Result<Vec<T>, String>>,
 }
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
@@ -81,7 +83,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     /// Creates a new RaftNode with the neighbors specified. `id` should be a valid index into
     /// `nodes`. The idea is that you can use the same `nodes` on all of the clients and only vary
     /// `id`.
-    pub fn start(id: u64, nodes: HashMap<u64, SocketAddr>) -> (Sender<ClientRequest<T>>, Receiver<ClientResponse<T>>) {
+    pub fn start(id: u64, nodes: HashMap<u64, SocketAddr>) -> (Sender<ClientRequest<T>>, Receiver<Result<Vec<T>, String>>) {
         // TODO: Check index.
         // I'd rather not have to create these, but c'este la vie
         let mut rng = thread_rng();
@@ -94,7 +96,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         socket.set_read_timeout(Some(0));
         // Communication channels.
         let (req_send, req_recv) = channel::<ClientRequest<T>>();
-        let (res_send, res_recv) = channel::<ClientResponse<T>>();
+        let (res_send, res_recv) = channel::<Result<Vec<T>, String>>();
         // Create the struct.
         let mut raft_node = RaftNode {
             state: Follower,
@@ -107,7 +109,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 commit_index: 0,
                 last_applied: 0,
             },
-            leader_node: None,
+            leader_id: None,
             own_id: id,
             nodes: nodes,
             // Blank timer for now.
@@ -116,6 +118,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             req_recv: req_recv,
             res_send: res_send,
         };
+        // Fire up the thread.
         Thread::spawn(move || {
             // Start up a RNG and Timer
             let mut rng = thread_rng();
@@ -153,12 +156,12 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     .unwrap();
                 if let Ok(rpc) = json::decode::<RemoteProcedureCall<T>>(data) {
                     match rpc {
-                        RemoteProcedureCall::RequestVote {
+                        RemoteProcedureCall::RequestVote(RequestVote {
                             .. // We don't care what they're sending. We're leading.
-                        } => unimplemented!(),
-                        RemoteProcedureCall::AppendEntries {
+                        }) => self.handle_request_vote(rpc, source),
+                        RemoteProcedureCall::AppendEntries(AppendEntries {
                             ..
-                        } => unimplemented!(),
+                        }) => unimplemented!(),
                     }
                 } else if let Ok(rpr) = json::decode::<RemoteProcedureResponse>(data) {
                     match rpr {
@@ -212,19 +215,10 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     .unwrap();
                 if let Ok(rpc) = json::decode::<RemoteProcedureCall<T>>(data) {
                     match rpc {
-                        RemoteProcedureCall::RequestVote {
-                            ..
-                        } => unimplemented!(),
-                        RemoteProcedureCall::AppendEntries {
-                            entries: mut entries,
-                            prev_log_index: mut idx,
-                            ..
-                        } => {
+                        RemoteProcedureCall::RequestVote(data) => unimplemented!(),
+                        RemoteProcedureCall::AppendEntries(data) => {
                             // TODO: Log data properly.
-                            self.res_send.send(ClientResponse::Accepted {
-                                entries: entries.clone(),
-                                last_index: idx,
-                            });
+                            self.res_send.send(Ok(data.entries.clone()));
                         },
                     }
                 } else if let Ok(rpr) = json::decode::<RemoteProcedureResponse>(data) {
@@ -246,18 +240,11 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 // The client program is asking for something to be done. This will
                 // be a `ClientRequest` which needs to be appropriately acted upon.
                 match entry {
-                    ClientRequest::IndexRange { .. } => {
+                    ClientRequest::IndexRange(data) => {
                     },
-                    ClientRequest::AppendEntries { entries: mut entries, .. } => {
+                    ClientRequest::AppendRequest(data) => {
                         println!("Sending things!");
-                        let rpc = RemoteProcedureCall::AppendEntries {
-                            term: 0,
-                            leader_id: 0,
-                            prev_log_index: 0,
-                            prev_log_term: entries.get(0).unwrap().clone(),
-                            entries: entries,
-                            leader_commit: 0,
-                        };
+                        let rpc = RemoteProcedureCall::append_entries(0, 0, 0, data.entries.get(0).unwrap().clone(), data.entries, 0);
                         let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc)
                             .unwrap();
                         for (id, node) in self.nodes.iter() {
@@ -306,12 +293,8 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     .unwrap();
                 if let Ok(rpc) = json::decode::<RemoteProcedureCall<T>>(data) {
                     match rpc {
-                        RemoteProcedureCall::RequestVote {
-                            ..
-                        } => unimplemented!(),
-                        RemoteProcedureCall::AppendEntries {
-                            ..
-                        } => unimplemented!(),
+                        RemoteProcedureCall::RequestVote(data) => unimplemented!(),
+                        RemoteProcedureCall::AppendEntries(data) => unimplemented!(),
                     }
                 } else if let Ok(rpr) = json::decode::<RemoteProcedureResponse>(data) {
                     // TODO: Is it possible we'll recieve something we didn't
@@ -370,6 +353,34 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         unimplemented!()
             // We rely on the loop to handle incoming responses regarding `RequestVote`, don't worry
             // about that here.
+    }
+    /// Handles a `RemoteProcedureCall::RequestVote` call.
+    ///
+    ///   * Reply false if term < currentTerm.
+    ///   * If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as
+    ///     receiver’s log, grant vote.
+    fn handle_request_vote(&mut self, rpc: RemoteProcedureCall<T>, source: SocketAddr) {
+        match self.state {
+            Leader(ref state) => {
+                // Re-assert leadership.
+                let rpr = RemoteProcedureResponse::Rejected {
+                    term: self.persistent_state.current_term,
+                    current_leader: self.leader_id.unwrap(), // Should be self.
+                };
+                let encoded = json::encode::<RemoteProcedureResponse>(&rpr)
+                    .unwrap();
+                self.socket.send_to(encoded.as_bytes(), source)
+                    .unwrap(); // TODO: Can we do better?
+            },
+            Follower => {
+                // Do checks and respond appropriately.
+                unimplemented!();
+            },
+            Candidate => {
+                // TODO ???
+                unimplemented!();
+            }
+        }
     }
 
 

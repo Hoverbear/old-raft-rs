@@ -6,20 +6,54 @@ use rustc_serialize::{json, Encodable, Decodable};
 /// descriptions.
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub enum RemoteProcedureCall<T> {
-    AppendEntries {
-        term: u64,
-        leader_id: u64,
-        prev_log_index: u64,
-        prev_log_term: T,
-        entries: Vec<T>,
-        leader_commit: u64,
-    },
-    RequestVote {
-        term: u64,
-        candidate_id: u64,
-        last_log_index: u64,
-        last_log_term: u64,
-    },
+    AppendEntries(AppendEntries<T>),
+    RequestVote(RequestVote),
+}
+
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
+pub struct AppendEntries<T> {
+    pub term: u64,
+    pub leader_id: u64,
+    pub prev_log_index: u64,
+    pub prev_log_term: T,
+    pub entries: Vec<T>,
+    pub leader_commit: u64,
+}
+
+
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
+pub struct RequestVote {
+    pub term: u64,
+    pub candidate_id: u64,
+    pub last_log_index: u64,
+    pub last_log_term: u64,
+}
+
+impl<T> RemoteProcedureCall<T> {
+    /// Returns (term, success)
+    pub fn append_entries(term: u64, leader_id: u64, prev_log_index: u64,
+                      prev_log_term: T, entries: Vec<T>,
+                      leader_commit: u64) -> RemoteProcedureCall<T> {
+        RemoteProcedureCall::AppendEntries(AppendEntries::<T> {
+            term: term,
+            leader_id: leader_id,
+            prev_log_index: prev_log_index,
+            prev_log_term: prev_log_term,
+            entries: entries,
+            leader_commit: leader_commit,
+        })
+    }
+
+    /// Returns (term, voteGranted)
+    pub fn request_vote(term: u64, candidate_id: u64, last_log_index: u64,
+                    last_log_term: u64) -> RemoteProcedureCall<T> {
+        RemoteProcedureCall::RequestVote(RequestVote {
+            term: term,
+            candidate_id: candidate_id,
+            last_log_index: last_log_index,
+            last_log_term: last_log_term,
+        })
+    }
 }
 
 /// Data interchange format for RPC responses.
@@ -40,25 +74,42 @@ pub enum RemoteProcedureResponse {
 /// If you're wondering where vote requesting is, it's hidden within the module.
 /// TODO: Currently requests are not queued or gaurenteed to serviced in order. This is probably a
 /// bad thing as most clients will `.send()` then `.recv()`. We can probably make a service queue for this.
-#[derive(Debug, Clone)]
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub enum ClientRequest<T> {
     /// Gets the log entries from start to end.
-    IndexRange { start_index: u64, end_index: u64 },
+    IndexRange(IndexRange),
     /// Asks the node to append an entry after a given entry.
-    /// TODO: This interface might be bad.
-    AppendEntries { prev_log_index: u64, prev_log_term: T, entries: Vec<T> },
+    AppendRequest(AppendRequest<T>),
 }
 
-/// Data interchange response format for Client <-> Node communication.
-/// Each variant of this is a response to a `ClientRequest`.
-#[derive(Debug, Clone)]
-pub enum ClientResponse<T> {
-    /// Returns the entries requested as well as the index of the last item (thus the rest can be
-    /// trivially calculated.) Note this will only return entries that have been commited by the
-    /// majority of nodes, and will not necessarily reflect the most up to date information.
-    Accepted { entries: Vec<T>, last_index: u64 },
-    /// Returns the reason why it failed.
-    /// TODO: This probably shouldn't be a string.
-    Rejected { reason: String },
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
+pub struct IndexRange {
+    pub start_index: u64,
+    pub end_index: u64,
 }
 
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
+pub struct AppendRequest<T> {
+    pub prev_log_index: u64,
+    pub prev_log_term: T,
+    pub entries: Vec<T>,
+}
+
+impl<T> ClientRequest<T> {
+    /// Returns (term, success)
+    pub fn index_range(start: u64, end: u64) -> ClientRequest<T> {
+        ClientRequest::IndexRange(IndexRange {
+            start_index: start,
+            end_index: end,
+        })
+    }
+
+    /// Returns (term, voteGranted)
+    pub fn append_request(prev_log_index: u64, prev_log_term: T, entries: Vec<T>) -> ClientRequest<T> {
+        ClientRequest::AppendRequest(AppendRequest {
+            prev_log_index: prev_log_index,
+            prev_log_term: prev_log_term,
+            entries: entries
+        })
+    }
+}
