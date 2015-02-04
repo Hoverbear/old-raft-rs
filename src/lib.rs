@@ -13,7 +13,7 @@ use std::old_io::net::udp::UdpSocket;
 use std::old_io::timer::Timer;
 use std::time::Duration;
 use std::thread::Thread;
-use std::rand::{thread_rng, Rng};
+use std::rand::{thread_rng, Rng, ThreadRng};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::str;
 use std::collections::HashMap;
@@ -63,6 +63,8 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     own_id: u64,
     nodes: HashMap<u64, SocketAddr>,
     heartbeat: Receiver<()>,
+    rng: ThreadRng,
+    timer: Timer,
     socket: UdpSocket,
     req_recv: Receiver<ClientRequest<T>>,
     res_send: Sender<Result<Vec<T>, String>>,
@@ -110,8 +112,8 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 state: Follower,
                 persistent_state: PersistentState {
                     current_term: 0, // TODO: Double Check.
-                    voted_for: 0,    // TODO: Better type?
-                    log: Vec::<T>::new(),
+                    voted_for: None,
+                    log: Vec::<(u64, T)>::new(),
                 },
                 volatile_state: VolatileState {
                     commit_index: 0,
@@ -122,6 +124,8 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 nodes: nodes,
                 // Blank timer for now.
                 heartbeat: timer.oneshot(Duration::milliseconds(rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX))), // If this fails we're in trouble.
+                timer: timer,
+                rng: rng,
                 socket: socket,
                 req_recv: req_recv,
                 res_send: res_send,
@@ -190,6 +194,15 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     fn lookup(&self, index: u64) -> Option<&SocketAddr> {
         self.nodes.get(&index)
     }
+    fn other_nodes(&self) -> Vec<SocketAddr> {
+        self.nodes.iter().filter_map(|(&k, &v)| {
+            if k == self.own_id {
+                None
+            } else {
+                Some(v)
+            }
+        }).collect::<Vec<SocketAddr>>()
+    }
     /// When a `Follower`'s heartbeat times out it's time to start a campaign for election and
     /// become a `Candidate`. If successful, the `RaftNode` will transistion state into a `Leader`,
     /// otherwise it will become `Follower` again.
@@ -197,12 +210,25 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     /// issue `RequestVote` remote procedure calls to other known nodes. If a majority come back
     /// accepted, it will become the leader.
     fn campaign(&mut self) {
+        // On conversion to Candidate:
+        // * Increment current_term
+        // * Vote for self
+        // * Reset election timer
+        // * Send RequestVote RPC to all other nodes.
         self.state = match self.state {
-            Follower => Candidate,
-            _ => panic!("Should not campaign while not a follower!")
+            Follower | Candidate => Candidate,
+            _ => panic!("Should not campaign as a Leader!")
         };
-        // TODO: Issue `RequestVote` to known nodes.
-        unimplemented!()
+        self.persistent_state.current_term += 1;
+        self.persistent_state.voted_for = Some(self.own_id); // TODO: Is this correct?
+        self.reset_timer();
+        // Issue `RequestVote` to known nodes.
+        let request = RemoteProcedureCall::request_vote(
+            self.persistent_state.current_term,
+            self.persistent_state.voted_for.unwrap(), // TODO: Safe because we just set it. But correct
+            self.volatile_state.last_applied,
+            0); // TODO: Get this.
+        self.broadcast(request);
             // We rely on the loop to handle incoming responses regarding `RequestVote`, don't worry
             // about that here.
     }
@@ -213,7 +239,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     ///     receiver’s log, grant vote.
     fn handle_request_vote(&mut self, call: RequestVote, source: SocketAddr) {
         match self.state {
-            Leader(ref state) => {
+            Leader(_) => {
                 // Re-assert leadership.
                 let rpr = RemoteProcedureResponse::Rejected {
                     term: self.persistent_state.current_term,
@@ -221,11 +247,15 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 };
                 let encoded = json::encode::<RemoteProcedureResponse>(&rpr)
                     .unwrap();
-                self.socket.send_to(encoded.as_bytes(), source)
+                self.send_to(encoded.as_bytes(), source)
                     .unwrap(); // TODO: Can we do better?
             },
             Follower => {
-                // Do checks and respond appropriately.
+                let term_ok = self.persistent_state.current_term < call.term;
+                let vote_ok = self.persistent_state.voted_for.is_none();
+                let log_idx_ok = self.volatile_state.last_applied < call.last_log_index;
+                let log_term_ok = true; // TODO.
+                // If voted_for is None or the requester's ID, and their log is up to date, accept.
                 unimplemented!();
             },
             Candidate => {
@@ -278,11 +308,24 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 unimplemented!();
             },
             Follower => self.campaign(),
-            Candidate => panic!("Candidate should not have their heartbeat fire."),
+            Candidate => self.campaign(),
         }
     }
-
-
+    fn reset_timer(&mut self) {
+        self.heartbeat = self.timer.oneshot(Duration::milliseconds(self.rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX)));
+    }
+    fn broadcast(&mut self, rpc: RemoteProcedureCall<T>) -> Result<(), std::old_io::IoError> {
+        let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc)
+            .unwrap();
+        for node in self.other_nodes() {
+            try!(self.send_to(encoded.as_bytes(), node));
+        }
+        Ok(())
+    }
+    // TODO: Improve "message" to not be &[u8]
+    fn send_to(&mut self, message: &[u8], node: SocketAddr) -> Result<(), std::old_io::IoError> {
+        self.socket.send_to(message, node)
+    }
 }
 
 /// The RPC calls required by the Raft protocol.
@@ -318,8 +361,8 @@ pub enum NodeState {
 /// **Must be updated to stable storage before RPC response.**
 pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
     current_term: u64,
-    voted_for: u64, // Better way? Can we use a IpAddr?
-    log: Vec<T>,
+    voted_for: Option<u64>, // request_vote cares if this is `None`
+    log: Vec<(u64, T)>,
 }
 
 /// Volatile state
