@@ -61,7 +61,8 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     // All nodes need to know this otherwise they can't effectively lead or hold elections.
     leader_id: Option<u64>,
     own_id: u64,
-    nodes: HashMap<u64, SocketAddr>,
+    id_to_addr: HashMap<u64, SocketAddr>, // TODO: Can we have a dual purpose?
+    addr_to_id: HashMap<SocketAddr, u64>, // TODO
     heartbeat: Receiver<()>,
     rng: ThreadRng,
     timer: Timer,
@@ -89,10 +90,17 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     /// Creates a new RaftNode with the neighbors specified. `id` should be a valid index into
     /// `nodes`. The idea is that you can use the same `nodes` on all of the clients and only vary
     /// `id`.
-    pub fn start(id: u64, nodes: HashMap<u64, SocketAddr>) -> (Sender<ClientRequest<T>>, Receiver<Result<Vec<T>, String>>) {
+    pub fn start (id: u64, nodes: Vec<(u64, SocketAddr)>) -> (Sender<ClientRequest<T>>, Receiver<Result<Vec<T>, String>>) {
         // TODO: Check index.
+        // Build the Hashmap lookups. We don't have a bimap :(
+        let mut id_to_addr = HashMap::new();
+        let mut addr_to_id = HashMap::new();
+        for (id, socket) in nodes {
+            id_to_addr.insert(id, socket);
+            addr_to_id.insert(socket, id);
+        }
         // Setup the socket, make it not block.
-        let own_socket_addr = nodes.get(&id)
+        let own_socket_addr = id_to_addr.get(&id)
             .unwrap().clone(); // TODO: Can we do better?
         let mut socket = UdpSocket::bind(own_socket_addr)
             .unwrap(); // TODO: Can we do better?
@@ -121,7 +129,8 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 },
                 leader_id: None,
                 own_id: id,
-                nodes: nodes,
+                id_to_addr: id_to_addr,
+                addr_to_id: addr_to_id,
                 // Blank timer for now.
                 heartbeat: timer.oneshot(Duration::milliseconds(rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX))), // If this fails we're in trouble.
                 timer: timer,
@@ -191,11 +200,14 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         }
     }
     /// A lookup for index -> SocketAddr
-    fn lookup(&self, index: u64) -> Option<&SocketAddr> {
-        self.nodes.get(&index)
+    fn lookup_addr(&self, id: u64) -> Option<&SocketAddr> {
+        self.id_to_addr.get(&id)
+    }
+    fn lookup_id(&self, addr: SocketAddr) -> Option<&u64> {
+        self.addr_to_id.get(&addr)
     }
     fn other_nodes(&self) -> Vec<SocketAddr> {
-        self.nodes.iter().filter_map(|(&k, &v)| {
+        self.id_to_addr.iter().filter_map(|(&k, &v)| {
             if k == self.own_id {
                 None
             } else {
@@ -251,10 +263,22 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     .unwrap(); // TODO: Can we do better?
             },
             Follower => {
-                let term_ok = self.persistent_state.current_term < call.term;
-                let vote_ok = self.persistent_state.voted_for.is_none();
-                let log_idx_ok = self.volatile_state.last_applied < call.last_log_index;
-                let log_term_ok = true; // TODO.
+                let checks = [
+                    self.persistent_state.current_term < call.term,
+                    self.persistent_state.voted_for.is_none(),
+                    self.volatile_state.last_applied < call.last_log_index,
+                    true, // TODO: Is the last log term the same?
+                ];
+                if checks.iter().all(|&x| x) {
+                    // Grant.
+                    let rpr = RemoteProcedureResponse::Accepted { term: call.term };
+                    let encoded = json::encode::<RemoteProcedureResponse>(&rpr)
+                        .unwrap();
+                    self.send_to(encoded.as_bytes(), source)
+                        .unwrap(); // TODO: Can we do better?
+                } else {
+                    // Reject.
+                }
                 // If voted_for is None or the requester's ID, and their log is up to date, accept.
                 unimplemented!();
             },
@@ -325,6 +349,12 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     // TODO: Improve "message" to not be &[u8]
     fn send_to(&mut self, message: &[u8], node: SocketAddr) -> Result<(), std::old_io::IoError> {
         self.socket.send_to(message, node)
+    }
+    fn respond(&mut self, rpr: RemoteProcedureResponse, id: u64) -> Result<(), std::old_io::IoError> {
+        let encoded = json::encode::<RemoteProcedureResponse>(&rpr)
+            .unwrap();
+        let destination = self.lookup_addr(id).unwrap().clone();
+        self.send_to(encoded.as_bytes(), destination)
     }
 }
 
