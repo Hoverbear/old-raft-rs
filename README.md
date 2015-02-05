@@ -1,5 +1,7 @@
 # Raft #
 
+> Note: This project is **incomplete** and the code is of **pre-alpha** quality. **Most functionality is currently `unimplemented!()` and will panic immediately.**
+
 ## Problem and Importance ##
 
 When building a distributed system one principal goal is often to build in *fault-tolerance*. That is, if one particular node in a network goes down, or if there is a network partition, the entire cluster does not fall over. The cluster of nodes taking part in a distributed consensus protocol must come to agreement regarding values, and once that decision is reached, that choice is final.
@@ -29,7 +31,7 @@ My deliverables will be a functioning MIT licensed library with simple bindings,
 
 ## Project Website ##
 
-I'll keep track of my progress both on my blog through the [Raft](http://www.hoverbear.org/tag/raft/) tag, and via Github. I'm currently using a private repository as the code is not ready yet. If you would like to provide me with a github username I would be happy to add you as a collaborator to the project.
+I'll keep track of my progress both on my blog through the [Raft](http://www.hoverbear.org/tag/raft/) tag, and via Github.
 
 ## Links ##
 
