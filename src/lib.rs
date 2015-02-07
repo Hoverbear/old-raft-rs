@@ -6,6 +6,7 @@
 #![feature(std_misc)]
 #![feature(rand)]
 extern crate "rustc-serialize" as rustc_serialize;
+extern crate uuid;
 pub mod interchange;
 
 use std::old_io::net::ip::SocketAddr;
@@ -18,6 +19,7 @@ use std::sync::mpsc::{channel, Sender, Receiver};
 use std::str;
 use std::collections::HashMap;
 use rustc_serialize::{json, Encodable, Decodable};
+use uuid::Uuid;
 
 // Enums and variants.
 use interchange::{ClientRequest, RemoteProcedureCall, RemoteProcedureResponse};
@@ -227,8 +229,9 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         // * Vote for self
         // * Reset election timer
         // * Send RequestVote RPC to all other nodes.
-        self.state = match self.state {
-            Follower | Candidate => Candidate,
+        match self.state {
+            Follower  => self.follower_to_candidate(),
+            Candidate => self.reset_candidate(),
             _ => panic!("Should not campaign as a Leader!")
         };
         self.persistent_state.current_term += 1;
@@ -244,6 +247,9 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             // We rely on the loop to handle incoming responses regarding `RequestVote`, don't worry
             // about that here.
     }
+    //////////////
+    // Handlers //
+    //////////////
     /// Handles a `RemoteProcedureCall::RequestVote` call.
     ///
     ///   * Reply false if term < currentTerm.
@@ -253,10 +259,13 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         match self.state {
             Leader(_) => {
                 // Re-assert leadership.
-                let rpr = RemoteProcedureResponse::Rejected {
-                    term: self.persistent_state.current_term,
-                    current_leader: self.leader_id.unwrap(), // Should be self.
-                };
+                assert!(self.leader_id.is_some());
+                assert!(self.leader_id.unwrap() == self.own_id);
+                let rpr = RemoteProcedureResponse::reject(
+                    call.uuid,
+                    self.persistent_state.current_term,
+                    self.leader_id.unwrap(), // Should be self.
+                );
                 let encoded = json::encode::<RemoteProcedureResponse>(&rpr)
                     .unwrap();
                 self.send_to(encoded.as_bytes(), source)
@@ -271,7 +280,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 ];
                 if checks.iter().all(|&x| x) {
                     // Grant.
-                    let rpr = RemoteProcedureResponse::Accepted { term: call.term };
+                    let rpr = RemoteProcedureResponse::accept(call.uuid, call.term);
                     let encoded = json::encode::<RemoteProcedureResponse>(&rpr)
                         .unwrap();
                     self.send_to(encoded.as_bytes(), source)
@@ -289,7 +298,6 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         }
     }
     /// Handles an `AppendEntries` request from a caller.
-    ///
     fn handle_append_entries(&mut self, call: AppendEntries<T>, source: SocketAddr) {
         match self.state {
             Leader(ref state) => {
@@ -325,6 +333,9 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     fn handle_rejected(&mut self, response: RemoteProcedureResponse, source: SocketAddr) {
         unimplemented!();
     }
+    ////////////
+    // Timers //
+    ////////////
     fn handle_timer(&mut self) {
         match self.state {
             Leader(ref state) => {
@@ -338,6 +349,9 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     fn reset_timer(&mut self) {
         self.heartbeat = self.timer.oneshot(Duration::milliseconds(self.rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX)));
     }
+    //////////////////
+    // Transmission //
+    //////////////////
     fn broadcast(&mut self, rpc: RemoteProcedureCall<T>) -> Result<(), std::old_io::IoError> {
         let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc)
             .unwrap();
@@ -355,6 +369,42 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             .unwrap();
         let destination = self.lookup_addr(id).unwrap().clone();
         self.send_to(encoded.as_bytes(), destination)
+    }
+    ///////////////////
+    // State Changes //
+    ///////////////////
+    /// Called on heartbeat timeout.
+    pub fn follower_to_candidate(&mut self) {
+        self.state = match self.state {
+            Follower => Candidate,
+            _ => panic!("Called follower_to_candidate() but was not Follower.")
+        }
+    }
+    /// Called when the Leader recieves information that they are not the leader.
+    pub fn leader_to_follower(&mut self) {
+        self.state = match self.state {
+            Leader(_) => Follower,
+            _ => panic!("Called leader_to_follower() but was not Leader.")
+        }
+    }
+    /// Called when a Candidate successfully gets elected.
+    pub fn candidate_to_leader(&mut self) {
+        self.state = match self.state {
+            Candidate => Leader(LeaderState {
+                next_index: Vec::new(),
+                match_index: Vec::new()
+            }),
+            _ => panic!("Called candidate_to_leader() but was not Candidate.")
+        }
+    }
+    /// Called when a Candidate needs to hold another election.
+    /// TODO: This is currently pointless, but will be meaningful when Candidates
+    /// have data as part of their variant.
+    pub fn reset_candidate(&mut self) {
+        self.state = match self.state {
+            Candidate => Candidate,
+            _ => panic!("Called reset_candidate() but was not Candidate.")
+        }
     }
 }
 
