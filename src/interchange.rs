@@ -67,6 +67,7 @@ impl<T> RemoteProcedureCall<T> {
 /// * `Rejected` means that `rpc.term < node.persistent_state.current_term` or if the
 /// Node's `log` doesn't contain the entry at `rpc.prev_log_index` that maches `prev_log_term`.
 /// The caller should follow the `current_leader` it is directed to.
+/// The UUID should match the coresponding RPC.
 #[derive(RustcEncodable, RustcDecodable, Debug)]
 pub enum RemoteProcedureResponse {
     Accepted { uuid: Uuid, term: u64 },
@@ -74,12 +75,14 @@ pub enum RemoteProcedureResponse {
 }
 
 impl RemoteProcedureResponse {
+    /// Creates a new RemoteProcedureResponse::Accepted.
     pub fn accept(uuid: Uuid, term: u64) -> RemoteProcedureResponse {
         RemoteProcedureResponse::Accepted {
             uuid: uuid,
             term: term,
         }
     }
+    /// Creates a new RemoteProcedureResponse::rejected.
     pub fn reject(uuid: Uuid, term: u64, current_leader: u64) -> RemoteProcedureResponse {
         RemoteProcedureResponse::Rejected {
             uuid: uuid,
