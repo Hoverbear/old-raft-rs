@@ -70,25 +70,38 @@ impl<T> RemoteProcedureCall<T> {
 /// The UUID should match the coresponding RPC.
 #[derive(RustcEncodable, RustcDecodable, Debug)]
 pub enum RemoteProcedureResponse {
-    Accepted { uuid: Uuid, term: u64 },
-    Rejected { uuid: Uuid, term: u64, current_leader: u64 },
+    Accepted(Accepted),
+    Rejected(Rejected),
+}
+
+#[derive(RustcEncodable, RustcDecodable, Debug)]
+pub struct Accepted {
+    pub uuid: Uuid,
+    term: u64,
+}
+
+#[derive(RustcEncodable, RustcDecodable, Debug)]
+pub struct Rejected {
+    pub uuid: Uuid,
+    pub term: u64,
+    pub current_leader: u64,
 }
 
 impl RemoteProcedureResponse {
     /// Creates a new RemoteProcedureResponse::Accepted.
     pub fn accept(uuid: Uuid, term: u64) -> RemoteProcedureResponse {
-        RemoteProcedureResponse::Accepted {
+        RemoteProcedureResponse::Accepted(Accepted {
             uuid: uuid,
             term: term,
-        }
+        })
     }
     /// Creates a new RemoteProcedureResponse::rejected.
     pub fn reject(uuid: Uuid, term: u64, current_leader: u64) -> RemoteProcedureResponse {
-        RemoteProcedureResponse::Rejected {
+        RemoteProcedureResponse::Rejected(Rejected {
             uuid: uuid,
             term: term,
             current_leader: current_leader,
-        }
+        })
     }
 }
 

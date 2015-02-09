@@ -8,7 +8,6 @@
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate uuid;
 extern crate rand;
-
 pub mod interchange;
 
 use std::old_io::net::ip::SocketAddr;
@@ -17,20 +16,20 @@ use std::old_io::timer::Timer;
 use std::old_io::IoError;
 use std::time::Duration;
 use std::thread::Thread;
-use std::rand::{thread_rng, Rng, ThreadRng};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::str;
 use std::collections::HashMap;
 use rustc_serialize::{json, Encodable, Decodable};
 use uuid::Uuid;
+use rand::{thread_rng, Rng, ThreadRng};
 
 // Enums and variants.
 use interchange::{ClientRequest, RemoteProcedureCall, RemoteProcedureResponse};
 // Data structures.
 use interchange::{AppendEntries, RequestVote};
 use interchange::{AppendRequest, IndexRange};
+use interchange::{Accepted, Rejected};
 use NodeState::{Leader, Follower, Candidate};
-use Transaction::{Polling, Accepted, Rejected};
 
 // The maximum size of the read buffer.
 const BUFFER_SIZE: usize = 4096;
@@ -176,10 +175,10 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     self.respond(source, rpr).unwrap();
                 } else if let Ok(rpr) = json::decode::<RemoteProcedureResponse>(data) {
                     match rpr {
-                        RemoteProcedureResponse::Accepted { .. } =>
-                            self.handle_accepted(rpr, source),
-                        RemoteProcedureResponse::Rejected { .. } =>
-                            self.handle_rejected(rpr, source),
+                        RemoteProcedureResponse::Accepted(response) =>
+                            self.handle_accepted(response, source),
+                        RemoteProcedureResponse::Rejected(response) =>
+                            self.handle_rejected(response, source),
                     }
                 }
             },
@@ -256,7 +255,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     rpc.uuid.clone()
                 } else { panic!("Couldn't get uuid from a just built RequestVote.")}
             };
-            status.insert(id as usize, (uuid, Polling));
+            status[id as usize] = Transaction { uuid: uuid, state: TransactionState::Polling };
             self.send(addr, request);
         }
         // The old map
@@ -317,10 +316,44 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             },
         }
     }
-    fn handle_accepted(&mut self, response: RemoteProcedureResponse, source: SocketAddr) {
-        unimplemented!();
+    fn handle_accepted(&mut self, response: Accepted, source: SocketAddr) {
+        let source_id = match self.lookup_id(source) {
+            Some(id) => *id,
+            None => return,
+        };
+        let mut check_polls = false;
+        match self.state {
+            Leader(ref state) => {
+                // Should be an AppendEntries request response.
+                unimplemented!();
+            },
+            Follower => {
+                // Must have been a response to our last AppendEntries request?
+                unimplemented!();
+            },
+            Candidate(ref mut status) => {
+                // Hopefully a response to one of our request_votes.
+                if status[source_id as usize].uuid == response.uuid {
+                    // Set it.
+                    status[source_id as usize].state = TransactionState::Accepted;
+                    check_polls = true;
+                };
+            }
+        }
+        // TODO: Make this not so gross. Because we call `candidate_to_leader`
+        // we can't have a `ref mut` to `status` alive when called.
+        if let (true, Candidate(status)) = (check_polls, self.state.clone()) {
+            // Do we have a majority?
+            let number_of_votes = status.iter().filter(|&transaction| {
+                transaction.state == TransactionState::Accepted
+            }).count();
+            if number_of_votes > self.addr_to_id.len() / 2 {
+                // Won election.
+                self.candidate_to_leader();
+            }
+        }
     }
-    fn handle_rejected(&mut self, response: RemoteProcedureResponse, source: SocketAddr) {
+    fn handle_rejected(&mut self, response: Rejected, source: SocketAddr) {
         unimplemented!();
     }
     fn handle_append_request(&mut self, request: AppendRequest<T>) -> Result<Vec<T>, IoError> {
@@ -431,17 +464,23 @@ impl<T: Encodable + Decodable + Send + Clone> Raft<T> for RaftNode<T> {
 ///     replicated, and issuing heartbeats..
 ///   * A `Candidate`, which campaigns in an election and may become a `Leader` (if it gets enough
 ///     votes) or a `Follower`, if it hears from a `Leader`.
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 pub enum NodeState {
     Follower,
     Leader(LeaderState),
-    Candidate(Vec<(Uuid, Transaction)>),
+    Candidate(Vec<Transaction>),
+}
+
+#[derive(PartialEq, Eq, Clone)]
+pub struct Transaction {
+    uuid: Uuid,
+    state: TransactionState,
 }
 
 /// Used to signify the state of of a Request/Response pair. This is only needed
 /// on the original sender... not on the reciever.
-#[derive(PartialEq, Eq)]
-pub enum Transaction {
+#[derive(PartialEq, Eq, Copy, Clone)]
+pub enum TransactionState {
     Polling,
     Accepted,
     Rejected,
@@ -464,7 +503,7 @@ pub struct VolatileState {
 
 /// Leader Only
 /// **Reinitialized after election.**
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct LeaderState {
     next_index: Vec<u64>,
     match_index: Vec<u64>
