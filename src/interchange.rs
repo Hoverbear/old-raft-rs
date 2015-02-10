@@ -1,6 +1,8 @@
 extern crate "rustc-serialize" as rustc_serialize;
-use rustc_serialize::{json, Encodable, Decodable};
+extern crate uuid;
 
+use uuid::Uuid;
+use rustc_serialize::{json, Encodable, Decodable};
 
 /// Data interchange format for RPC calls. These should match directly to the Raft paper's RPC
 /// descriptions.
@@ -18,15 +20,17 @@ pub struct AppendEntries<T> {
     pub prev_log_term: T,
     pub entries: Vec<T>,
     pub leader_commit: u64,
+    pub uuid: uuid::Uuid, // For tracking ACKs
 }
 
 
-#[derive(RustcEncodable, RustcDecodable, Debug, Clone, Copy)]
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub struct RequestVote {
     pub term: u64,
     pub candidate_id: u64,
     pub last_log_index: u64,
     pub last_log_term: u64,
+    pub uuid: uuid::Uuid, // For tracking ACKs
 }
 
 impl<T> RemoteProcedureCall<T> {
@@ -41,6 +45,7 @@ impl<T> RemoteProcedureCall<T> {
             prev_log_term: prev_log_term,
             entries: entries,
             leader_commit: leader_commit,
+            uuid: Uuid::new_v4(),
         })
     }
 
@@ -52,6 +57,7 @@ impl<T> RemoteProcedureCall<T> {
             candidate_id: candidate_id,
             last_log_index: last_log_index,
             last_log_term: last_log_term,
+            uuid: Uuid::new_v4(),
         })
     }
 }
@@ -61,10 +67,42 @@ impl<T> RemoteProcedureCall<T> {
 /// * `Rejected` means that `rpc.term < node.persistent_state.current_term` or if the
 /// Node's `log` doesn't contain the entry at `rpc.prev_log_index` that maches `prev_log_term`.
 /// The caller should follow the `current_leader` it is directed to.
-#[derive(RustcEncodable, RustcDecodable, Debug, Copy)]
+/// The UUID should match the coresponding RPC.
+#[derive(RustcEncodable, RustcDecodable, Debug)]
 pub enum RemoteProcedureResponse {
-    Accepted { term: u64 },
-    Rejected { term: u64, current_leader: u64 },
+    Accepted(Accepted),
+    Rejected(Rejected),
+}
+
+#[derive(RustcEncodable, RustcDecodable, Debug)]
+pub struct Accepted {
+    pub uuid: Uuid,
+    term: u64,
+}
+
+#[derive(RustcEncodable, RustcDecodable, Debug)]
+pub struct Rejected {
+    pub uuid: Uuid,
+    pub term: u64,
+    pub current_leader: u64,
+}
+
+impl RemoteProcedureResponse {
+    /// Creates a new RemoteProcedureResponse::Accepted.
+    pub fn accept(uuid: Uuid, term: u64) -> RemoteProcedureResponse {
+        RemoteProcedureResponse::Accepted(Accepted {
+            uuid: uuid,
+            term: term,
+        })
+    }
+    /// Creates a new RemoteProcedureResponse::rejected.
+    pub fn reject(uuid: Uuid, term: u64, current_leader: u64) -> RemoteProcedureResponse {
+        RemoteProcedureResponse::Rejected(Rejected {
+            uuid: uuid,
+            term: term,
+            current_leader: current_leader,
+        })
+    }
 }
 
 /// Data interchange request format for Client <-> Node Communication.
@@ -82,7 +120,7 @@ pub enum ClientRequest<T> {
     AppendRequest(AppendRequest<T>),
 }
 
-#[derive(RustcEncodable, RustcDecodable, Debug, Clone, Copy)]
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub struct IndexRange {
     pub start_index: u64,
     pub end_index: u64,

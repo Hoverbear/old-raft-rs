@@ -5,3 +5,5 @@ authors = ["Andrew Hobden <andrew@hoverbear.org>"]
 
 [dependencies]
 rustc-serialize = "*"
+uuid = "*"
+rand = "*"
