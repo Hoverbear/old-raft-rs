@@ -316,12 +316,12 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             },
         }
     }
+    /// This function handles `RemoteProcedureResponse::Accepted` requests.
     fn handle_accepted(&mut self, response: Accepted, source: SocketAddr) {
         let source_id = match self.lookup_id(source) {
             Some(id) => *id,
             None => return,
         };
-        let mut check_polls = false;
         match self.state {
             Leader(ref state) => {
                 // Should be an AppendEntries request response.
@@ -331,25 +331,27 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 // Must have been a response to our last AppendEntries request?
                 unimplemented!();
             },
-            Candidate(ref mut status) => {
-                // Hopefully a response to one of our request_votes.
-                if status[source_id as usize].uuid == response.uuid {
-                    // Set it.
-                    status[source_id as usize].state = TransactionState::Accepted;
-                    check_polls = true;
-                };
-            }
-        }
-        // TODO: Make this not so gross. Because we call `candidate_to_leader`
-        // we can't have a `ref mut` to `status` alive when called.
-        if let (true, Candidate(status)) = (check_polls, self.state.clone()) {
-            // Do we have a majority?
-            let number_of_votes = status.iter().filter(|&transaction| {
-                transaction.state == TransactionState::Accepted
-            }).count();
-            if number_of_votes > self.addr_to_id.len() / 2 {
-                // Won election.
-                self.candidate_to_leader();
+            Candidate(_) => {
+                let mut check_polls = false;
+                if let Candidate(ref mut status) = self.state {
+                    // Hopefully a response to one of our request_votes.
+                    if status[source_id as usize].uuid == response.uuid {
+                        // Set it.
+                        status[source_id as usize].state = TransactionState::Accepted;
+                        check_polls = true;
+                    };
+                }
+                // Clone state because we'll replace it.
+                if let (true, Candidate(status)) = (check_polls, self.state.clone()) {
+                    // Do we have a majority?
+                    let number_of_votes = status.iter().filter(|&transaction| {
+                        transaction.state == TransactionState::Accepted
+                    }).count();
+                    if number_of_votes > self.addr_to_id.len() / 2 {
+                        // Won election.
+                        self.candidate_to_leader();
+                    }
+                }
             }
         }
     }
