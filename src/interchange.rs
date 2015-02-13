@@ -1,3 +1,6 @@
+/// This module exposes a variety of data-interchange formats used by the library. In general,
+/// a consumer of the library won't need to utilize any of these.
+
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate uuid;
 
@@ -17,8 +20,8 @@ pub struct AppendEntries<T> {
     pub term: u64,
     pub leader_id: u64,
     pub prev_log_index: u64,
-    pub prev_log_term: T,
-    pub entries: Vec<T>,
+    pub prev_log_term: u64,
+    pub entries: Vec<(u64, T)>,
     pub leader_commit: u64,
     pub uuid: uuid::Uuid, // For tracking ACKs
 }
@@ -36,29 +39,31 @@ pub struct RequestVote {
 impl<T> RemoteProcedureCall<T> {
     /// Returns (term, success)
     pub fn append_entries(term: u64, leader_id: u64, prev_log_index: u64,
-                      prev_log_term: T, entries: Vec<T>,
-                      leader_commit: u64) -> RemoteProcedureCall<T> {
-        RemoteProcedureCall::AppendEntries(AppendEntries::<T> {
+                      prev_log_term: u64, entries: Vec<(u64, T)>,
+                      leader_commit: u64) -> (Uuid, RemoteProcedureCall<T>) {
+        let id = Uuid::new_v4();
+        (id.clone(), RemoteProcedureCall::AppendEntries(AppendEntries::<T> {
             term: term,
             leader_id: leader_id,
             prev_log_index: prev_log_index,
             prev_log_term: prev_log_term,
             entries: entries,
             leader_commit: leader_commit,
-            uuid: Uuid::new_v4(),
-        })
+            uuid: id,
+        }))
     }
 
     /// Returns (term, voteGranted)
     pub fn request_vote(term: u64, candidate_id: u64, last_log_index: u64,
-                    last_log_term: u64) -> RemoteProcedureCall<T> {
-        RemoteProcedureCall::RequestVote(RequestVote {
+                    last_log_term: u64) -> (Uuid, RemoteProcedureCall<T>) {
+        let id = Uuid::new_v4();
+        (id.clone(), RemoteProcedureCall::RequestVote(RequestVote {
             term: term,
             candidate_id: candidate_id,
             last_log_index: last_log_index,
             last_log_term: last_log_term,
-            uuid: Uuid::new_v4(),
-        })
+            uuid: id,
+        }))
     }
 }
 
@@ -77,7 +82,9 @@ pub enum RemoteProcedureResponse {
 #[derive(RustcEncodable, RustcDecodable, Debug)]
 pub struct Accepted {
     pub uuid: Uuid,
-    term: u64,
+    pub term: u64,
+    pub match_index: u64, // For Leader State
+    pub last_index: u64,  // For Leader State
 }
 
 #[derive(RustcEncodable, RustcDecodable, Debug)]
@@ -85,22 +92,28 @@ pub struct Rejected {
     pub uuid: Uuid,
     pub term: u64,
     pub current_leader: u64,
+    pub match_index: u64, // For Leader State
+    pub last_index: u64,  // For Leader State
 }
 
 impl RemoteProcedureResponse {
     /// Creates a new RemoteProcedureResponse::Accepted.
-    pub fn accept(uuid: Uuid, term: u64) -> RemoteProcedureResponse {
+    pub fn accept(uuid: Uuid, term: u64, match_index: u64, last_index: u64) -> RemoteProcedureResponse {
         RemoteProcedureResponse::Accepted(Accepted {
             uuid: uuid,
             term: term,
+            match_index: match_index,
+            last_index: last_index,
         })
     }
     /// Creates a new RemoteProcedureResponse::rejected.
-    pub fn reject(uuid: Uuid, term: u64, current_leader: u64) -> RemoteProcedureResponse {
+    pub fn reject(uuid: Uuid, term: u64, current_leader: u64, match_index: u64, last_index: u64) -> RemoteProcedureResponse {
         RemoteProcedureResponse::Rejected(Rejected {
             uuid: uuid,
             term: term,
             current_leader: current_leader,
+            match_index: match_index,
+            last_index: last_index,
         })
     }
 }
