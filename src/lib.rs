@@ -15,7 +15,7 @@ use std::old_io::net::udp::UdpSocket;
 use std::old_io::timer::Timer;
 use std::old_io::IoError;
 use std::io;
-use std::io::Seek;
+use std::io::{ReadExt, Seek};
 use std::time::Duration;
 use std::thread::Thread;
 use std::fs::File;
@@ -280,7 +280,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     call.uuid,
                     self.persistent_state.current_term,
                     self.leader_id.unwrap(), // Should be self.
-                    self.persistent_state.last_index().unwrap(),
+                    self.persistent_state.last_index,
                     self.volatile_state.commit_index
                 )
             },
@@ -291,15 +291,15 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     self.volatile_state.last_applied < call.last_log_index,
                     true, // TODO: Is the last log term the same?
                 ];
-                let last_index = self.persistent_state.last_index().unwrap();
+                let last_index = self.persistent_state.last_index;
                 match checks.iter().all(|&x| x) {
                     true  => RemoteProcedureResponse::accept(call.uuid, call.term,
-                            self.persistent_state.last_index().unwrap(), self.volatile_state.commit_index),
+                            self.persistent_state.last_index, self.volatile_state.commit_index),
                     false => {
                         // TODO: Handle various error cases.
                         // Decrement next_index
                         RemoteProcedureResponse::reject(call.uuid, call.term, self.leader_id.unwrap(),
-                            self.persistent_state.last_index().unwrap() - 1, self.volatile_state.commit_index)
+                            self.persistent_state.last_index - 1, self.volatile_state.commit_index)
                     },
                 }
             },
@@ -331,7 +331,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                         call.uuid,
                         self.persistent_state.current_term,
                         self.leader_id.unwrap(),
-                        self.persistent_state.last_index().unwrap(), // TODO Maybe wrong
+                        self.persistent_state.last_index, // TODO Maybe wrong
                         self.volatile_state.commit_index
                     )
                 } else if call.term != call.prev_log_term {
@@ -343,7 +343,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                         call.uuid,
                         self.persistent_state.current_term,
                         self.leader_id.unwrap(),
-                        self.persistent_state.last_index().unwrap(), // TODO Maybe wrong.
+                        self.persistent_state.last_index, // TODO Maybe wrong.
                         self.volatile_state.commit_index,
                     )
                 } else {
@@ -353,7 +353,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     RemoteProcedureResponse::accept(
                         call.uuid,
                         self.persistent_state.current_term,
-                        self.persistent_state.last_index().unwrap(), // TODO Maybe wrong.
+                        self.persistent_state.last_index, // TODO Maybe wrong.
                         self.volatile_state.commit_index,
                     )
                 }
@@ -450,7 +450,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         match self.state {
             Leader(ref state) => {
                 // Send heartbeats.
-                let last_index = self.persistent_state.last_index().unwrap();
+                let last_index = self.persistent_state.last_index;
                 let (last_log_term, _) = self.persistent_state.retrieve_entry(last_index).unwrap();
                 for (&id, &addr) in self.id_to_addr.iter() {
                     let (uuid, rpc) = RemoteProcedureCall::append_entries(
@@ -582,10 +582,11 @@ pub enum TransactionState {
 
 /// Persistent state
 /// **Must be updated to stable storage before RPC response.**
-pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
+struct PersistentState<T: Encodable + Decodable + Send + Clone> {
     current_term: u64,
     voted_for: Option<u64>, // request_vote cares if this is `None`
     log: File,
+    pub last_index: u64,             // The last index of the file.
 }
 
 impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
@@ -593,25 +594,50 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         PersistentState {
             current_term: current_term,
             voted_for: None,
-            log: File::open(&log_path).unwrap(),
+            log: File::create(&log_path).unwrap(),
+            last_index: 0,
         }
     }
     pub fn append_entries(&mut self, prev_log_index: u64, prev_log_term: u64,
                       entries: Vec<(u64, T)>) -> Result<(), IoError> {
         unimplemented!()
     }
+    /// Returns the number of bytes containing `line` lines.
+    fn move_to(&mut self, line: u64) -> io::Result<u64> {
+        let mut lines_read = 0u64;
+        // Go until we've reached `from` new lines.
+        let _ = self.log.by_ref().chars().skip_while(|opt| {
+            match *opt {
+                Ok(val) => {
+                    if val == '\n' {
+                        lines_read += 1;
+                        if lines_read == line {
+                            false // At right location.
+                        } else {
+                            true // Not done yet, more lines to go.
+                        }
+                    } else {
+                        true // Not a new line.
+                    }
+                },
+                _ => false // At EOF. Nothing to purge.
+            }
+        }).next(); // Side effects.
+        // We're at the first byte of a new line.
+        self.log.seek(io::SeekFrom::Current(-1)) // Take the last byte.
+    }
     /// Removes all entries from `from` to the last entry, inclusively.
-    pub fn purge_from(&mut self, from: u64) -> Result<(), IoError> {
-        unimplemented!()
+    pub fn purge_from(&mut self, from: u64) -> io::Result<()> {
+        try!(self.move_to(from));
+        let position = try!(self.log.seek(io::SeekFrom::Current(0))); // Get the position.
+        self.log.set_len(position); // Chop off the file at the given position.
+        Ok(())
     }
     pub fn retrieve_entries(&self, start: u64, end: u64) -> Result<Vec<(u64, T)>, IoError> {
         unimplemented!()
     }
     pub fn retrieve_entry(&self, entry: u64) -> Result<(u64, T), IoError> {
         unimplemented!()
-    }
-    pub fn last_index(&mut self) -> io::Result<u64> {
-        self.log.seek(std::io::SeekFrom::End(0i64))
     }
 }
 
