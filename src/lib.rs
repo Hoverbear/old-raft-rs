@@ -85,19 +85,6 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
 /// done via `::new()`.
-///
-/// ```
-/// use raft::RaftNode;
-/// use std::old_io::net::ip::SocketAddr;
-/// use std::old_io::net::ip::IpAddr::Ipv4Addr;
-/// use std::collections::HashMap;
-///
-/// let mut nodes = HashMap::new();
-/// nodes.insert(1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 });
-/// nodes.insert(2, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 });
-/// // Create the nodes.
-/// let node = RaftNode::<String>::start(1, nodes.clone());
-/// ```
 impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     /// Creates a new RaftNode with the neighbors specified. `id` should be a valid index into
     /// `nodes`. The idea is that you can use the same `nodes` on all of the clients and only vary
@@ -338,7 +325,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 } else if call.term != call.prev_log_term {
                     // prev_log_term is wrong.
                     // Delete it and all that follow it.
-                    self.persistent_state.purge_from(call.prev_log_index)
+                    self.persistent_state.purge_from_line(call.prev_log_index)
                         .unwrap();
                     RemoteProcedureResponse::reject(
                         call.uuid,
