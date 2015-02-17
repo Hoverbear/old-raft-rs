@@ -6,8 +6,8 @@ use rustc_serialize::{json, Encodable, Decodable};
 use rustc_serialize::base64::{ToBase64, FromBase64, Config, CharacterSet, Newline};
 use types::NodeState::{Leader, Follower, Candidate};
 use types::TransactionState::{Polling, Accepted, Rejected};
-use std::fs::File;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
+use std::fs;
 use std::str;
 use std::str::StrExt;
 use std::io;
@@ -38,7 +38,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     }
     pub fn append_entries(&mut self, prev_log_index: u64, prev_log_term: u64,
                       entries: Vec<(u64, T)>) -> io::Result<()> {
-        try!(self.move_to(prev_log_index + 1));
+        let position = self.move_to(prev_log_index + 1);
         // TODO: Possibly purge.
         for (term, entry) in entries {
             // TODO: I don't like the "doubling" here. How can we do this better?
@@ -68,6 +68,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     fn move_to(&mut self, line: u64) -> io::Result<u64> {
         let mut lines_read = 0u64;
         self.log.seek(io::SeekFrom::Start(0)); // Take the start.
+        if line == 0 { return Ok(0) } // early exit
         // Go until we've reached `from` new lines.
         let _ = self.log.by_ref().chars().skip_while(|opt| {
             match *opt {
@@ -86,19 +87,18 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
                 _ => false // At EOF. Nothing to purge.
             }
         }).next(); // Side effects.
-        // We're at the first byte of a new line.
-        self.log.seek(io::SeekFrom::Current(0)) // Take the last byte.
+        self.log.seek(io::SeekFrom::Current(0)) // Where are we?
     }
     fn purge_from_bytes(&mut self, from_bytes: u64) -> io::Result<()> {
         self.log.set_len(from_bytes) // Chop off the file at the given position.
     }
     /// Removes all entries from `from` to the last entry, inclusively.
-    pub fn purge_from_line(&mut self, from_line: u64) -> io::Result<()> {
+    pub fn purge_from_index(&mut self, from_line: u64) -> io::Result<()> {
         let position = try!(self.move_to(from_line));
         self.purge_from_bytes(position)
     }
     pub fn retrieve_entries(&mut self, start: u64, end: u64) -> io::Result<Vec<(u64, T)>> {
-        let position = try!(self.move_to(start));
+        let position = self.move_to(start);
         let mut index = start;
         let mut out = vec![];
         let mut read_in = self.log.by_ref()
@@ -110,9 +110,21 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
                 .take_while(|&val| val != '\n')
                 .collect::<String>();
             let mut splits = chars.split(' ');
-            let term = splits.next().unwrap()
-                .parse::<u64>().unwrap();
-            let encoded = splits.next().unwrap();
+            let term = {
+                let chunk = splits.next()
+                    .and_then(|v| v.parse::<u64>().ok());
+                match chunk {
+                    Some(v) => v,
+                    None => break,
+                }
+            };
+            let encoded = {
+                let chunk = splits.next();
+                match chunk {
+                    Some(v) => v,
+                    None => break,
+                }
+            };
             let decoded: T = PersistentState::decode(encoded.to_string())
                 .ok().expect("Could not unwrap log entry.");
             out.push((term, decoded));
@@ -120,15 +132,28 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         Ok(out)
     }
     pub fn retrieve_entry(&mut self, index: u64) -> io::Result<(u64, T)> {
-        let position = try!(self.move_to(index));
-        let mut chars = self.log.by_ref().chars()
+        let position = self.move_to(index);
+        let mut chars = self.log.by_ref()
+            .chars()
             .take_while(|val| val.is_ok())
             .filter_map(|val| val.ok()) // We don't really care about issues here.
             .take_while(|&val| val != '\n').collect::<String>();
         let mut splits = chars.split(' ');
-        let term = splits.next().unwrap()
-            .parse::<u64>().unwrap();
-        let encoded = splits.next().unwrap();
+        let term = {
+            let chunk = splits.next()
+                .and_then(|v| v.parse::<u64>().ok());
+            match chunk {
+                Some(v) => v,
+                None => return Err(io::Error::new(io::ErrorKind::InvalidInput, "Could not parse term.", None)),
+            }
+        };
+        let encoded = {
+            let chunk = splits.next();
+            match chunk {
+                Some(v) => v,
+                None => return Err(io::Error::new(io::ErrorKind::InvalidInput, "Could not parse encoded data.", None)),
+            }
+        };
         let decoded: T = PersistentState::decode(encoded.to_string())
             .ok().expect("Could not unwrap log entry.");
         Ok((term, decoded))
@@ -181,14 +206,42 @@ pub enum TransactionState {
 }
 
 #[test]
-fn test_log() {
-    let mut state = PersistentState::new(0, Path::new("/tmp/test_path"));
-    let command = state.append_entries(0, 1, vec![(1, "Foo".to_string()), (2, "Foobar".to_string())]);
-    assert_eq!(command, Ok(()));
-    assert_eq!(state.retrieve_entry(1), Ok((1, "Foo".to_string())));
-    assert_eq!(state.retrieve_entries(1, 2),
+fn test_persistent_state() {
+    let path = Path::new("/tmp/test_path");
+    fs::remove_file(&path.clone());
+    let mut state = PersistentState::new(0, path.clone());
+    // Add 0, 1
+    assert_eq!(state.append_entries(0, 0,
+        vec![(1, "Foo".to_string()), (2, "Bar".to_string())]),
+        Ok(()));
+    // Check 0
+    assert_eq!(state.retrieve_entry(0),
+        Ok((1, "Foo".to_string())));
+    // Check 0, 1
+    assert_eq!(state.retrieve_entries(0, 1),
         Ok(vec![(1, "Foo".to_string()),
-                (2, "Foobar".to_string())
+                (2, "Bar".to_string())
         ]));
-    assert_eq!(state.retrieve_entry(2), Ok((2, "Foobar".to_string())));
+    // Check 1
+    assert_eq!(state.retrieve_entry(1),
+        Ok((2, "Bar".to_string())));
+    // Add 2, 3
+    assert_eq!(state.append_entries(1, 2,
+        vec![(2, "Baz".to_string()), (3, "FooBarBaz".to_string())]),
+        Ok(()));
+    // Check 2, 3
+    assert_eq!(state.retrieve_entries(2, 3),
+        Ok(vec![(2, "Baz".to_string()),
+                (3, "FooBarBaz".to_string())
+        ]));
+    // Remove 2, 3
+    assert_eq!(state.purge_from_index(2),
+        Ok(()));
+    // Check 3,4 are removed, and that code handles lack of entry gracefully.
+    assert_eq!(state.retrieve_entries(0, 4),
+        Ok(vec![(1, "Foo".to_string()),
+                (2, "Bar".to_string())
+        ]));
+    // Add 3,4,5.
+    fs::remove_file(&path.clone());
 }

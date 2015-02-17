@@ -325,7 +325,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 } else if call.term != call.prev_log_term {
                     // prev_log_term is wrong.
                     // Delete it and all that follow it.
-                    self.persistent_state.purge_from_line(call.prev_log_index)
+                    self.persistent_state.purge_from_index(call.prev_log_index)
                         .unwrap();
                     RemoteProcedureResponse::reject(
                         call.uuid,
