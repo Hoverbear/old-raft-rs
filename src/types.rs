@@ -18,7 +18,7 @@ use std::old_io::IoError;
 /// **Must be updated to stable storage before RPC response.**
 pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
     current_term: u64,
-    voted_for: Option<u64>, // request_vote cares if this is `None`
+    voted_for: Option<u64>,      // request_vote cares if this is `None`
     log: File,
     last_index: u64,             // The last index of the file.
 }
@@ -64,8 +64,9 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     }
     pub fn append_entries(&mut self, prev_log_index: u64, prev_log_term: u64,
                       entries: Vec<(u64, T)>) -> io::Result<()> {
-        let position = self.move_to(prev_log_index + 1);
+        let position = try!(self.move_to(prev_log_index + 1));
         let number = entries.len();
+        try!(self.purge_from_bytes(position)); // Update `last_log_index` later.
         // TODO: Possibly purge.
         for (term, entry) in entries {
             // TODO: I don't like the "doubling" here. How can we do this better?
@@ -244,32 +245,32 @@ fn test_persistent_state() {
     let mut state = PersistentState::new(0, path.clone());
     // Add 0, 1
     assert_eq!(state.append_entries(0, 0,
-        vec![(1, "Foo".to_string()),
-             (2, "Bar".to_string())]),
+        vec![(0, "Zero".to_string()),
+             (1, "One".to_string())]),
         Ok(()));
     // Check index.
     assert_eq!(state.get_last_index(), 1);
     // Check 0
     assert_eq!(state.retrieve_entry(0),
-        Ok((1, "Foo".to_string())));
+        Ok((0, "Zero".to_string())));
     // Check 0, 1
     assert_eq!(state.retrieve_entries(0, 1),
-        Ok(vec![(1, "Foo".to_string()),
-                (2, "Bar".to_string())
+        Ok(vec![(0, "Zero".to_string()),
+                (1, "One".to_string())
         ]));
     // Check 1
     assert_eq!(state.retrieve_entry(1),
-        Ok((2, "Bar".to_string())));
+        Ok((1, "One".to_string())));
     // Add 2, 3
     assert_eq!(state.append_entries(1, 2,
-        vec![(2, "Baz".to_string()),
-             (3, "FooBarBaz".to_string())]),
+        vec![(2, "Two".to_string()),
+             (3, "Three".to_string())]),
         Ok(()));
     assert_eq!(state.get_last_index(), 3);
     // Check 2, 3
     assert_eq!(state.retrieve_entries(2, 3),
-        Ok(vec![(2, "Baz".to_string()),
-                (3, "FooBarBaz".to_string())
+        Ok(vec![(2, "Two".to_string()),
+                (3, "Three".to_string())
         ]));
     // Remove 2, 3
     assert_eq!(state.purge_from_index(2),
@@ -277,9 +278,21 @@ fn test_persistent_state() {
     assert_eq!(state.get_last_index(), 1);
     // Check 3,4 are removed, and that code handles lack of entry gracefully.
     assert_eq!(state.retrieve_entries(0, 4),
-        Ok(vec![(1, "Foo".to_string()),
-                (2, "Bar".to_string())
+        Ok(vec![(0, "Zero".to_string()),
+                (1, "One".to_string())
         ]));
-    // Add 3,4,5.
+    // Add 2,3,4.
+    assert_eq!(state.append_entries(1, 2,
+        vec![(2, "Two".to_string()),
+             (3, "Three".to_string()),
+             (4, "Four".to_string())]),
+        Ok(()));
+    assert_eq!(state.get_last_index(), 4);
+    // Add 2,3 again. (4 should be purged)
+    assert_eq!(state.append_entries(1, 2,
+        vec![(2, "Two".to_string()),
+             (3, "Three".to_string())]),
+        Ok(()));
+    assert_eq!(state.get_last_index(), 3);
     fs::remove_file(&path.clone());
 }
