@@ -230,15 +230,15 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             Candidate(_) => self.reset_candidate(),
             _ => panic!("Should not campaign as a Leader!")
         };
-        self.persistent_state.current_term += 1;
-        self.persistent_state.voted_for = Some(self.own_id); // TODO: Is this correct?
+        self.persistent_state.inc_current_term();
+        self.persistent_state.set_voted_for(Some(self.own_id)); // TODO: Is this correct?
         self.reset_timer();
         let mut status = Vec::with_capacity(self.id_to_addr.len());
         for (&id, &addr) in self.id_to_addr.clone().iter() {
             // Do it in the loop so we different Uuids.
             let (uuid, request) = RemoteProcedureCall::request_vote(
-                self.persistent_state.current_term,
-                self.persistent_state.voted_for.unwrap(), // TODO: Safe because we just set it. But correct
+                self.persistent_state.get_current_term(),
+                self.persistent_state.get_voted_for().unwrap(), // TODO: Safe because we just set it. But correct
                 self.volatile_state.last_applied,
                 0); // TODO: Get this.
             status[id as usize] = Transaction { uuid: uuid, state: TransactionState::Polling };
@@ -266,28 +266,28 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 assert!(self.leader_id.unwrap() == self.own_id);
                 RemoteProcedureResponse::reject(
                     call.uuid,
-                    self.persistent_state.current_term,
+                    self.persistent_state.get_current_term(),
                     self.leader_id.unwrap(), // Should be self.
-                    self.persistent_state.last_index,
+                    self.persistent_state.get_last_index(),
                     self.volatile_state.commit_index
                 )
             },
             Follower => {
                 let checks = [
-                    self.persistent_state.current_term < call.term,
-                    self.persistent_state.voted_for.is_none(),
+                    self.persistent_state.get_current_term() < call.term,
+                    self.persistent_state.get_voted_for().is_none(),
                     self.volatile_state.last_applied < call.last_log_index,
                     true, // TODO: Is the last log term the same?
                 ];
-                let last_index = self.persistent_state.last_index;
+                let last_index = self.persistent_state.get_last_index();
                 match checks.iter().all(|&x| x) {
                     true  => RemoteProcedureResponse::accept(call.uuid, call.term,
-                            self.persistent_state.last_index, self.volatile_state.commit_index),
+                            self.persistent_state.get_last_index(), self.volatile_state.commit_index),
                     false => {
                         // TODO: Handle various error cases.
                         // Decrement next_index
                         RemoteProcedureResponse::reject(call.uuid, call.term, self.leader_id.unwrap(),
-                            self.persistent_state.last_index - 1, self.volatile_state.commit_index)
+                            self.persistent_state.get_last_index() - 1, self.volatile_state.commit_index)
                     },
                 }
             },
@@ -314,12 +314,12 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 // If leader_commit > commit_index set commit_index to the min.
                 let (node_prev_log_term, _) = self.persistent_state.retrieve_entry(call.prev_log_index)
                     .unwrap(); // TODO: Do better.
-                if call.term < self.persistent_state.current_term {
+                if call.term < self.persistent_state.get_current_term() {
                     RemoteProcedureResponse::reject(
                         call.uuid,
-                        self.persistent_state.current_term,
+                        self.persistent_state.get_current_term(),
                         self.leader_id.unwrap(),
-                        self.persistent_state.last_index, // TODO Maybe wrong
+                        self.persistent_state.get_last_index(), // TODO Maybe wrong
                         self.volatile_state.commit_index
                     )
                 } else if call.term != call.prev_log_term {
@@ -329,9 +329,9 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                         .unwrap();
                     RemoteProcedureResponse::reject(
                         call.uuid,
-                        self.persistent_state.current_term,
+                        self.persistent_state.get_current_term(),
                         self.leader_id.unwrap(),
-                        self.persistent_state.last_index, // TODO Maybe wrong.
+                        self.persistent_state.get_last_index(), // TODO Maybe wrong.
                         self.volatile_state.commit_index,
                     )
                 } else {
@@ -340,8 +340,8 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                         .unwrap();
                     RemoteProcedureResponse::accept(
                         call.uuid,
-                        self.persistent_state.current_term,
-                        self.persistent_state.last_index, // TODO Maybe wrong.
+                        self.persistent_state.get_current_term(),
+                        self.persistent_state.get_last_index(), // TODO Maybe wrong.
                         self.volatile_state.commit_index,
                     )
                 }
@@ -438,11 +438,11 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         match self.state {
             Leader(ref state) => {
                 // Send heartbeats.
-                let last_index = self.persistent_state.last_index;
+                let last_index = self.persistent_state.get_last_index();
                 let (last_log_term, _) = self.persistent_state.retrieve_entry(last_index).unwrap();
                 for (&id, &addr) in self.id_to_addr.iter() {
                     let (uuid, rpc) = RemoteProcedureCall::append_entries(
-                        self.persistent_state.current_term,
+                        self.persistent_state.get_current_term(),
                         self.leader_id.unwrap(),
                         self.volatile_state.commit_index,  // TODO: Check this.
                         last_log_term, // TODO: This will need to change.
@@ -480,7 +480,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
     /// Called on heartbeat timeout.
     pub fn follower_to_candidate(&mut self) {
         // Need to increase term.
-        self.persistent_state.current_term += 1;
+        self.persistent_state.inc_current_term();
         self.state = match self.state {
             Follower => Candidate(Vec::with_capacity(self.id_to_addr.len())),
             _ => panic!("Called follower_to_candidate() but was not Follower.")
