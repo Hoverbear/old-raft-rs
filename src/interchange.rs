@@ -84,36 +84,36 @@ pub struct Accepted {
     pub uuid: Uuid,
     pub term: u64,
     pub match_index: u64, // For Leader State
-    pub last_index: u64,  // For Leader State
+    pub next_index: u64,  // For Leader State
 }
 
 #[derive(RustcEncodable, RustcDecodable, Debug)]
 pub struct Rejected {
     pub uuid: Uuid,
     pub term: u64,
-    pub current_leader: u64,
+    pub current_leader: Option<u64>,
     pub match_index: u64, // For Leader State
-    pub last_index: u64,  // For Leader State
+    pub next_index: u64,  // For Leader State
 }
 
 impl RemoteProcedureResponse {
     /// Creates a new RemoteProcedureResponse::Accepted.
-    pub fn accept(uuid: Uuid, term: u64, match_index: u64, last_index: u64) -> RemoteProcedureResponse {
+    pub fn accept(uuid: Uuid, term: u64, match_index: u64, next_index: u64) -> RemoteProcedureResponse {
         RemoteProcedureResponse::Accepted(Accepted {
             uuid: uuid,
             term: term,
             match_index: match_index,
-            last_index: last_index,
+            next_index: next_index,
         })
     }
     /// Creates a new RemoteProcedureResponse::rejected.
-    pub fn reject(uuid: Uuid, term: u64, current_leader: u64, match_index: u64, last_index: u64) -> RemoteProcedureResponse {
+    pub fn reject(uuid: Uuid, term: u64, current_leader: Option<u64>, match_index: u64, next_index: u64) -> RemoteProcedureResponse {
         RemoteProcedureResponse::Rejected(Rejected {
             uuid: uuid,
             term: term,
             current_leader: current_leader,
             match_index: match_index,
-            last_index: last_index,
+            next_index: next_index,
         })
     }
 }
@@ -142,7 +142,7 @@ pub struct IndexRange {
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub struct AppendRequest<T> {
     pub prev_log_index: u64,
-    pub prev_log_term: T,
+    pub prev_log_term: u64,
     pub entries: Vec<T>,
 }
 
@@ -156,7 +156,7 @@ impl<T> ClientRequest<T> {
     }
 
     /// Returns (term, voteGranted)
-    pub fn append_request(prev_log_index: u64, prev_log_term: T, entries: Vec<T>) -> ClientRequest<T> {
+    pub fn append_request(prev_log_index: u64, prev_log_term: u64, entries: Vec<T>) -> ClientRequest<T> {
         ClientRequest::AppendRequest(AppendRequest {
             prev_log_index: prev_log_index,
             prev_log_term: prev_log_term,

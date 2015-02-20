@@ -21,6 +21,7 @@ pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
     voted_for: Option<u64>,      // request_vote cares if this is `None`
     log: File,
     last_index: u64,             // The last index of the file.
+    last_term: u64,              // The last index of the file.
 }
 
 impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
@@ -36,10 +37,12 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             voted_for: None,
             log: file,
             last_index: 0,
+            last_term: 0,
         }
     }
     /// Gets the `last_index` which you can use to make append requests with.
     pub fn get_last_index(&self) -> u64 { self.last_index }
+    pub fn get_last_term(&self) -> u64 { self.last_term }
     /// Gets the `current_term` which is used for request vote.
     pub fn get_current_term(&self) -> u64 { self.current_term }
     /// Sets the current_term. **This should reflect on stable storage.**
@@ -64,8 +67,10 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     }
     pub fn append_entries(&mut self, prev_log_index: u64, prev_log_term: u64,
                       entries: Vec<(u64, T)>) -> io::Result<()> {
+        // TODO: No checking of `prev_log_index` & `prev_log_term` yet... Do we need to?
         let position = try!(self.move_to(prev_log_index + 1));
         let number = entries.len();
+        let last_term = entries[entries.len() -1].0;
         try!(self.purge_from_bytes(position)); // Update `last_log_index` later.
         // TODO: Possibly purge.
         for (term, entry) in entries {
@@ -75,6 +80,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         self.last_index = if prev_log_index == 0 {
             number as u64 - 1
         } else { prev_log_index + number as u64 };
+        self.last_term = last_term;
         Ok(())
     }
     fn encode(entry: T) -> String {
@@ -142,25 +148,8 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             let mut chars = read_in.by_ref()
                 .take_while(|&val| val != '\n')
                 .collect::<String>();
-            let mut splits = chars.split(' ');
-            let term = {
-                let chunk = splits.next()
-                    .and_then(|v| v.parse::<u64>().ok());
-                match chunk {
-                    Some(v) => v,
-                    None => break,
-                }
-            };
-            let encoded = {
-                let chunk = splits.next();
-                match chunk {
-                    Some(v) => v,
-                    None => break,
-                }
-            };
-            let decoded: T = PersistentState::decode(encoded.to_string())
-                .ok().expect("Could not unwrap log entry.");
-            out.push((term, decoded));
+            let entry = try!(parse_entry::<T>(chars));
+            out.push(entry);
         }
         Ok(out)
     }
@@ -171,26 +160,30 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             .take_while(|val| val.is_ok())
             .filter_map(|val| val.ok()) // We don't really care about issues here.
             .take_while(|&val| val != '\n').collect::<String>();
-        let mut splits = chars.split(' ');
-        let term = {
-            let chunk = splits.next()
-                .and_then(|v| v.parse::<u64>().ok());
-            match chunk {
-                Some(v) => v,
-                None => return Err(io::Error::new(io::ErrorKind::InvalidInput, "Could not parse term.", None)),
-            }
-        };
-        let encoded = {
-            let chunk = splits.next();
-            match chunk {
-                Some(v) => v,
-                None => return Err(io::Error::new(io::ErrorKind::InvalidInput, "Could not parse encoded data.", None)),
-            }
-        };
-        let decoded: T = PersistentState::decode(encoded.to_string())
-            .ok().expect("Could not unwrap log entry.");
-        Ok((term, decoded))
+        parse_entry::<T>(chars)
     }
+}
+
+fn parse_entry<T: Encodable + Decodable + Send + Clone>(val: String) -> io::Result<(u64, T)> {
+    let mut splits = val.split(' ');
+    let term = {
+        let chunk = splits.next()
+            .and_then(|v| v.parse::<u64>().ok());
+        match chunk {
+            Some(v) => v,
+            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, "Could not parse term.", None)),
+        }
+    };
+    let encoded = {
+        let chunk = splits.next();
+        match chunk {
+            Some(v) => v,
+            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, "Could not parse encoded data.", None)),
+        }
+    };
+    let decoded: T = PersistentState::decode(encoded.to_string())
+        .ok().expect("Could not unwrap log entry.");
+    Ok((term, decoded))
 }
 
 /// Volatile state

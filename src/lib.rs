@@ -77,7 +77,7 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     heartbeat: Receiver<()>,
     socket: UdpSocket,
     req_recv: Receiver<ClientRequest<T>>,
-    res_send: Sender<Result<Vec<T>, IoError>>,
+    res_send: Sender<io::Result<Vec<T>>>,
     // State
     rng: ThreadRng,
     timer: Timer,
@@ -85,11 +85,11 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
 /// done via `::new()`.
-impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
+impl<T: Encodable + Decodable + Send + 'static + Clone> RaftNode<T> {
     /// Creates a new RaftNode with the neighbors specified. `id` should be a valid index into
     /// `nodes`. The idea is that you can use the same `nodes` on all of the clients and only vary
     /// `id`.
-    pub fn start (id: u64, nodes: Vec<(u64, SocketAddr)>, log_path: Path) -> (Sender<ClientRequest<T>>, Receiver<Result<Vec<T>, IoError>>) {
+    pub fn start (id: u64, nodes: Vec<(u64, SocketAddr)>, log_path: Path) -> (Sender<ClientRequest<T>>, Receiver<io::Result<Vec<T>>>) {
         // TODO: Check index.
         let size = nodes.len();
         // Build the Hashmap lookups. We don't have a bimap :(
@@ -107,7 +107,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         socket.set_read_timeout(Some(0));
         // Communication channels.
         let (req_send, req_recv) = channel::<ClientRequest<T>>();
-        let (res_send, res_recv) = channel::<Result<Vec<T>, IoError>>();
+        let (res_send, res_recv) = channel::<io::Result<Vec<T>>>();
         // Fire up the thread.
         Thread::spawn(move || {
             // Start up a RNG and Timer
@@ -175,18 +175,25 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             },
             Err(_) => (),                 // Nothing on the socket.
         }
-        // If channel has data.
-        match self.req_recv.try_recv() {
-            Ok(request) => {              // Something in channel.
-                let result = match request {
-                    ClientRequest::IndexRange(request) =>
-                        self.handle_index_range(request),
-                    ClientRequest::AppendRequest(request) =>
-                        self.handle_append_request(request),
-                };
-                self.res_send.send(result).unwrap();
+        // Only check the channel if we can actually deal with a request.
+        // (This is mostly a problem for Followers in initialization and Candidates)
+        match self.state {
+            Follower | Leader(_) if self.leader_id != None => {
+                // If channel has data.
+                match self.req_recv.try_recv() {
+                    Ok(request) => {          // Something in channel.
+                        let result = match request {
+                            ClientRequest::IndexRange(request) =>
+                                self.handle_index_range(request),
+                            ClientRequest::AppendRequest(request) =>
+                                self.handle_append_request(request),
+                        };
+                        self.res_send.send(result).unwrap();
+                    },
+                    Err(_) => (),               // Nothing in channel.
+                }
             },
-            Err(_) => (),               // Nothing in channel.
+            _ => (),
         }
         // If timer has fired.
         match self.heartbeat.try_recv() {
@@ -234,6 +241,8 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         self.persistent_state.set_voted_for(Some(self.own_id)); // TODO: Is this correct?
         self.reset_timer();
         let mut status = Vec::with_capacity(self.id_to_addr.len());
+        println!("{}", status.len());
+
         for (&id, &addr) in self.id_to_addr.clone().iter() {
             // Do it in the loop so we different Uuids.
             let (uuid, request) = RemoteProcedureCall::request_vote(
@@ -241,7 +250,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 self.persistent_state.get_voted_for().unwrap(), // TODO: Safe because we just set it. But correct
                 self.volatile_state.last_applied,
                 0); // TODO: Get this.
-            status[id as usize] = Transaction { uuid: uuid, state: TransactionState::Polling };
+            status.push(Transaction { uuid: uuid, state: TransactionState::Polling });
             self.send(addr, request);
         }
         // The old map
@@ -263,11 +272,11 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 // Re-assert leadership.
                 // TODO: Might let someone take over if they have a higher term?
                 assert!(self.leader_id.is_some());
-                assert!(self.leader_id.unwrap() == self.own_id);
+                assert_eq!(self.leader_id.unwrap(), self.own_id);
                 RemoteProcedureResponse::reject(
                     call.uuid,
                     self.persistent_state.get_current_term(),
-                    self.leader_id.unwrap(), // Should be self.
+                    self.leader_id, // Should be self.
                     self.persistent_state.get_last_index(),
                     self.volatile_state.commit_index
                 )
@@ -281,19 +290,38 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                 ];
                 let last_index = self.persistent_state.get_last_index();
                 match checks.iter().all(|&x| x) {
-                    true  => RemoteProcedureResponse::accept(call.uuid, call.term,
-                            self.persistent_state.get_last_index(), self.volatile_state.commit_index),
+                    true  => {
+                        self.leader_id = Some(call.candidate_id);
+                        RemoteProcedureResponse::accept(call.uuid, call.term,
+                            self.persistent_state.get_last_index(), self.volatile_state.commit_index)
+                    },
                     false => {
                         // TODO: Handle various error cases.
                         // Decrement next_index
-                        RemoteProcedureResponse::reject(call.uuid, call.term, self.leader_id.unwrap(),
+                        RemoteProcedureResponse::reject(call.uuid, call.term, self.leader_id,
                             self.persistent_state.get_last_index() - 1, self.volatile_state.commit_index)
                     },
                 }
             },
             Candidate(_) => {
-                // TODO ???
-                unimplemented!();
+                // From the Raft paper:
+                // While waiting for votes, a candidate may receive an AppendEntries RPC from another server
+                // claiming to be leader. If the leader’s term (included in its RPC) is at least as large
+                // as the candidate’s current term, then the candidate recognizes the leader as legitimate
+                // and returns to follower state. If the term in the RPC is smaller than the candidate’s
+                // current term, then the candidate rejects the RPC and con- tinues in candidate state.
+                // ---
+                // The Raft paper doesn't talk about this at all so I presume we treat it like append_entries.
+                if self.persistent_state.get_current_term() < call.term {
+                    // TODO: I guess we should accept and become a follower?
+                    self.candidate_to_follower(call.candidate_id);
+                    RemoteProcedureResponse::accept(call.uuid, call.term,
+                            self.persistent_state.get_last_index(), self.volatile_state.commit_index)
+                } else {
+                    // Reject it.
+                    RemoteProcedureResponse::reject(call.uuid, call.term, self.leader_id,
+                        self.persistent_state.get_last_index() - 1, self.volatile_state.commit_index)
+                }
             }
         }
     }
@@ -318,7 +346,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     RemoteProcedureResponse::reject(
                         call.uuid,
                         self.persistent_state.get_current_term(),
-                        self.leader_id.unwrap(),
+                        self.leader_id,
                         self.persistent_state.get_last_index(), // TODO Maybe wrong
                         self.volatile_state.commit_index
                     )
@@ -330,7 +358,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                     RemoteProcedureResponse::reject(
                         call.uuid,
                         self.persistent_state.get_current_term(),
-                        self.leader_id.unwrap(),
+                        self.leader_id,
                         self.persistent_state.get_last_index(), // TODO Maybe wrong.
                         self.volatile_state.commit_index,
                     )
@@ -360,9 +388,11 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
             None => return,
         };
         match self.state {
-            Leader(ref state) => {
+            Leader(ref mut state) => {
                 // Should be an AppendEntries request response.
-                unimplemented!();
+                state.match_index[source_id as usize] = response.match_index;
+                state.next_index[source_id as usize] = response.next_index;
+                // TODO: More?
             },
             Follower => {
                 // Must have been a response to our last AppendEntries request?
@@ -415,33 +445,68 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
         }
 
     }
-    fn handle_append_request(&mut self, request: AppendRequest<T>) -> Result<Vec<T>, IoError> {
+    /// This is called when the consuming application issues an append request on it's channel.
+    fn handle_append_request(&mut self, request: AppendRequest<T>) -> io::Result<Vec<T>> {
         match self.state {
             Leader(ref state) => {
-                unimplemented!();
+                // Handle the request appropriately.
+                // The client shouldn't need to worry about the term.
+                let current_term = self.persistent_state.get_current_term();
+                let entries = request.entries.into_iter()
+                    .map(|x| (current_term, x))
+                    .collect();
+                self.persistent_state.append_entries(request.prev_log_index, request.prev_log_term, entries)
+                    .map(|_| Vec::<T>::new())
+                // Once a majority of nodes have commited this we will return a response.
             },
             Follower => {
-                unimplemented!();
+                let current_term = self.persistent_state.get_current_term();
+                // Make a request to the leader.
+                match self.leader_id {
+                    Some(id) => {
+                        // Can act.
+                        let (_, rpc) = RemoteProcedureCall::append_entries(
+                            self.persistent_state.get_current_term(),
+                            id,
+                            request.prev_log_index,
+                            request.prev_log_term,
+                            request.entries.into_iter().map(|x| (current_term, x)).collect(),
+                            self.volatile_state.commit_index);
+                        let destination = self.id_to_addr[id];
+                        self.send(destination, rpc)
+                            .map(|x| Vec::new())
+                            // TODO: Update to be io::Result
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, "TODO", None))
+                    },
+                    None     => {
+                        // Need to wait... Store it? Same implementation as a candidate.
+                        unreachable!()
+                    },
+                }
             },
             Candidate(_) => {
-                unimplemented!();
+                // ???
+                unreachable!();
             },
         }
     }
-    fn handle_index_range(&mut self, request: IndexRange) -> Result<Vec<T>, IoError> {
-        unimplemented!();
+    /// This is called when the client requests a specific index range on it's channel.
+    fn handle_index_range(&mut self, request: IndexRange) -> io::Result<Vec<T>> {
+        self.persistent_state.retrieve_entries(request.start_index, request.end_index)
+            .map(|maybe| maybe.into_iter().map(|(_, val)| val).collect::<Vec<T>>())
     }
     ////////////
     // Timers //
     ////////////
     fn handle_timer(&mut self) {
         match self.state {
-            Leader(ref state) => {
+            Leader(_) => {
                 // Send heartbeats.
                 let last_index = self.persistent_state.get_last_index();
-                let (last_log_term, _) = self.persistent_state.retrieve_entry(last_index).unwrap();
-                for (&id, &addr) in self.id_to_addr.iter() {
-                    let (uuid, rpc) = RemoteProcedureCall::append_entries(
+                let last_log_term = self.persistent_state.get_last_term();
+                // TODO: Don't clone.
+                for (&id, &addr) in self.id_to_addr.clone().iter() {
+                    let (_, rpc) = RemoteProcedureCall::append_entries(
                         self.persistent_state.get_current_term(),
                         self.leader_id.unwrap(),
                         self.volatile_state.commit_index,  // TODO: Check this.
@@ -449,6 +514,7 @@ impl<T: Encodable + Decodable + Send + Clone> RaftNode<T> {
                         Vec::<(u64, T)>::new(),
                         self.volatile_state.commit_index
                     );
+                    self.send(addr, rpc);
                 }
             },
             Follower => self.campaign(),
