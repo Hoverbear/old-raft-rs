@@ -21,10 +21,11 @@ use std::time::Duration;
 use std::thread::Thread;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::str;
-use std::collections::{HashMap, RingBuf};
+use std::collections::{HashMap, VecDeque};
 use rustc_serialize::{json, Encodable, Decodable};
 use uuid::Uuid;
 use rand::{thread_rng, Rng, ThreadRng};
+use std::ops::IndexMut;
 
 // Enums and variants.
 use interchange::{ClientRequest, RemoteProcedureCall, RemoteProcedureResponse};
@@ -46,16 +47,6 @@ const HEARTBEAT_MAX: i64 = 300;
 ///     interface for requests.
 ///   * `request_vote` which is used by candidates during campaigns to obtain a vote.
 ///
-pub trait Raft<T: Encodable + Decodable + Send + Clone> {
-    /// Returns (term, success)
-    fn append_entries(term: u64, leader_id: u64, prev_log_index: u64,
-                      prev_log_term: u64, entries: Vec<T>,
-                      leader_commit: u64) -> (u64, bool);
-
-    /// Returns (term, voteGranted)
-    fn request_vote(term: u64, candidate_id: u64, last_log_index: u64,
-                    last_log_term: u64) -> (u64, bool);
-}
 
 /// A `RaftNode` acts as a replicated state machine. The server's role in the cluster depends on it's
 /// own status. It will maintain both volatile state (which can be safely lost) and persistent
@@ -159,9 +150,9 @@ impl<T: Encodable + Decodable + Send + 'static + Clone> RaftNode<T> {
                 if let Ok(rpc) = json::decode::<RemoteProcedureCall<T>>(data) {
                     let rpr = match rpc {
                         RemoteProcedureCall::RequestVote(call) =>
-                            self.handle_request_vote(call),
+                            self.handle_request_vote(call, source),
                         RemoteProcedureCall::AppendEntries(call) =>
-                            self.handle_append_entries(call),
+                            self.handle_append_entries(call, source),
                     };
                     self.respond(source, rpr).unwrap();
                 } else if let Ok(rpr) = json::decode::<RemoteProcedureResponse>(data) {
@@ -266,7 +257,12 @@ impl<T: Encodable + Decodable + Send + 'static + Clone> RaftNode<T> {
     ///   * Reply false if term < currentTerm.
     ///   * If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as
     ///     receiver’s log, grant vote.
-    fn handle_request_vote(&mut self, call: RequestVote) -> RemoteProcedureResponse {
+    fn handle_request_vote(&mut self, call: RequestVote, source: SocketAddr) -> RemoteProcedureResponse {
+        // Doubles as a check against outsiders.
+        let source_id = match self.lookup_id(source) {
+            Some(id) => *id,
+            None => unimplemented!(),
+        };
         match self.state {
             Leader(_) => {
                 // Re-assert leadership.
@@ -298,8 +294,12 @@ impl<T: Encodable + Decodable + Send + 'static + Clone> RaftNode<T> {
                     false => {
                         // TODO: Handle various error cases.
                         // Decrement next_index
+                        let prev = {
+                            let idx = self.persistent_state.get_last_index();
+                            if idx == 0 { 0 } else { idx - 1 }
+                        };
                         RemoteProcedureResponse::reject(call.uuid, call.term, self.leader_id,
-                            self.persistent_state.get_last_index() - 1, self.volatile_state.commit_index)
+                            prev, self.volatile_state.commit_index)
                     },
                 }
             },
@@ -326,7 +326,12 @@ impl<T: Encodable + Decodable + Send + 'static + Clone> RaftNode<T> {
         }
     }
     /// Handles an `AppendEntries` request from a caller.
-    fn handle_append_entries(&mut self, call: AppendEntries<T>) -> RemoteProcedureResponse {
+    fn handle_append_entries(&mut self, call: AppendEntries<T>, source: SocketAddr) -> RemoteProcedureResponse {
+        // Doubles as a check against outsiders.
+        let source_id = match self.lookup_id(source) {
+            Some(id) => *id,
+            None => unimplemented!(),
+        };
         match self.state {
             Leader(ref state) => {
                 unimplemented!();
@@ -376,7 +381,21 @@ impl<T: Encodable + Decodable + Send + 'static + Clone> RaftNode<T> {
 
             },
             Candidate(_) => {
-                unimplemented!();
+                // If it has a higher term, accept it and become follower.
+                // Otherwise, reject it.
+                if call.term > self.persistent_state.get_current_term() {
+                    self.candidate_to_follower(source_id);
+                    // Pass back into Follower.
+                    self.handle_append_entries(call, source)
+                } else {
+                    RemoteProcedureResponse::reject(
+                        call.uuid,
+                        self.persistent_state.get_current_term(),
+                        self.leader_id,
+                        self.persistent_state.get_last_index(), // TODO Maybe wrong.
+                        self.volatile_state.commit_index,
+                    )
+                }
             },
         }
     }
@@ -432,15 +451,20 @@ impl<T: Encodable + Decodable + Send + 'static + Clone> RaftNode<T> {
         match self.state {
             Leader(ref state) => {
                 // Should be an AppendEntries request response.
+                // Great! Update `next_index` and `match_index`
                 unimplemented!();
             },
             Follower => {
                 // Must have been a response to our last AppendEntries request?
                 unimplemented!();
             },
-            Candidate(_) => {
+            Candidate(ref mut transactions) => {
                 // The vote has failed. This means there is most likely an existing leader.
-                unimplemented!();
+                // Check the UUID and make sure it's fresh.
+                let ref mut transaction =  transactions.index_mut(&(source_id as usize));
+                if transaction.uuid == response.uuid {
+                    transaction.state = TransactionState::Rejected;
+                }
             }
         }
 
@@ -587,20 +611,5 @@ impl<T: Encodable + Decodable + Send + 'static + Clone> RaftNode<T> {
             Candidate(_) => Candidate(Vec::with_capacity(self.id_to_addr.len())),
             _ => panic!("Called reset_candidate() but was not Candidate.")
         }
-    }
-}
-
-/// The RPC calls required by the Raft protocol.
-impl<T: Encodable + Decodable + Send + Clone> Raft<T> for RaftNode<T> {
-    /// Returns (term, success)
-    fn append_entries(term: u64, leader_id: u64, prev_log_index: u64,
-                      prev_log_term: u64, entries: Vec<T>,
-                      leader_commit: u64) -> (u64, bool) {
-        (0, false) // TODO: Implement
-    }
-    /// Returns (term, voteGranted)
-    fn request_vote(term: u64, candidate_id: u64, last_log_index: u64,
-                    last_log_term: u64) -> (u64, bool) {
-        (0, false) // TODO: Implement
     }
 }

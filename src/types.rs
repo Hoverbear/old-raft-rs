@@ -13,6 +13,7 @@ use std::str::StrExt;
 use std::io;
 use std::io::{Write, ReadExt, Seek};
 use std::old_io::IoError;
+use std::marker;
 
 /// Persistent state
 /// **Must be updated to stable storage before RPC response.**
@@ -22,6 +23,8 @@ pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
     log: File,
     last_index: u64,             // The last index of the file.
     last_term: u64,              // The last index of the file.
+    marker: marker::PhantomData<T>, // A marker... Because of
+    // https://github.com/rust-lang/rfcs/blob/master/text/0738-variance.md#the-corner-case-unused-parameters-and-parameters-that-are-only-used-unsafely
 }
 
 impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
@@ -38,6 +41,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             log: file,
             last_index: 0,
             last_term: 0,
+            marker: marker::PhantomData,
         }
     }
     /// Gets the `last_index` which you can use to make append requests with.
@@ -148,6 +152,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             let mut chars = read_in.by_ref()
                 .take_while(|&val| val != '\n')
                 .collect::<String>();
+            if chars.len() == 0 { continue; }
             let entry = try!(parse_entry::<T>(chars));
             out.push(entry);
         }

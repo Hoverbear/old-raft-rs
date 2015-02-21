@@ -18,16 +18,22 @@ use std::str;
 #[test]
 fn basic_test() {
     let mut nodes = vec![
+        (0, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11110 }),
         (1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 }),
         (2, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 }),
     ];
     // Create the nodes.
-    let (log_sender, _) = RaftNode::<String>::start(
-        1,
+    let (log_0_sender, log_0_reciever) = RaftNode::<String>::start(
+        0,
         nodes.clone(),
         Path::new("/tmp/test1")
     );
-    let (_, log_reciever) = RaftNode::<String>::start(
+    let (log_1_sender, log_1_reciever) = RaftNode::<String>::start(
+        1,
+        nodes.clone(),
+        Path::new("/tmp/test2")
+    );
+    let (log_2_sender, log_2_reciever) = RaftNode::<String>::start(
         2,
         nodes.clone(),
         Path::new("/tmp/test2")
@@ -39,15 +45,8 @@ fn basic_test() {
         prev_log_index: 0,
         prev_log_term: 0,
     });
-    log_sender.send(test_command.clone()).unwrap();
-    println!("After send");
+    log_0_sender.send(test_command.clone()).unwrap();
     // Get the result.
-    let event = log_reciever.recv().unwrap();
-    println!("After Revc");
-    match event {
-        Ok(entries) => {
-            assert_eq!(entries, vec!["foo".to_string()]);
-        },
-        Err(err) => panic!(err),
-    }
+    let event = log_0_reciever.recv().unwrap();
+    assert!(event.is_ok());
 }
