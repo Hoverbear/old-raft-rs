@@ -6,6 +6,8 @@ use raft::interchange::{ClientRequest, AppendRequest, IndexRange};
 use raft::interchange::{RemoteProcedureResponse};
 use raft::RaftNode;
 
+use std::old_io::timer::Timer;
+use std::time::Duration;
 use std::old_io::net::ip::SocketAddr;
 use std::old_io::net::udp::UdpSocket;
 use std::old_io::net::ip::IpAddr::Ipv4Addr;
@@ -26,12 +28,12 @@ fn basic_test() {
     let (log_0_sender, log_0_reciever) = RaftNode::<String>::start(
         0,
         nodes.clone(),
-        Path::new("/tmp/test1")
+        Path::new("/tmp/test0")
     );
     let (log_1_sender, log_1_reciever) = RaftNode::<String>::start(
         1,
         nodes.clone(),
-        Path::new("/tmp/test2")
+        Path::new("/tmp/test1")
     );
     let (log_2_sender, log_2_reciever) = RaftNode::<String>::start(
         2,
@@ -48,5 +50,10 @@ fn basic_test() {
     log_0_sender.send(test_command.clone()).unwrap();
     // Get the result.
     let event = log_0_reciever.recv().unwrap();
+    let mut timer = Timer::new().unwrap();
+    let clock = timer.oneshot(Duration::milliseconds(5000)); // If this fails we're in trouble.
+    let _ = clock.recv();
+
+
     assert!(event.is_ok());
 }
