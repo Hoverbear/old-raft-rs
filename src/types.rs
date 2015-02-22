@@ -74,20 +74,21 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
                       entries: Vec<(u64, T)>) -> io::Result<()> {
         // TODO: No checking of `prev_log_index` & `prev_log_term` yet... Do we need to?
         let position = try!(self.move_to(prev_log_index + 1));
+        self.last_index = prev_log_index;
         let number = {
             let len = entries.len();
-            if len == 0 { return Ok(()) } else { len - 1 }
+            if len == 0 { return Ok(()) } else { len }
         };
-        let last_term = entries[number].0;
+        let last_term = entries[number-1].0; // -1 for zero index.
         try!(self.purge_from_bytes(position)); // Update `last_log_index` later.
         // TODO: Possibly purge.
         for (term, entry) in entries {
             // TODO: I don't like the "doubling" here. How can we do this better?
             write!(&mut self.log, "{} {}\n", term, PersistentState::encode(entry));
         }
-        self.last_index = if prev_log_index == 0 {
-            number as u64 - 1
-        } else { prev_log_index + number as u64 };
+        self.last_index = if self.last_index == 0 {
+            number as u64 // Since it's zero index now.
+        } else { self.last_index + number as u64 };
         self.last_term = last_term;
         Ok(())
     }
@@ -120,7 +121,8 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
                 Ok(val) => {
                     if val == '\n' {
                         lines_read += 1;
-                        if lines_read > line { // Greater than here because the first line is a bust.
+                        // Greater than because 1 indexed.
+                        if lines_read >= line {
                             false // At right location.
                         } else {
                             true // Not done yet, more lines to go.
@@ -141,7 +143,9 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     /// Removes all entries from `from` to the last entry, inclusively.
     pub fn purge_from_index(&mut self, from_line: u64) -> io::Result<()> {
         let position = try!(self.move_to(from_line));
-        self.last_index = if from_line == 0 { 0 } else { from_line - 1 };
+        let last_index = from_line - 1; // We're 1 indexed.
+        self.last_index = last_index;
+        self.last_term = try!(self.retrieve_entry(last_index)).0;
         self.purge_from_bytes(position)
     }
     pub fn retrieve_entries(&mut self, start: u64, end: u64) -> io::Result<Vec<(u64, T)>> {
@@ -245,56 +249,81 @@ fn test_persistent_state() {
     let path = Path::new("/tmp/test_path");
     fs::remove_file(&path.clone());
     let mut state = PersistentState::new(0, path.clone());
-    // Add 0, 1
-    assert_eq!(state.append_entries(0, 0,
-        vec![(0, "Zero".to_string()),
-             (1, "One".to_string())]),
+    // Add 1
+    assert_eq!(state.append_entries(0, 0, // Zero is the initialization state.
+        vec![(1, "One".to_string())]),
         Ok(()));
-    // Check index.
-    assert_eq!(state.get_last_index(), 1);
-    // Check 0
-    assert_eq!(state.retrieve_entry(0),
-        Ok((0, "Zero".to_string())));
-    // Check 0, 1
-    assert_eq!(state.retrieve_entries(0, 1),
-        Ok(vec![(0, "Zero".to_string()),
-                (1, "One".to_string())
-        ]));
     // Check 1
     assert_eq!(state.retrieve_entry(1),
         Ok((1, "One".to_string())));
-    // Add 2, 3
-    assert_eq!(state.append_entries(1, 2,
-        vec![(2, "Two".to_string()),
-             (3, "Three".to_string())]),
-        Ok(()));
-    assert_eq!(state.get_last_index(), 3);
-    // Check 2, 3
-    assert_eq!(state.retrieve_entries(2, 3),
-        Ok(vec![(2, "Two".to_string()),
-                (3, "Three".to_string())
-        ]));
-    // Remove 2, 3
-    assert_eq!(state.purge_from_index(2),
-        Ok(()));
     assert_eq!(state.get_last_index(), 1);
-    // Check 3,4 are removed, and that code handles lack of entry gracefully.
-    assert_eq!(state.retrieve_entries(0, 4),
-        Ok(vec![(0, "Zero".to_string()),
-                (1, "One".to_string())
+    assert_eq!(state.get_last_term(), 1);
+    // Do a blank check.
+    assert_eq!(state.append_entries(1,1, vec![]),
+        Ok(()));
+        assert_eq!(state.get_last_index(), 1);
+        assert_eq!(state.get_last_term(), 1);
+    // Add 2
+    assert_eq!(state.append_entries(1, 1,
+        vec![(2, "Two".to_string())]),
+        Ok(()));
+    assert_eq!(state.get_last_index(), 2);
+    assert_eq!(state.get_last_term(), 2);
+    // Check 1, 2
+    assert_eq!(state.retrieve_entries(1, 2),
+        Ok(vec![(1, "One".to_string()),
+                (2, "Two".to_string())
         ]));
-    // Add 2,3,4.
-    assert_eq!(state.append_entries(1, 2,
-        vec![(2, "Two".to_string()),
-             (3, "Three".to_string()),
+    // Check 2
+    assert_eq!(state.retrieve_entry(2),
+        Ok((2, "Two".to_string())));
+    // Add 3, 4
+    assert_eq!(state.append_entries(2, 2,
+        vec![(3, "Three".to_string()),
              (4, "Four".to_string())]),
         Ok(()));
+    // Check 3, 4
+    assert_eq!(state.retrieve_entries(3, 4),
+        Ok(vec![(3, "Three".to_string()),
+                (4, "Four".to_string())
+        ]));
     assert_eq!(state.get_last_index(), 4);
-    // Add 2,3 again. (4 should be purged)
-    assert_eq!(state.append_entries(1, 2,
-        vec![(2, "Two".to_string()),
-             (3, "Three".to_string())]),
+    assert_eq!(state.get_last_term(), 4);
+    // Remove 3, 4
+    assert_eq!(state.purge_from_index(3),
         Ok(()));
-    assert_eq!(state.get_last_index(), 3);
+    assert_eq!(state.get_last_index(), 2);
+    assert_eq!(state.get_last_term(), 2);
+    // Check 3, 4 are removed, and that code handles lack of entry gracefully.
+    assert_eq!(state.retrieve_entries(0, 4),
+        Ok(vec![(1, "One".to_string()),
+                (2, "Two".to_string())
+        ]));
+    // Add 3, 4, 5
+    assert_eq!(state.append_entries(2, 2,
+        vec![(3, "Three".to_string()),
+             (4, "Four".to_string()),
+             (5, "Five".to_string())]),
+        Ok(()));
+    assert_eq!(state.get_last_index(), 5);
+    assert_eq!(state.get_last_term(), 5);
+    // Add 3, 4 again. (5 should be purged)
+    assert_eq!(state.append_entries(2, 2,
+        vec![(3, "Three".to_string()),
+             (4, "Four".to_string())]),
+        Ok(()));
+    assert_eq!(state.retrieve_entries(0, 4),
+        Ok(vec![(1, "One".to_string()),
+                (2, "Two".to_string()),
+                (3, "Three".to_string()),
+                (4, "Four".to_string()),
+        ]));
+    assert_eq!(state.get_last_index(), 4);
+    assert_eq!(state.get_last_term(), 4);
+    // Do a blank check.
+    assert_eq!(state.append_entries(4,4, vec![]),
+        Ok(()));
+    assert_eq!(state.get_last_index(), 4);
+    assert_eq!(state.get_last_term(), 4);
     fs::remove_file(&path.clone());
 }
