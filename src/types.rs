@@ -86,8 +86,8 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             // TODO: I don't like the "doubling" here. How can we do this better?
             write!(&mut self.log, "{} {}\n", term, PersistentState::encode(entry));
         }
-        self.last_index = if self.last_index == 0 {
-            number as u64 // Since it's zero index now.
+        self.last_index = if self.last_index == 0 { // Empty
+            number as u64
         } else { self.last_index + number as u64 };
         self.last_term = last_term;
         Ok(())

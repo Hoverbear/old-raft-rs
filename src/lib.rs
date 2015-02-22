@@ -404,7 +404,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     // prev_log_term is wrong.
                     // Delete it and all that follow it.
                     println!("Node {} rejects append_entries because prev log terms are not equal.", self.own_id);
-                    self.persistent_state.purge_from_index(call.prev_log_index)
+                    self.persistent_state.purge_from_index(call.prev_log_index + 1)
                         .unwrap();
                     // TODO: Shouldn't this accept??
                     RemoteProcedureResponse::reject(
@@ -568,10 +568,13 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     }
                 }
                 self.persistent_state.set_current_term(response.term);
-                self.candidate_to_follower(
-                    response.current_leader.expect("Expected a response to have a leader if rejected."),
-                    response.term
-                );
+                match response.current_leader {
+                    Some(leader) => self.candidate_to_follower(
+                        leader,
+                        response.term
+                    ),
+                    None => self.reset_timer(),
+                }
             }
         }
 
@@ -637,8 +640,6 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         match self.state {
             Leader(_) => {
                 // Send heartbeats.
-                let last_index = self.persistent_state.get_last_index();
-                let last_log_term = self.persistent_state.get_last_term();
                 // TODO: Don't clone.
                 for (&id, &addr) in self.id_to_addr.clone().iter() {
                     if id == self.own_id { continue }
@@ -651,12 +652,22 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                                 .ok().expect("Failed to retrieve entries from log.")
                         } else { unreachable!() }
                     };
+                    let (prev_log_term, prev_log_index) = {
+                        if let Leader(ref mut state) = self.state {
+                            let mut prev_log_index = state.next_index[id as usize]; // Want prev
+                            if prev_log_index != 0 { prev_log_index -= 1; }
+                            let term = self.persistent_state.retrieve_entry(prev_log_index)
+                                .map(|(t, v)| t)
+                                .unwrap_or(0);
+                            (term, prev_log_index)
+                        } else { unreachable!() }
+                    };
                     println!("Node {} sending {} entries {:?}", self.own_id, id, entries_they_need);
                     let (_, rpc) = RemoteProcedureCall::append_entries(
                         self.persistent_state.get_current_term(),
                         self.leader_id.unwrap(),
-                        self.volatile_state.commit_index,  // TODO: Check this.
-                        last_log_term, // TODO: This will need to change.
+                        prev_log_index,  // TODO: Check this.
+                        prev_log_term, // TODO: This will need to change.
                         entries_they_need,
                         self.volatile_state.commit_index
                     );
