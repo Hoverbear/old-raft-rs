@@ -73,8 +73,11 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
                       entries: Vec<(u64, T)>) -> io::Result<()> {
         // TODO: No checking of `prev_log_index` & `prev_log_term` yet... Do we need to?
         let position = try!(self.move_to(prev_log_index + 1));
-        let number = entries.len();
-        let last_term = entries[entries.len() -1].0;
+        let number = {
+            let len = entries.len();
+            if len == 0 { return Ok(()) } else { len - 1 }
+        };
+        let last_term = entries[number].0;
         try!(self.purge_from_bytes(position)); // Update `last_log_index` later.
         // TODO: Possibly purge.
         for (term, entry) in entries {
