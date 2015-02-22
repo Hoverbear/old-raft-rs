@@ -14,6 +14,7 @@ use std::io;
 use std::io::{Write, ReadExt, Seek};
 use std::old_io::IoError;
 use std::marker;
+use std::collections::VecDeque;
 
 /// Persistent state
 /// **Must be updated to stable storage before RPC response.**
@@ -140,7 +141,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     /// Removes all entries from `from` to the last entry, inclusively.
     pub fn purge_from_index(&mut self, from_line: u64) -> io::Result<()> {
         let position = try!(self.move_to(from_line));
-        self.last_index = from_line - 1;
+        self.last_index = if from_line == 0 { 0 } else { from_line - 1 };
         self.purge_from_bytes(position)
     }
     pub fn retrieve_entries(&mut self, start: u64, end: u64) -> io::Result<Vec<(u64, T)>> {
@@ -219,7 +220,7 @@ pub struct LeaderState {
 ///     votes) or a `Follower`, if it hears from a `Leader`.
 #[derive(PartialEq, Eq, Clone)]
 pub enum NodeState {
-    Follower,
+    Follower(VecDeque<Transaction>),
     Leader(LeaderState),
     Candidate(Vec<Transaction>),
 }

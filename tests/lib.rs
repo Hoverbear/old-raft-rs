@@ -16,9 +16,13 @@ use std::collections::HashMap;
 use rustc_serialize::json;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::str;
+use std::fs;
 
 #[test]
 fn basic_test() {
+    fs::remove_file(&Path::new("/tmp/test0"));
+    fs::remove_file(&Path::new("/tmp/test1"));
+    fs::remove_file(&Path::new("/tmp/test2"));
     let mut nodes = vec![
         (0, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11110 }),
         (1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 }),
