@@ -5,7 +5,7 @@ extern crate "rustc-serialize" as rustc_serialize;
 extern crate uuid;
 
 use uuid::Uuid;
-use rustc_serialize::{json, Encodable, Decodable};
+use rustc_serialize::{Encodable};
 
 /// Data interchange format for RPC calls. These should match directly to the Raft paper's RPC
 /// descriptions.

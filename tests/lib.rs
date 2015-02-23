@@ -1,21 +1,18 @@
+#![feature(old_path)]
+#![feature(old_io)]
+#![feature(fs)]
+#![feature(std_misc)]
+
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate raft;
 
-use raft::interchange::{RemoteProcedureCall, AppendEntries, RequestVote};
 use raft::interchange::{ClientRequest, AppendRequest, IndexRange};
-use raft::interchange::{RemoteProcedureResponse};
 use raft::RaftNode;
 
 use std::old_io::timer::Timer;
 use std::time::Duration;
 use std::old_io::net::ip::SocketAddr;
-use std::old_io::net::udp::UdpSocket;
 use std::old_io::net::ip::IpAddr::Ipv4Addr;
-use std::thread::Thread;
-use std::collections::HashMap;
-use rustc_serialize::json;
-use std::sync::mpsc::{channel, Sender, Receiver};
-use std::str;
 use std::fs;
 
 fn wait_a_second() {
@@ -25,11 +22,12 @@ fn wait_a_second() {
 }
 
 #[test]
+#[allow(unused_variables)]
 fn basic_test() {
-    fs::remove_file(&Path::new("/tmp/test0"));
-    fs::remove_file(&Path::new("/tmp/test1"));
-    fs::remove_file(&Path::new("/tmp/test2"));
-    let mut nodes = vec![
+    fs::remove_file(&Path::new("/tmp/test0")).ok();
+    fs::remove_file(&Path::new("/tmp/test1")).ok();
+    fs::remove_file(&Path::new("/tmp/test2")).ok();
+    let nodes = vec![
         (0, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11110 }),
         (1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 }),
         (2, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 }),

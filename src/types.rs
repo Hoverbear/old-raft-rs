@@ -7,12 +7,10 @@ use rustc_serialize::base64::{ToBase64, FromBase64, Config, CharacterSet, Newlin
 use types::NodeState::{Leader, Follower, Candidate};
 use types::TransactionState::{Polling, Accepted, Rejected};
 use std::fs::{File, OpenOptions};
-use std::fs;
 use std::str;
 use std::str::StrExt;
 use std::io;
 use std::io::{Write, ReadExt, Seek};
-use std::old_io::IoError;
 use std::marker;
 use std::collections::VecDeque;
 
@@ -53,7 +51,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     /// Sets the current_term. **This should reflect on stable storage.**
     pub fn set_current_term(&mut self, new: u64) -> io::Result<()> {
         // The first line is the header with `current_term`, `voted_for`.
-        self.log.seek(io::SeekFrom::Start(0)); // Take the start.
+        self.log.seek(io::SeekFrom::Start(0)).unwrap(); // Take the start.
         self.current_term = new;
         // TODO: What do we do about the none case?
         write!(&mut self.log, "{:20} {:20}\n", self.current_term, self.voted_for.unwrap_or(0))
@@ -65,7 +63,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     /// Sets the `voted_for. **This should reflect on stable storage.**
     pub fn set_voted_for(&mut self, new: Option<u64>) -> io::Result<()> {
         // The first line is the header with `current_term`, `voted_for`.
-        self.log.seek(io::SeekFrom::Start(0)); // Take the start.
+        self.log.seek(io::SeekFrom::Start(0)).unwrap(); // Take the start.
         self.voted_for = new;
         // TODO: What do we do about the none case?
         write!(&mut self.log, "{:20} {:20}\n", self.current_term, self.voted_for.unwrap_or(0))
@@ -84,7 +82,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         // TODO: Possibly purge.
         for (term, entry) in entries {
             // TODO: I don't like the "doubling" here. How can we do this better?
-            write!(&mut self.log, "{} {}\n", term, PersistentState::encode(entry));
+            write!(&mut self.log, "{} {}\n", term, PersistentState::encode(entry)).unwrap();
         }
         self.last_index = if self.last_index == 0 { // Empty
             number as u64
@@ -114,7 +112,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     fn move_to(&mut self, line: u64) -> io::Result<u64> {
         // Gotcha: The first line is NOT a log entry.
         let mut lines_read = 0u64;
-        self.log.seek(io::SeekFrom::Start(0)); // Take the start.
+        self.log.seek(io::SeekFrom::Start(0)).unwrap(); // Take the start.
         // Go until we've reached `from` new lines.
         let _ = self.log.by_ref().chars().skip_while(|opt| {
             match *opt {
@@ -149,15 +147,14 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         self.purge_from_bytes(position)
     }
     pub fn retrieve_entries(&mut self, start: u64, end: u64) -> io::Result<Vec<(u64, T)>> {
-        let position = self.move_to(start);
-        let mut index = start;
+        let _ = self.move_to(start);
         let mut out = vec![];
         let mut read_in = self.log.by_ref()
             .chars()
             .take_while(|val| val.is_ok())
             .filter_map(|val| val.ok()); // We don't really care about issues here.
-        for index in range(start, end +1) {
-            let mut chars = read_in.by_ref()
+        for _ in range(start, end +1) {
+            let chars = read_in.by_ref()
                 .take_while(|&val| val != '\n')
                 .collect::<String>();
             if chars.len() == 0 { continue; }
@@ -167,8 +164,8 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         Ok(out)
     }
     pub fn retrieve_entry(&mut self, index: u64) -> io::Result<(u64, T)> {
-        let position = self.move_to(index);
-        let mut chars = self.log.by_ref()
+        let _ = self.move_to(index);
+        let chars = self.log.by_ref()
             .chars()
             .take_while(|val| val.is_ok())
             .filter_map(|val| val.ok()) // We don't really care about issues here.
@@ -246,8 +243,9 @@ pub enum TransactionState {
 
 #[test]
 fn test_persistent_state() {
+    use std::fs;
     let path = Path::new("/tmp/test_path");
-    fs::remove_file(&path.clone());
+    fs::remove_file(&path.clone()).ok();
     let mut state = PersistentState::new(0, path.clone());
     // Add 1
     assert_eq!(state.append_entries(0, 0, // Zero is the initialization state.
@@ -325,5 +323,5 @@ fn test_persistent_state() {
         Ok(()));
     assert_eq!(state.get_last_index(), 4);
     assert_eq!(state.get_last_term(), 4);
-    fs::remove_file(&path.clone());
+    fs::remove_file(&path.clone()).ok();
 }

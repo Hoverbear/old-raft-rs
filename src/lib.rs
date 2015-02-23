@@ -4,9 +4,9 @@
 #![feature(core)]
 #![feature(io)]
 #![feature(old_io)]
+#![feature(old_path)]
 #![feature(fs)]
 #![feature(std_misc)]
-#![feature(path)]
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate uuid;
 extern crate rand;
@@ -25,11 +25,9 @@ use std::sync::mpsc::{channel, Sender, Receiver};
 use std::str;
 use std::collections::{HashMap, VecDeque};
 use rustc_serialize::{json, Encodable, Decodable};
-use uuid::Uuid;
 use rand::{thread_rng, Rng, ThreadRng};
 use std::ops::IndexMut;
 use std::fmt::Debug;
-use std::u64;
 
 // Enums and variants.
 use interchange::{ClientRequest, RemoteProcedureCall, RemoteProcedureResponse};
@@ -108,8 +106,6 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             // Start up a RNG and Timer
             let mut rng = thread_rng();
             let mut timer = Timer::new().unwrap();
-            // We need a read buffer.
-            let mut read_buffer = [0; BUFFER_SIZE];
             // Create the struct.
             let mut raft_node = RaftNode {
                 state: Follower(VecDeque::new()),
@@ -135,7 +131,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             loop {
                 raft_node.tick();
             }
-        });
+        }).unwrap();
         (req_send, res_recv)
     }
     /// This is the main tick for a leader node.
@@ -206,12 +202,14 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         }
     }
     /// A lookup for index -> SocketAddr
+    #[allow(dead_code)]
     fn lookup_addr(&self, id: u64) -> Option<&SocketAddr> {
         self.id_to_addr.get(&id)
     }
     fn lookup_id(&self, addr: SocketAddr) -> Option<&u64> {
         self.addr_to_id.get(&addr)
     }
+    #[allow(dead_code)]
     fn other_nodes(&self) -> Vec<SocketAddr> {
         self.id_to_addr.iter().filter_map(|(&k, &v)| {
             if k == self.own_id {
@@ -241,9 +239,9 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             Candidate(_) => self.reset_candidate(),
             _ => panic!("Should not campaign as a Leader!")
         };
-        self.persistent_state.set_voted_for(Some(self.own_id)); // TODO: Is this correct?
+        self.persistent_state.set_voted_for(Some(self.own_id)).unwrap(); // TODO: Is this correct?
         self.reset_timer();
-        let mut status = vec![0; self.id_to_addr.len()].into_iter().enumerate().map(|(id, v)| {
+        let status = vec![0; self.id_to_addr.len()].into_iter().enumerate().map(|(id, _)| {
             // Do it in the loop so we different Uuids.
             let (uuid, request) = RemoteProcedureCall::request_vote(
                 self.persistent_state.get_current_term() + 1,
@@ -255,7 +253,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 Transaction { uuid: uuid, state: TransactionState::Accepted }
             } else {
                 let addr = self.id_to_addr[id as u64];
-                self.send(addr, request);
+                self.send(addr, request).unwrap();
                 Transaction { uuid: uuid, state: TransactionState::Polling }
             }
         }).collect();
@@ -307,18 +305,18 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 let last_index = self.persistent_state.get_last_index();
                 match checks.iter().all(|&x| x) {
                     true  => {
-                        self.persistent_state.set_voted_for(Some(source_id));
+                        self.persistent_state.set_voted_for(Some(source_id)).unwrap();
                         println!("Node {} accepts request_vote", self.own_id);
                         self.reset_timer();
                         RemoteProcedureResponse::accept(call.uuid, current_term,
-                            self.persistent_state.get_last_index(), self.volatile_state.commit_index)
+                            last_index, self.volatile_state.commit_index)
                     },
                     false => {
                         // TODO: Handle various error cases.
                         // Decrement next_index
                         println!("Node {} rejects request_vote", self.own_id);
                         let prev = {
-                            let idx = self.persistent_state.get_last_index();
+                            let idx = last_index;
                             if idx == 0 { 0 } else { idx - 1 }
                         };
                         RemoteProcedureResponse::reject(
@@ -367,7 +365,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 // If a follower recieves an append_request it will forward it to the leader.
                 // The leader will treat this no differently than an append_request from it's client.
                 // TODO: The terms get updated, not sure if that's the right approach.
-                let updated_terms = call.entries.into_iter().map(|(t, v)| v).collect();
+                let updated_terms = call.entries.into_iter().map(|(_, v)| v).collect();
                 match ClientRequest::append_request(call.prev_log_index, call.prev_log_term, updated_terms) {
                     ClientRequest::AppendRequest(transformed) => {
                         match self.handle_append_request(transformed) {
@@ -400,7 +398,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 let last_index = self.persistent_state.get_last_index();
                 let calculated_prev_log_term = {
                     match self.persistent_state.retrieve_entry(last_index) {
-                        Ok((term, v)) => term,
+                        Ok((term, _)) => term,
                         Err(_) => 0, // Means we don't even have that entry.
                     }
                 };
@@ -589,7 +587,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                         transaction.state = TransactionState::Rejected;
                     }
                 }
-                self.persistent_state.set_current_term(response.term);
+                self.persistent_state.set_current_term(response.term).unwrap();
                 match response.current_leader {
                     Some(leader) => self.candidate_to_follower(
                         leader,
@@ -605,7 +603,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     fn handle_append_request(&mut self, request: AppendRequest<T>) -> io::Result<()> {
         println!("Node {} handle_append_request", self.own_id);
         match self.state {
-            Leader(ref state) => {
+            Leader(_) => {
                 // Handle the request appropriately.
                 // The client shouldn't need to worry about the term.
                 let current_term = self.persistent_state.get_current_term();
