@@ -72,7 +72,7 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     heartbeat: Receiver<()>,
     socket: UdpSocket,
     req_recv: Receiver<ClientRequest<T>>,
-    res_send: Sender<io::Result<Vec<T>>>,
+    res_send: Sender<io::Result<Vec<(u64, T)>>>,
     // State
     rng: ThreadRng,
     timer: Timer,
@@ -84,7 +84,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     /// Creates a new RaftNode with the neighbors specified. `id` should be a valid index into
     /// `nodes`. The idea is that you can use the same `nodes` on all of the clients and only vary
     /// `id`.
-    pub fn start (id: u64, nodes: Vec<(u64, SocketAddr)>, log_path: Path) -> (Sender<ClientRequest<T>>, Receiver<io::Result<Vec<T>>>) {
+    pub fn start (id: u64, nodes: Vec<(u64, SocketAddr)>, log_path: Path) -> (Sender<ClientRequest<T>>, Receiver<io::Result<Vec<(u64, T)>>>) {
         // TODO: Check index.
         let size = nodes.len();
         // Build the Hashmap lookups. We don't have a bimap :(
@@ -102,7 +102,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         socket.set_read_timeout(Some(0));
         // Communication channels.
         let (req_send, req_recv) = channel::<ClientRequest<T>>();
-        let (res_send, res_recv) = channel::<io::Result<Vec<T>>>();
+        let (res_send, res_recv) = channel::<io::Result<Vec<(u64, T)>>>();
         // Fire up the thread.
         thread::Builder::new().name(format!("Node {}", id)).spawn(move || {
             // Start up a RNG and Timer
@@ -489,7 +489,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 // Should be an AppendEntries request response.
                 state.match_index[source_id as usize] = response.match_index;
                 state.next_index[source_id as usize] = response.next_index;
-                let have_index_commited = state.match_index.iter().filter(|&&val| val <= response.match_index).count();
+                let have_index_commited = state.match_index.iter().filter(|&&val| val >= response.match_index).count();
                 println!("COMMITED Have {}, need {}", have_index_commited, majority);
                 if have_index_commited >= majority && self.volatile_state.commit_index < response.match_index {
                     self.volatile_state.commit_index = response.match_index;
@@ -649,13 +649,12 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         }
     }
     /// This is called when the client requests a specific index range on it's channel.
-    fn handle_index_range(&mut self, request: IndexRange) -> io::Result<Vec<T>> {
+    fn handle_index_range(&mut self, request: IndexRange) -> io::Result<Vec<(u64, T)>> {
         println!("Node {} handles index range!!!", self.own_id);
         let end = if request.end_index > self.volatile_state.commit_index {
             self.volatile_state.commit_index
         } else { request.end_index };
-        let result = self.persistent_state.retrieve_entries(request.start_index, end)
-            .map(|maybe| maybe.into_iter().map(|(_, val)| val).collect::<Vec<T>>());
+        let result = self.persistent_state.retrieve_entries(request.start_index, end);
         println!("INDEX FOUND::: {:?}", result);
         result
     }

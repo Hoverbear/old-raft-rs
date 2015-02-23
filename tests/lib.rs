@@ -18,12 +18,17 @@ use std::sync::mpsc::{channel, Sender, Receiver};
 use std::str;
 use std::fs;
 
+fn wait_a_second() {
+    let mut timer = Timer::new().unwrap();
+    let clock = timer.oneshot(Duration::milliseconds(1000)); // If this fails we're in trouble.
+    let _ = clock.recv();
+}
+
 #[test]
 fn basic_test() {
     fs::remove_file(&Path::new("/tmp/test0"));
     fs::remove_file(&Path::new("/tmp/test1"));
     fs::remove_file(&Path::new("/tmp/test2"));
-    let mut timer = Timer::new().unwrap();
     let mut nodes = vec![
         (0, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11110 }),
         (1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 }),
@@ -45,6 +50,8 @@ fn basic_test() {
         nodes.clone(),
         Path::new("/tmp/test2")
     );
+
+
     // Make a test send to that port.
     let test_command = ClientRequest::AppendRequest(AppendRequest {
         entries: vec!["foo".to_string()],
@@ -53,24 +60,51 @@ fn basic_test() {
     });
     log_0_sender.send(test_command.clone()).unwrap();
     // Get the result.
-    {
-        let clock = timer.oneshot(Duration::milliseconds(1000)); // If this fails we're in trouble.
-        let _ = clock.recv();
-    }
-    let event = log_0_reciever.recv()
+    wait_a_second();
+    let event = log_0_reciever.try_recv()
         .ok().expect("Didn't recieve in a reasonable time.");
     assert!(event.is_ok()); // Workaround until we build a proper stream.
+
+
     // Test Index.
     let test_index = ClientRequest::IndexRange(IndexRange {
             start_index: 0,
             end_index: 5,
     });
     log_0_sender.send(test_index.clone()).unwrap();
-    {
-        let clock = timer.oneshot(Duration::milliseconds(1000)); // If this fails we're in trouble.
-        let _ = clock.recv();
-    }
-    let result = log_0_reciever.recv()
+    wait_a_second();
+    let result = log_0_reciever.try_recv()
+        .ok().expect("Didn't recieve in a reasonable time.").unwrap();
+    // We don't know what the term will be.
+    assert_eq!(result, vec![(result[0].0, "foo".to_string())]);
+
+
+    // Add something else.
+    let test_command = ClientRequest::AppendRequest(AppendRequest {
+        entries: vec!["bar".to_string(), "baz".to_string()],
+        prev_log_index: 1,
+        prev_log_term: result[0].0,
+    });
+    log_0_sender.send(test_command.clone()).unwrap();
+    // Get the result.
+    wait_a_second();
+    let event = log_0_reciever.try_recv()
         .ok().expect("Didn't recieve in a reasonable time.");
-    assert_eq!(result, Ok(vec!["foo".to_string()]));
+    assert!(event.is_ok()); // Workaround until we build a proper stream.
+
+    // Test Index.
+    let test_index = ClientRequest::IndexRange(IndexRange {
+            start_index: 0,
+            end_index: 5,
+    });
+    log_0_sender.send(test_index.clone()).unwrap();
+    wait_a_second();
+    let result = log_0_reciever.try_recv()
+        .ok().expect("Didn't recieve in a reasonable time.").unwrap();
+    // We don't know what the term will be.
+    assert_eq!(result, vec![
+        (result[0].0, "foo".to_string()),
+        (result[1].0, "bar".to_string()),
+        (result[2].0, "baz".to_string()),
+    ]);
 }
