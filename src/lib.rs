@@ -13,7 +13,7 @@ extern crate uuid;
 extern crate rand;
 #[macro_use] extern crate log;
 pub mod interchange;
-pub mod types;
+pub mod state;
 
 use std::old_io::net::ip::SocketAddr;
 use std::old_io::net::udp::UdpSocket;
@@ -37,9 +37,9 @@ use interchange::{ClientRequest, RemoteProcedureCall, RemoteProcedureResponse};
 use interchange::{AppendEntries, RequestVote};
 use interchange::{AppendRequest, IndexRange};
 use interchange::{Accepted, Rejected};
-use types::{PersistentState, LeaderState, VolatileState};
-use types::NodeState::{Leader, Follower, Candidate};
-use types::{NodeState, TransactionState, Transaction};
+use state::{PersistentState, LeaderState, VolatileState};
+use state::NodeState::{Leader, Follower, Candidate};
+use state::{NodeState, TransactionState, Transaction};
 // The maximum size of the read buffer.
 const BUFFER_SIZE: usize = 4096;
 const HEARTBEAT_MIN: i64 = 150;
