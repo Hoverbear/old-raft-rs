@@ -49,10 +49,34 @@ const HEARTBEAT_MAX: i64 = 300;
 ///     interface for requests.
 ///   * `request_vote` which is used by candidates during campaigns to obtain a vote.
 ///
-
 /// A `RaftNode` acts as a replicated state machine. The server's role in the cluster depends on it's
 /// own status. It will maintain both volatile state (which can be safely lost) and persistent
 /// state (which must be carefully stored and kept safe).
+///
+/// Currently, the `RaftNode` API is not well defined. **We are looking for feedback and suggestions.**
+///
+/// You can create a cluster like so:
+///
+/// ```
+/// use raft::RaftNode;
+/// use std::old_io::net::ip::SocketAddr;
+/// use std::old_io::net::ip::IpAddr::Ipv4Addr;
+/// // Generally, your nodes will come from a file, or something.
+/// let nodes = vec![
+///     (0, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11110 }),
+///     (1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 }),
+///     (2, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 }),
+/// ];
+/// // Create the nodes. You recieve a channel back to communicate on.
+/// // TODO: We will probably change this and make it less awkward.
+/// let (command_sender, result_reciever) = RaftNode::<String>::start(
+///     0,
+///     nodes.clone(),
+///     Path::new("/tmp/test0")
+/// );
+/// ```
+///
+/// > Note: The Raft paper suggests a minimum cluster size of 3 nodes.
 pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     // Raft related.
     state: NodeState,
@@ -734,7 +758,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     /// Why are these in `RaftNode`? So we can use data available in the `RaftNode`.
     /// TODO: Would it be pleasant to spin these into `NodeState` itself?
     /// Called on heartbeat timeout.
-    pub fn follower_to_candidate(&mut self) {
+    fn follower_to_candidate(&mut self) {
         // Need to increase term.
         println!("Node {} Follower -> Candidate, term {}", self.own_id, self.persistent_state.get_current_term());
         self.state = match self.state {
@@ -745,7 +769,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         self.reset_timer()
     }
     /// Called when the Leader recieves information that they are not the leader.
-    pub fn leader_to_follower(&mut self) {
+    fn leader_to_follower(&mut self) {
         println!("Node {} Leader -> Follower", self.own_id);
         self.state = match self.state {
             Leader(_) => Follower(VecDeque::new()),
@@ -754,7 +778,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         self.reset_timer()
     }
     /// Called when a Candidate successfully gets elected.
-    pub fn candidate_to_leader(&mut self) {
+    fn candidate_to_leader(&mut self) {
         println!("Node {} Candidate -> Leader", self.own_id);
         self.state = match self.state {
             Candidate(_) => Leader(LeaderState {
@@ -769,7 +793,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         self.handle_timer();
     }
     /// Called when a candidate fails an election. Takes the new leader's ID, term.
-    pub fn candidate_to_follower(&mut self, leader_id: u64, term: u64) {
+    fn candidate_to_follower(&mut self, leader_id: u64, term: u64) {
         println!("Node {} Candidate -> Follower, term {}", self.own_id, term);
         self.state = match self.state {
             Candidate(_) => Follower(VecDeque::new()),
@@ -782,7 +806,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     /// Called when a Candidate needs to hold another election.
     /// TODO: This is currently pointless, but will be meaningful when Candidates
     /// have data as part of their variant.
-    pub fn reset_candidate(&mut self) {
+    fn reset_candidate(&mut self) {
         println!("Node {} Candidate RESET", self.own_id);
         self.state = match self.state {
             Candidate(_) => Candidate(Vec::with_capacity(self.id_to_addr.len())),
