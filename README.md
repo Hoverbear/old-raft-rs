@@ -1,6 +1,8 @@
 # Raft #
 
-> Note: This project is **incomplete** and the code is of **pre-alpha** quality. **Most functionality is currently `unimplemented!()` and will panic immediately.**
+> Note: This project is **incomplete** and the code is of **pre-alpha** quality. **Only some specific, basic functionality is available, and I need your help defining an API!**
+
+[![Build Status](https://travis-ci.org/Hoverbear/raft.svg)](https://travis-ci.org/Hoverbear/raft)
 
 ## Problem and Importance ##
 
