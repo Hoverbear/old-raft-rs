@@ -1,6 +1,6 @@
 #![crate_name = "raft"]
 #![crate_type="lib"]
-#![doc(html_logo_url = "https://raw.githubusercontent.com/Hoverbear/raft/master/raft.svg")]
+#![doc(html_logo_url = "https://raw.githubusercontent.com/Hoverbear/raft/master/raft.png")]
 #![doc(html_root_url = "https://hoverbear.github.io/raft/raft/")]
 
 #![feature(core)]
