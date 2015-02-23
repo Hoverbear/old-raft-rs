@@ -23,6 +23,7 @@ fn basic_test() {
     fs::remove_file(&Path::new("/tmp/test0"));
     fs::remove_file(&Path::new("/tmp/test1"));
     fs::remove_file(&Path::new("/tmp/test2"));
+    let mut timer = Timer::new().unwrap();
     let mut nodes = vec![
         (0, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11110 }),
         (1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 }),
@@ -44,7 +45,6 @@ fn basic_test() {
         nodes.clone(),
         Path::new("/tmp/test2")
     );
-    println!("Foo");
     // Make a test send to that port.
     let test_command = ClientRequest::AppendRequest(AppendRequest {
         entries: vec!["foo".to_string()],
@@ -53,11 +53,24 @@ fn basic_test() {
     });
     log_0_sender.send(test_command.clone()).unwrap();
     // Get the result.
-    let event = log_0_reciever.recv().unwrap();
-    let mut timer = Timer::new().unwrap();
-    let clock = timer.oneshot(Duration::milliseconds(5000)); // If this fails we're in trouble.
-    let _ = clock.recv();
-
-
-    assert!(event.is_ok());
+    {
+        let clock = timer.oneshot(Duration::milliseconds(1000)); // If this fails we're in trouble.
+        let _ = clock.recv();
+    }
+    let event = log_0_reciever.recv()
+        .ok().expect("Didn't recieve in a reasonable time.");
+    assert!(event.is_ok()); // Workaround until we build a proper stream.
+    // Test Index.
+    let test_index = ClientRequest::IndexRange(IndexRange {
+            start_index: 0,
+            end_index: 5,
+    });
+    log_0_sender.send(test_index.clone()).unwrap();
+    {
+        let clock = timer.oneshot(Duration::milliseconds(1000)); // If this fails we're in trouble.
+        let _ = clock.recv();
+    }
+    let result = log_0_reciever.recv()
+        .ok().expect("Didn't recieve in a reasonable time.");
+    assert_eq!(result, Ok(vec!["foo".to_string()]));
 }
