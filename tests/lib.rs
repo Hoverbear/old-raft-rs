@@ -5,6 +5,8 @@
 
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate raft;
+extern crate env_logger;
+extern crate log;
 
 use raft::interchange::{ClientRequest, AppendRequest, IndexRange};
 use raft::RaftNode;
@@ -24,6 +26,9 @@ fn wait_a_second() {
 #[test]
 #[allow(unused_variables)]
 fn basic_test() {
+    // Start the logger.
+    env_logger::init().unwrap();
+
     fs::remove_file(&Path::new("/tmp/test0")).ok();
     fs::remove_file(&Path::new("/tmp/test1")).ok();
     fs::remove_file(&Path::new("/tmp/test2")).ok();

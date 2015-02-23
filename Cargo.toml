@@ -7,3 +7,5 @@ authors = ["Andrew Hobden <andrew@hoverbear.org>"]
 rustc-serialize = "*"
 uuid = "*"
 rand = "*"
+log = "*"
+env_logger = "*" # Important for tests.

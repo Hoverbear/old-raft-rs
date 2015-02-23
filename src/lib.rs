@@ -7,9 +7,11 @@
 #![feature(old_path)]
 #![feature(fs)]
 #![feature(std_misc)]
+
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate uuid;
 extern crate rand;
+#[macro_use] extern crate log;
 pub mod interchange;
 pub mod types;
 
@@ -299,14 +301,14 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             Some(id) => *id,
             None => unimplemented!(),
         };
-        println!("Node {} handle_request_vote from {}: {:?}", self.own_id, source_id, call);
+        debug!("Node {} handle_request_vote from {}: {:?}", self.own_id, source_id, call);
         match self.state {
             Leader(_) => {
                 // Re-assert leadership.
                 // TODO: Might let someone take over if they have a higher term?
                 assert!(self.leader_id.is_some());
                 assert_eq!(self.leader_id.unwrap(), self.own_id);
-                println!("Node {} handle_request_vote REJECTION to {}", self.own_id, source_id);
+                debug!("Node {} handle_request_vote REJECTION to {}", self.own_id, source_id);
                 RemoteProcedureResponse::reject(
                     call.uuid,
                     self.persistent_state.get_current_term(),
@@ -325,12 +327,12 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     self.volatile_state.last_applied <= call.last_log_index,
                     true, // TODO: Is the last log term the same?
                 ];
-                println!("Node {} checks {:?}", self.own_id, checks);
+                debug!("Node {} checks {:?}", self.own_id, checks);
                 let last_index = self.persistent_state.get_last_index();
                 match checks.iter().all(|&x| x) {
                     true  => {
                         self.persistent_state.set_voted_for(Some(source_id)).unwrap();
-                        println!("Node {} accepts request_vote", self.own_id);
+                        debug!("Node {} accepts request_vote", self.own_id);
                         self.reset_timer();
                         RemoteProcedureResponse::accept(call.uuid, current_term,
                             last_index, self.volatile_state.commit_index)
@@ -338,7 +340,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     false => {
                         // TODO: Handle various error cases.
                         // Decrement next_index
-                        println!("Node {} rejects request_vote", self.own_id);
+                        debug!("Node {} rejects request_vote", self.own_id);
                         let prev = {
                             let idx = last_index;
                             if idx == 0 { 0 } else { idx - 1 }
@@ -382,7 +384,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             Some(id) => *id,
             None => unimplemented!(),
         };
-        println!("Node {} handle_append_entries from {}, {:?}", self.own_id, source_id, call);
+        debug!("Node {} handle_append_entries from {}, {:?}", self.own_id, source_id, call);
         match self.state {
             Leader(_) => {
                 // **This is a non-standard implementation detail.
@@ -427,7 +429,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     }
                 };
                 if call.term < self.persistent_state.get_current_term() {
-                    println!("Node {} rejects append_entries because term is stale.", self.own_id);
+                    debug!("Node {} rejects append_entries because term is stale.", self.own_id);
                     RemoteProcedureResponse::reject(
                         call.uuid,
                         self.persistent_state.get_current_term(),
@@ -438,7 +440,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 } else if calculated_prev_log_term != call.prev_log_term {
                     // prev_log_term is wrong.
                     // Delete it and all that follow it.
-                    println!("Node {} accepts append_entries, but prev log terms are not equal.", self.own_id);
+                    debug!("Node {} accepts append_entries, but prev log terms are not equal.", self.own_id);
                     self.leader_id = Some(source_id); // They're the leader now!
                     self.persistent_state.set_current_term(call.term).unwrap();
                     self.persistent_state.purge_from_index(call.prev_log_index)
@@ -455,7 +457,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     )
                 } else {
                     // Accept it!
-                    println!("Node {} accepts append_entries because all is well.", self.own_id);
+                    debug!("Node {} accepts append_entries because all is well.", self.own_id);
                     self.leader_id = Some(source_id); // They're the leader now!
                     self.persistent_state.set_current_term(call.term).unwrap();
                     self.volatile_state.commit_index = call.leader_commit;
@@ -479,12 +481,12 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 // If it has a higher term, accept it and become follower.
                 // Otherwise, reject it.
                 if call.term >= self.persistent_state.get_current_term() {
-                    println!("Node {} as CANDIDATE accepts append_entries, converts to follower of {}.", self.own_id, call.leader_id);
+                    debug!("Node {} as CANDIDATE accepts append_entries, converts to follower of {}.", self.own_id, call.leader_id);
                     self.candidate_to_follower(source_id, call.term);
                     // Pass back into Follower.
                     self.handle_append_entries(call, source)
                 } else {
-                    println!("Node {} as CANDIDATE rejected append_entries from {}. Terms {} vs {}.",
+                    debug!("Node {} as CANDIDATE rejected append_entries from {}. Terms {} vs {}.",
                         self.own_id, call.leader_id, call.term, self.persistent_state.get_current_term());
                     RemoteProcedureResponse::reject(
                         call.uuid,
@@ -505,14 +507,14 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             None => return,
         };
         let majority = self.majority() as usize;
-        println!("Node {} handle_accepted from {}, {:?}", self.own_id, source_id, response);
+        debug!("Node {} handle_accepted from {}, {:?}", self.own_id, source_id, response);
         match self.state {
             Leader(ref mut state) => {
                 // Should be an AppendEntries request response.
                 state.match_index[source_id as usize] = response.match_index;
                 state.next_index[source_id as usize] = response.next_index;
                 let have_index_commited = state.match_index.iter().filter(|&&val| val >= response.match_index).count();
-                println!("COMMITED Have {}, need {}", have_index_commited, majority);
+                debug!("COMMITED Have {}, need {}", have_index_commited, majority);
                 if have_index_commited >= majority && self.volatile_state.commit_index < response.match_index {
                     self.volatile_state.commit_index = response.match_index;
                 }
@@ -543,11 +545,11 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 if let Candidate(ref mut status) = self.state {
                     if status[source_id as usize].uuid == response.uuid {
                         // Set it.
-                        println!("Node {} accepted from {}, {} == {}", self.own_id, source_id, status[source_id as usize].uuid, response.uuid);
+                        debug!("Node {} accepted from {}, {} == {}", self.own_id, source_id, status[source_id as usize].uuid, response.uuid);
                         status[source_id as usize].state = TransactionState::Accepted;
                         check_polls = true;
                     } else {
-                        println!("Node {} accepted from {}, {} != {}", self.own_id, source_id, status[source_id as usize].uuid, response.uuid);
+                        debug!("Node {} accepted from {}, {} != {}", self.own_id, source_id, status[source_id as usize].uuid, response.uuid);
                     }
                 }
                 // Clone state because we'll replace it.
@@ -556,13 +558,13 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     let number_of_votes = status.iter().filter(|&transaction| {
                         transaction.state == TransactionState::Accepted
                     }).count();
-                    println!("Node {} has {} votes, needs more than {}", self.own_id, number_of_votes, majority);
+                    debug!("Node {} has {} votes, needs more than {}", self.own_id, number_of_votes, majority);
                     if number_of_votes > majority {  // +1 for itself.
                         // Won election.
                         self.candidate_to_leader();
                     }
                 } else {
-                    println!("Node {} doesn't check polls", self.own_id);
+                    debug!("Node {} doesn't check polls", self.own_id);
                 }
             }
         }
@@ -574,7 +576,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             Some(id) => *id,
             None => return,
         };
-        println!("Node {} handle_rejected from {}: {:?}", self.own_id, source_id, response);
+        debug!("Node {} handle_rejected from {}: {:?}", self.own_id, source_id, response);
         match self.state {
             Leader(_) => {
                 // Should be an AppendEntries request response.
@@ -625,7 +627,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     }
     /// This is called when the consuming application issues an append request on it's channel.
     fn handle_append_request(&mut self, request: AppendRequest<T>) -> io::Result<()> {
-        println!("Node {} handle_append_request", self.own_id);
+        debug!("Node {} handle_append_request", self.own_id);
         match self.state {
             Leader(_) => {
                 // Handle the request appropriately.
@@ -672,19 +674,19 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     }
     /// This is called when the client requests a specific index range on it's channel.
     fn handle_index_range(&mut self, request: IndexRange) -> io::Result<Vec<(u64, T)>> {
-        println!("Node {} handles index range!!!", self.own_id);
+        debug!("Node {} handles index range!!!", self.own_id);
         let end = if request.end_index > self.volatile_state.commit_index {
             self.volatile_state.commit_index
         } else { request.end_index };
         let result = self.persistent_state.retrieve_entries(request.start_index, end);
-        println!("INDEX FOUND::: {:?}", result);
+        debug!("INDEX FOUND::: {:?}", result);
         result
     }
     ////////////
     // Timers //
     ////////////
     fn handle_timer(&mut self) {
-        println!("Node {} handle_timer", self.own_id);
+        debug!("Node {} handle_timer", self.own_id);
         match self.state {
             Leader(_) => {
                 // Send heartbeats.
@@ -695,7 +697,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                         if let Leader(ref mut state) = self.state {
                             let next_index = state.next_index[id as usize];
                             let last_in_log = self.persistent_state.get_last_index();
-                            println!("Node {} next_index for {} is {}, last is {}", self.own_id, id, next_index, last_in_log);
+                            debug!("Node {} next_index for {} is {}, last is {}", self.own_id, id, next_index, last_in_log);
                             self.persistent_state.retrieve_entries(next_index, last_in_log+1) // Get them all.
                                 .ok().expect("Failed to retrieve entries from log.")
                         } else { unreachable!() }
@@ -710,7 +712,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                             (term, prev_log_index)
                         } else { unreachable!() }
                     };
-                    println!("Node {} sending {} entries {:?}", self.own_id, id, entries_they_need);
+                    debug!("Node {} sending {} entries {:?}", self.own_id, id, entries_they_need);
                     let (_, rpc) = RemoteProcedureCall::append_entries(
                         self.persistent_state.get_current_term(),
                         self.leader_id.unwrap(),
@@ -728,7 +730,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         self.reset_timer();
     }
     fn reset_timer(&mut self) {
-        println!("Node {} timer RESET", self.own_id);
+        debug!("Node {} timer RESET", self.own_id);
         self.heartbeat = match self.state {
             Leader(_) => {
                 self.timer.oneshot(Duration::milliseconds(HEARTBEAT_MIN))
@@ -760,7 +762,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     /// Called on heartbeat timeout.
     fn follower_to_candidate(&mut self) {
         // Need to increase term.
-        println!("Node {} Follower -> Candidate, term {}", self.own_id, self.persistent_state.get_current_term());
+        debug!("Node {} Follower -> Candidate, term {}", self.own_id, self.persistent_state.get_current_term());
         self.state = match self.state {
             Follower(_) => Candidate(Vec::with_capacity(self.id_to_addr.len())),
             _ => panic!("Called follower_to_candidate() but was not Follower.")
@@ -770,7 +772,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     }
     /// Called when the Leader recieves information that they are not the leader.
     fn leader_to_follower(&mut self) {
-        println!("Node {} Leader -> Follower", self.own_id);
+        debug!("Node {} Leader -> Follower", self.own_id);
         self.state = match self.state {
             Leader(_) => Follower(VecDeque::new()),
             _ => panic!("Called leader_to_follower() but was not Leader.")
@@ -779,7 +781,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     }
     /// Called when a Candidate successfully gets elected.
     fn candidate_to_leader(&mut self) {
-        println!("Node {} Candidate -> Leader", self.own_id);
+        debug!("Node {} Candidate -> Leader", self.own_id);
         self.state = match self.state {
             Candidate(_) => Leader(LeaderState {
                 next_index: vec![0u64; self.id_to_addr.len()],
@@ -794,7 +796,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     }
     /// Called when a candidate fails an election. Takes the new leader's ID, term.
     fn candidate_to_follower(&mut self, leader_id: u64, term: u64) {
-        println!("Node {} Candidate -> Follower, term {}", self.own_id, term);
+        debug!("Node {} Candidate -> Follower, term {}", self.own_id, term);
         self.state = match self.state {
             Candidate(_) => Follower(VecDeque::new()),
             _ => panic!("Called candidate_to_follower() but was not Candidate.")
@@ -807,7 +809,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     /// TODO: This is currently pointless, but will be meaningful when Candidates
     /// have data as part of their variant.
     fn reset_candidate(&mut self) {
-        println!("Node {} Candidate RESET", self.own_id);
+        debug!("Node {} Candidate RESET", self.own_id);
         self.state = match self.state {
             Candidate(_) => Candidate(Vec::with_capacity(self.id_to_addr.len())),
             _ => panic!("Called reset_candidate() but was not Candidate.")

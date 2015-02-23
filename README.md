@@ -31,13 +31,48 @@ My deliverables will be a functioning MIT licensed library with simple bindings,
 * Feb 18-Mar 4: Testing and example building.
 * Mar 4-Onward: Release to community and improve based on feedback.
 
-## Project Website ##
+## Compiling ##
 
-I'll keep track of my progress both on my blog through the [Raft](http://www.hoverbear.org/tag/raft/) tag, and via Github.
+> For Linux or Mac, with root! Windows users are, unfortunately, on their own.
 
-## Links ##
+You will need the [Rust](http://rust-lang.org/) compiler:
 
+```bash
+curl -L https://static.rust-lang.org/rustup.sh | sudo sh
+```
+
+This should install `cargo` and `rustc`. Clone the repository and build it:
+
+```bash
+git clone git@github.com:Hoverbear/raft.git && \
+cd raft && \
+cargo build
+```
+
+> Note this is a library, so building won't necessarily produce anything useful for you.
+
+## Documentation ##
+
+* [Raft Crate Documentation](https://hoverbear.github.io/raft/raft/)
 * [The Raft site](https://raftconsensus.github.io/)
 * [The Secret Lives of Data - Raft](http://thesecretlivesofdata.com/raft/)
 * [Raft Paper](http://ramcloud.stanford.edu/raft.pdf)
 * [Raft Dissertation](https://github.com/ongardie/dissertation#readme)
+
+## Testing ##
+
+You can run `raft`'s full bank of tests with all debug output like so:
+
+```bash
+RUST_LOG=raft=debug cargo test -- --nocapture
+```
+
+> Due to the nature of this library's pre-alpha state, some tests may occasionally fail. I'm working on this.
+
+For something more terse use `cargo test`.
+
+The `tests/lib.rs` file currently hosts a working example of using the library. *Before you say anything, yes, I know it's not nice. Let's talk about how to make that much nicer!*
+
+## Project Website ##
+
+I'll keep track of my progress both on my blog through the [Raft](http://www.hoverbear.org/tag/raft/) tag, and via Github.
