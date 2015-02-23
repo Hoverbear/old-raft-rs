@@ -145,7 +145,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         let position = try!(self.move_to(from_line));
         let last_index = from_line - 1; // We're 1 indexed.
         self.last_index = last_index;
-        self.last_term = try!(self.retrieve_entry(last_index)).0;
+        self.last_term = self.retrieve_entry(last_index).map(|(t, _)| t).unwrap_or(0);
         self.purge_from_bytes(position)
     }
     pub fn retrieve_entries(&mut self, start: u64, end: u64) -> io::Result<Vec<(u64, T)>> {

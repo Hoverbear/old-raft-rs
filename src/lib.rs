@@ -221,6 +221,9 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             }
         }).collect::<Vec<SocketAddr>>()
     }
+    fn majority(&self) -> u64 {
+        (self.addr_to_id.len() as f64 / 2.0).ceil() as u64
+    }
     /// When a `Follower`'s heartbeat times out it's time to start a campaign for election and
     /// become a `Candidate`. If successful, the `RaftNode` will transistion state into a `Leader`,
     /// otherwise it will become `Follower` again.
@@ -318,8 +321,13 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                             let idx = self.persistent_state.get_last_index();
                             if idx == 0 { 0 } else { idx - 1 }
                         };
-                        RemoteProcedureResponse::reject(call.uuid, current_term, self.leader_id,
-                            prev, self.volatile_state.commit_index)
+                        RemoteProcedureResponse::reject(
+                            call.uuid,
+                            current_term,
+                            self.leader_id,
+                            prev,
+                            self.volatile_state.commit_index
+                        )
                     },
                 }
             },
@@ -389,7 +397,13 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 //  * Delete existing entry and all that follow it.
                 // Append any entries not in the log.
                 // If leader_commit > commit_index set commit_index to the min.
-                let node_prev_log_term = self.persistent_state.get_last_term();
+                let last_index = self.persistent_state.get_last_index();
+                let calculated_prev_log_term = {
+                    match self.persistent_state.retrieve_entry(last_index) {
+                        Ok((term, v)) => term,
+                        Err(_) => 0, // Means we don't even have that entry.
+                    }
+                };
                 if call.term < self.persistent_state.get_current_term() {
                     println!("Node {} rejects append_entries because term is stale.", self.own_id);
                     RemoteProcedureResponse::reject(
@@ -399,24 +413,30 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                         self.volatile_state.commit_index, // TODO Maybe wrong.
                         self.persistent_state.get_last_index() + 1,
                     )
-                } else if call.prev_log_term != call.prev_log_term {
+                } else if calculated_prev_log_term != call.prev_log_term {
                     // prev_log_term is wrong.
                     // Delete it and all that follow it.
-                    println!("Node {} rejects append_entries because prev log terms are not equal.", self.own_id);
+                    println!("Node {} accepts append_entries, but prev log terms are not equal.", self.own_id);
+                    self.leader_id = Some(source_id); // They're the leader now!
+                    self.persistent_state.set_current_term(call.term).unwrap();
                     self.persistent_state.purge_from_index(call.prev_log_index)
                         .unwrap();
-                    // TODO: Shouldn't this accept??
+                    self.volatile_state.commit_index = call.leader_commit;
+                    self.persistent_state.append_entries(call.prev_log_index, call.prev_log_term, call.entries)
+                        .unwrap();
+                    self.reset_timer();
                     RemoteProcedureResponse::accept(
                         call.uuid,
                         self.persistent_state.get_current_term(),
                         self.volatile_state.commit_index, // TODO Maybe wrong.
-                        self.persistent_state.get_last_index() + 1,
+                        self.persistent_state.get_last_index(), // Will be -1
                     )
                 } else {
                     // Accept it!
                     println!("Node {} accepts append_entries because all is well.", self.own_id);
                     self.leader_id = Some(source_id); // They're the leader now!
                     self.persistent_state.set_current_term(call.term).unwrap();
+                    self.volatile_state.commit_index = call.leader_commit;
                     self.persistent_state.append_entries(call.prev_log_index, call.prev_log_term, call.entries)
                         .unwrap();
                     // If leader_commit > commit_index set commit_index to the min.
@@ -427,7 +447,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     RemoteProcedureResponse::accept(
                         call.uuid,
                         self.persistent_state.get_current_term(),
-                        self.volatile_state.commit_index, // TODO Maybe wrong.
+                        call.prev_log_index, // TODO Maybe wrong.
                         self.persistent_state.get_last_index() + 1,
                     )
                 }
@@ -462,13 +482,18 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             Some(id) => *id,
             None => return,
         };
+        let majority = self.majority() as usize;
         println!("Node {} handle_accepted from {}, {:?}", self.own_id, source_id, response);
         match self.state {
             Leader(ref mut state) => {
                 // Should be an AppendEntries request response.
                 state.match_index[source_id as usize] = response.match_index;
                 state.next_index[source_id as usize] = response.next_index;
-                // TODO: More?
+                let have_index_commited = state.match_index.iter().filter(|&&val| val <= response.match_index).count();
+                println!("COMMITED Have {}, need {}", have_index_commited, majority);
+                if have_index_commited >= majority && self.volatile_state.commit_index < response.match_index {
+                    self.volatile_state.commit_index = response.match_index;
+                }
             },
             Follower(_) => {
                 // Must have been a response to our last AppendEntries request?
@@ -509,9 +534,8 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     let number_of_votes = status.iter().filter(|&transaction| {
                         transaction.state == TransactionState::Accepted
                     }).count();
-                    let goal = (self.addr_to_id.len() as f64 / 2.0).ceil() as usize;
-                    println!("Node {} has {} votes, needs more than {}", self.own_id, number_of_votes, goal);
-                    if number_of_votes > goal {  // +1 for itself.
+                    println!("Node {} has {} votes, needs more than {}", self.own_id, number_of_votes, majority);
+                    if number_of_votes > majority {  // +1 for itself.
                         // Won election.
                         self.candidate_to_leader();
                     }
@@ -530,7 +554,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         };
         println!("Node {} handle_rejected from {}: {:?}", self.own_id, source_id, response);
         match self.state {
-            Leader(ref state) => {
+            Leader(_) => {
                 // Should be an AppendEntries request response.
                 // Great! Update `next_index` and `match_index`
                 unimplemented!();
@@ -610,7 +634,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                         let destination = self.id_to_addr[id];
                         self.send(destination, rpc)
                             // TODO: Update to be io::Result
-                            .map_err(|e| io::Error::new(io::ErrorKind::Other, "TODO", None))
+                            .map_err(|_| io::Error::new(io::ErrorKind::Other, "TODO", None))
                     },
                     None     => {
                         // Need to wait... Store it? Same implementation as a candidate.
@@ -627,7 +651,10 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     /// This is called when the client requests a specific index range on it's channel.
     fn handle_index_range(&mut self, request: IndexRange) -> io::Result<Vec<T>> {
         println!("Node {} handles index range!!!", self.own_id);
-        let result = self.persistent_state.retrieve_entries(request.start_index, request.end_index)
+        let end = if request.end_index > self.volatile_state.commit_index {
+            self.volatile_state.commit_index
+        } else { request.end_index };
+        let result = self.persistent_state.retrieve_entries(request.start_index, end)
             .map(|maybe| maybe.into_iter().map(|(_, val)| val).collect::<Vec<T>>());
         println!("INDEX FOUND::: {:?}", result);
         result
@@ -657,7 +684,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                             let mut prev_log_index = state.next_index[id as usize]; // Want prev
                             if prev_log_index != 0 { prev_log_index -= 1; }
                             let term = self.persistent_state.retrieve_entry(prev_log_index)
-                                .map(|(t, v)| t)
+                                .map(|(t, _)| t)
                                 .unwrap_or(0);
                             (term, prev_log_index)
                         } else { unreachable!() }
@@ -671,7 +698,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                         entries_they_need,
                         self.volatile_state.commit_index
                     );
-                    self.send(addr, rpc);
+                    self.send(addr, rpc).unwrap();
                 }
             },
             Follower(_) => self.campaign(),
