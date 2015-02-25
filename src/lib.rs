@@ -62,6 +62,8 @@ const HEARTBEAT_MAX: i64 = 300;
 /// You can create a cluster like so:
 ///
 /// ```
+/// #![feature(old_io)]
+/// #![feature(old_path)]
 /// use raft::RaftNode;
 /// use std::old_io::net::ip::SocketAddr;
 /// use std::old_io::net::ip::IpAddr::Ipv4Addr;
@@ -204,15 +206,18 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 // If channel has data.
                 match self.req_recv.try_recv() {
                     Ok(request) => {          // Something in channel.
+                        debug!("ID {}: GOT CLIENT REQUEST {:?}, LEADER: {:?}", self.own_id, request, self.leader_id);
                         match request {
                             ClientRequest::IndexRange(request) => {
                                 let result = self.handle_index_range(request);
+                                info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.own_id, result);
                                 self.res_send.send(result).unwrap();
                             },
                             // TODO: Redesign this...
                             ClientRequest::AppendRequest(request) => {
                                 let result = self.handle_append_request(request)
                                     .map(|_| Vec::new());
+                                    info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.own_id, result);
                                 self.res_send.send(result).unwrap();
                             },
                         };
@@ -675,10 +680,12 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                             queue.push_back(Transaction { uuid: uuid, state: TransactionState::Polling });
                         } else { unreachable!(); }
                         let destination = self.id_to_addr[id];
-                        info!("ID {}: RESPONDS ERROR", self.own_id);
                         self.send(destination, rpc)
                             // TODO: Update to be io::Result
-                            .map_err(|_| io::Error::new(io::ErrorKind::Other, "TODO", None))
+                            .map_err(|_| {
+                                info!("ID {}: RESPONDS ERROR", self.own_id);
+                                io::Error::new(io::ErrorKind::Other, "TODO", None)
+                            })
                     },
                     None     => {
                         // Need to wait... Store it? Same implementation as a candidate.
