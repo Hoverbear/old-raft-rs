@@ -371,21 +371,24 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 // claiming to be leader. If the leader’s term (included in its RPC) is at least as large
                 // as the candidate’s current term, then the candidate recognizes the leader as legitimate
                 // and returns to follower state. If the term in the RPC is smaller than the candidate’s
-                // current term, then the candidate rejects the RPC and con- tinues in candidate state.
+                // current term, then the candidate rejects the RPC and continues in candidate state.
                 // ---
-                // The Raft paper doesn't talk about this at all so I presume we treat it like append_entries.
-                if self.persistent_state.get_current_term() < call.term {
-                    // TODO: I guess we should accept and become a follower?
-                    info!("ID {}:C: TO {} ACCEPT request_vote", self.own_id, source_id);
-                    self.candidate_to_follower(call.candidate_id, call.term);
-                    RemoteProcedureResponse::accept(call.uuid, call.term,
-                            self.persistent_state.get_last_index(), self.volatile_state.commit_index)
-                } else {
-                    // Reject it.
-                    info!("ID {}:C: TO {} REJECT request_vote", self.own_id, source_id);
-                    RemoteProcedureResponse::reject(call.uuid, call.term, self.leader_id,
-                        self.persistent_state.get_last_index() - 1, self.volatile_state.commit_index)
-                }
+                // The Raft paper doesn't talk about this case at all.
+                // I assume the node simply refuses.
+                // At first, i had this acting like AppendEntries, but this seems to be causing voting deadlocks.
+                // ---
+                // if self.persistent_state.get_current_term() < call.term {
+                //     // TODO: I guess we should accept and become a follower?
+                //     info!("ID {}:C: TO {} ACCEPT request_vote", self.own_id, source_id);
+                //     self.candidate_to_follower(call.candidate_id, call.term);
+                //     RemoteProcedureResponse::accept(call.uuid, call.term,
+                //             self.persistent_state.get_last_index(), self.volatile_state.commit_index)
+                // } else {
+                // Reject it.
+                info!("ID {}:C: TO {} REJECT request_vote: Am Candidate.", self.own_id, source_id);
+                RemoteProcedureResponse::reject(call.uuid, call.term, self.leader_id,
+                    self.persistent_state.get_last_index() - 1, self.volatile_state.commit_index)
+                // }
             }
         }
     }
@@ -510,7 +513,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     // Pass back into Follower.
                     self.handle_append_entries(call, source)
                 } else {
-                    info!("ID {}:C: FROM {} REJECT append_entries: Term not strictly higher.", self.own_id, source_id);
+                    info!("ID {}:C: FROM {} REJECT append_entries: Term not higher or equal.", self.own_id, source_id);
                     RemoteProcedureResponse::reject(
                         call.uuid,
                         self.persistent_state.get_current_term(),
@@ -636,15 +639,9 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                         transaction.state = TransactionState::Rejected;
                     }
                 }
-                info!("ID {}:C: FROM {} MAY FOLLOW.", self.own_id, source_id);
-                self.persistent_state.set_current_term(response.term).unwrap();
-                match response.current_leader {
-                    Some(leader) => self.candidate_to_follower(
-                        leader,
-                        response.term
-                    ),
-                    None => self.reset_timer(),
-                }
+                info!("ID {}:C: REJECT FROM {}.", self.own_id, source_id);
+                // The raft paper explicitly states that the candidate will only follow a different node
+                // if it recieves an AppendEntries.
             }
         }
 
