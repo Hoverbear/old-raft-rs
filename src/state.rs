@@ -12,7 +12,7 @@ use std::str::StrExt;
 use std::io;
 use std::io::{Write, ReadExt, Seek};
 use std::marker;
-use std::collections::VecDeque;
+use std::collections::{hash_map, HashMap, VecDeque};
 
 /// Persistent state
 /// **Must be updated to stable storage before RPC response.**
@@ -205,12 +205,57 @@ pub struct VolatileState {
 
 /// Leader Only
 /// **Reinitialized after election.**
-#[derive(PartialEq, Eq, Clone)]
+#[derive(Clone)]
 pub struct LeaderState {
-    pub next_index: Vec<u64>,
-    pub match_index: Vec<u64>
+    last_index: u64,
+    next_index: HashMap<u64, u64>,
+    match_index: HashMap<u64, u64>,
 }
 
+impl LeaderState {
+
+    /// Returns a new `LeaderState` struct.
+    ///
+    /// `last_index` must be the index of the leaders most recent log entry at
+    /// the time of election.
+    pub fn new(last_index: u64) -> LeaderState {
+        LeaderState {
+            last_index: last_index,
+            next_index: HashMap::new(),
+            match_index: HashMap::new(),
+        }
+    }
+
+    /// Returns the next log entry index of the follower node.
+    pub fn next_index(&mut self, node: u64) -> u64 {
+        match self.next_index.entry(node) {
+            hash_map::Entry::Occupied(entry) => *entry.get(),
+            hash_map::Entry::Vacant(entry) => *entry.insert(self.last_index + 1),
+        }
+    }
+
+    /// Sets the next log entry index of the follower node.
+    pub fn set_next_index(&mut self, node: u64, index: u64) {
+        self.next_index[node] = index;
+    }
+
+    /// Returns the index of the highest log entry known to be replicated on
+    /// the follower node.
+    pub fn match_index(&self, node: u64) -> u64 {
+        *self.match_index.get(&node).unwrap_or(&0)
+    }
+
+    /// Sets the index of the highest log entry known to be replicated on the
+    /// follower node.
+    pub fn set_match_index(&mut self, node: u64, index: u64) {
+        self.match_index[node] = index;
+    }
+
+    /// Counts the number of follower nodes containing the given log index.
+    pub fn count_match_indexes(&self, index: u64) -> usize {
+        self.match_index.values().filter(|&&i| i >= index).count()
+    }
+}
 
 /// Nodes can either be:
 ///
@@ -219,7 +264,7 @@ pub struct LeaderState {
 ///     replicated, and issuing heartbeats..
 ///   * A `Candidate`, which campaigns in an election and may become a `Leader` (if it gets enough
 ///     votes) or a `Follower`, if it hears from a `Leader`.
-#[derive(PartialEq, Eq, Clone)]
+#[derive(Clone)]
 pub enum NodeState {
     Follower(VecDeque<Transaction>),
     Leader(LeaderState),
