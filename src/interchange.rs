@@ -68,7 +68,7 @@ impl<T> RemoteProcedureCall<T> {
 }
 
 /// Data interchange format for RPC responses.
-/// * `Accepted` mean that it worked.
+/// * `Accepted` means that it worked.
 /// * `Rejected` means that `rpc.term < node.persistent_state.current_term` or if the
 /// Node's `log` doesn't contain the entry at `rpc.prev_log_index` that maches `prev_log_term`.
 /// The caller should follow the `current_leader` it is directed to.

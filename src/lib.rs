@@ -175,8 +175,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 //       in the cluster for now?
                 // This is possibly an RPC from another node. Try to parse it out
                 // and determine what to do based on it's variant.
-                let data = str::from_utf8(&mut read_buffer[.. num_read])
-                    .unwrap();
+                let data = str::from_utf8(&mut read_buffer[.. num_read]).unwrap();
                 if let Ok(rpc) = json::decode::<RemoteProcedureCall<T>>(data) {
                     debug!("ID {}: FROM {:?} RECIEVED {:?}", self.own_id, source, rpc);
                     let rpr = match rpc {
@@ -537,10 +536,10 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         match self.state {
             Leader(ref mut state) => {
                 // Should be an AppendEntries request response.
-                state.match_index[source_id as usize] = response.match_index;
-                state.next_index[source_id as usize] = response.next_index;
-                let have_index_commited = state.match_index.iter().filter(|&&val| val >= response.match_index).count();
-                if have_index_commited >= majority && self.volatile_state.commit_index < response.match_index {
+                state.set_match_index(source_id, response.match_index);
+                state.set_next_index(source_id, response.next_index);
+                if response.match_index > self.volatile_state.commit_index
+                    && state.count_match_indexes(response.match_index) >= majority {
                     self.volatile_state.commit_index = response.match_index;
                     info!("ID {}:L: COMMITS {}", self.own_id, self.volatile_state.commit_index);
                 }
@@ -719,7 +718,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     if id == self.own_id { continue }
                     let entries_they_need = {
                         if let Leader(ref mut state) = self.state {
-                            let next_index = state.next_index[id as usize];
+                            let next_index = state.next_index(id);
                             let last_in_log = self.persistent_state.get_last_index();
 
                             self.persistent_state.retrieve_entries(next_index, last_in_log+1) // Get them all.
@@ -728,7 +727,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     };
                     let (prev_log_term, prev_log_index) = {
                         if let Leader(ref mut state) = self.state {
-                            let mut prev_log_index = state.next_index[id as usize]; // Want prev
+                            let mut prev_log_index = state.next_index(id); // Want prev
                             if prev_log_index != 0 { prev_log_index -= 1; }
                             let term = self.persistent_state.retrieve_entry(prev_log_index)
                                 .map(|(t, _)| t)
@@ -808,10 +807,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     fn candidate_to_leader(&mut self) {
         info!("ID {}: LEADER -> LEADER", self.own_id);
         self.state = match self.state {
-            Candidate(_) => Leader(LeaderState {
-                next_index: vec![0u64; self.id_to_addr.len()],
-                match_index: vec![0u64; self.id_to_addr.len()],
-            }),
+            Candidate(_) => Leader(LeaderState::new(self.persistent_state.get_last_index())),
             _ => panic!("Called candidate_to_leader() but was not Candidate.")
         };
         self.persistent_state.inc_current_term();
