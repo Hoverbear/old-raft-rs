@@ -8,6 +8,7 @@ use rustc_serialize::{Encodable};
 use uuid::Uuid;
 
 use LogIndex;
+use Term;
 
 /// Data interchange format for RPC calls. These should match directly to the Raft paper's RPC
 /// descriptions.
@@ -19,27 +20,27 @@ pub enum RemoteProcedureCall<T> {
 
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub struct AppendEntries<T> {
-    pub term: u64,
+    pub term: Term,
     pub prev_log_index: LogIndex,
-    pub prev_log_term: u64,
-    pub entries: Vec<(u64, T)>,
+    pub prev_log_term: Term,
+    pub entries: Vec<(Term, T)>,
     pub leader_commit: LogIndex,
     pub uuid: uuid::Uuid, // For tracking ACKs
 }
 
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub struct RequestVote {
-    pub term: u64,
+    pub term: Term,
     pub last_log_index: LogIndex,
-    pub last_log_term: u64,
+    pub last_log_term: Term,
     pub uuid: uuid::Uuid, // For tracking ACKs
 }
 
 impl<T> RemoteProcedureCall<T> {
     /// Returns (term, success)
-    pub fn append_entries(term: u64,
-                          prev_log_index: LogIndex, prev_log_term: u64,
-                          entries: Vec<(u64, T)>, leader_commit: LogIndex)
+    pub fn append_entries(term: Term,
+                          prev_log_index: LogIndex, prev_log_term: Term,
+                          entries: Vec<(Term, T)>, leader_commit: LogIndex)
                           -> (Uuid, RemoteProcedureCall<T>) {
         let id = Uuid::new_v4();
         (id.clone(), RemoteProcedureCall::AppendEntries(AppendEntries::<T> {
@@ -53,8 +54,8 @@ impl<T> RemoteProcedureCall<T> {
     }
 
     /// Returns (term, voteGranted)
-    pub fn request_vote(term: u64,
-                        last_log_index: LogIndex, last_log_term: u64)
+    pub fn request_vote(term: Term,
+                        last_log_index: LogIndex, last_log_term: Term)
                         -> (Uuid, RemoteProcedureCall<T>) {
         let id = Uuid::new_v4();
         (id.clone(), RemoteProcedureCall::RequestVote(RequestVote {
@@ -81,7 +82,7 @@ pub enum RemoteProcedureResponse {
 #[derive(RustcEncodable, RustcDecodable, Debug)]
 pub struct Accepted {
     pub uuid: Uuid,
-    pub term: u64,
+    pub term: Term,
     pub match_index: LogIndex, // For Leader State
     pub next_index: LogIndex,  // For Leader State
 }
@@ -89,14 +90,14 @@ pub struct Accepted {
 #[derive(RustcEncodable, RustcDecodable, Debug)]
 pub struct Rejected {
     pub uuid: Uuid,
-    pub term: u64,
+    pub term: Term,
     pub match_index: LogIndex, // For Leader State
     pub next_index: LogIndex,  // For Leader State
 }
 
 impl RemoteProcedureResponse {
     /// Creates a new RemoteProcedureResponse::Accepted.
-    pub fn accept(uuid: Uuid, term: u64, match_index: LogIndex, next_index: LogIndex) -> RemoteProcedureResponse {
+    pub fn accept(uuid: Uuid, term: Term, match_index: LogIndex, next_index: LogIndex) -> RemoteProcedureResponse {
         RemoteProcedureResponse::Accepted(Accepted {
             uuid: uuid,
             term: term,
@@ -105,7 +106,7 @@ impl RemoteProcedureResponse {
         })
     }
     /// Creates a new RemoteProcedureResponse::rejected.
-    pub fn reject(uuid: Uuid, term: u64,
+    pub fn reject(uuid: Uuid, term: Term,
                   match_index: LogIndex, next_index: LogIndex)
                   -> RemoteProcedureResponse {
         RemoteProcedureResponse::Rejected(Rejected {
@@ -141,7 +142,7 @@ pub struct IndexRange {
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub struct AppendRequest<T> {
     pub prev_log_index: LogIndex,
-    pub prev_log_term: u64,
+    pub prev_log_term: Term,
     pub entries: Vec<T>,
 }
 
@@ -155,7 +156,7 @@ impl<T> ClientRequest<T> {
     }
 
     /// Returns (term, voteGranted)
-    pub fn append_request(prev_log_index: LogIndex, prev_log_term: u64, entries: Vec<T>) -> ClientRequest<T> {
+    pub fn append_request(prev_log_index: LogIndex, prev_log_term: Term, entries: Vec<T>) -> ClientRequest<T> {
         ClientRequest::AppendRequest(AppendRequest {
             prev_log_index: prev_log_index,
             prev_log_term: prev_log_term,

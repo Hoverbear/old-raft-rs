@@ -11,8 +11,7 @@ use std::old_io::net::ip::SocketAddr;
 use std::old_io::timer::Timer;
 use std::time::Duration;
 
-use raft::LogIndex;
-use raft::RaftNode;
+use raft::{LogIndex, RaftNode, Term};
 use raft::interchange::{ClientRequest, AppendRequest, IndexRange};
 
 fn wait_a_second() {
@@ -58,7 +57,7 @@ fn basic_test() {
     let test_command = ClientRequest::AppendRequest(AppendRequest {
         entries: vec!["foo".to_string()],
         prev_log_index: LogIndex(0),
-        prev_log_term: 0,
+        prev_log_term: Term(0),
     });
     log_0_sender.send(test_command.clone()).unwrap();
     // Get the result.
