@@ -20,7 +20,6 @@ pub mod state;
 use std::{io, str, thread};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
-use std::num::Int;
 use std::old_io::IoError;
 use std::old_io::net::ip::SocketAddr;
 use std::old_io::net::udp::UdpSocket;
@@ -52,13 +51,17 @@ pub struct Term(pub u64);
 impl ops::Add<u64> for Term {
     type Output = Term;
     fn add(self, rhs: u64) -> Term {
-        Term(self.0.checked_add(rhs).expect("overflow while incrementing Term"))
+        // TODO: reenable overflow checking
+        // Term(self.0.checked_add(rhs).expect("overflow while incrementing Term"))
+        Term(self.0 + rhs)
     }
 }
 impl ops::Sub<u64> for Term {
     type Output = Term;
     fn sub(self, rhs: u64) -> Term {
-        Term(self.0.checked_sub(rhs).expect("underflow while decrementing Term"))
+        // TODO: reenable underflow checking
+        // Term(self.0.checked_sub(rhs).expect("underflow while decrementing Term"))
+        Term(self.0 - rhs)
     }
 }
 
@@ -68,13 +71,17 @@ pub struct LogIndex(pub u64);
 impl ops::Add<u64> for LogIndex {
     type Output = LogIndex;
     fn add(self, rhs: u64) -> LogIndex {
-        LogIndex(self.0.checked_add(rhs).expect("overflow while incrementing LogIndex"))
+        // TODO: reenable overflow checking
+        // LogIndex(self.0.checked_add(rhs).expect("overflow while incrementing LogIndex"))
+        LogIndex(self.0 + rhs)
     }
 }
 impl ops::Sub<u64> for LogIndex {
     type Output = LogIndex;
     fn sub(self, rhs: u64) -> LogIndex {
-        LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
+        // TODO: reenable underflow checking
+        //LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
+        LogIndex(self.0 - rhs)
     }
 }
 
