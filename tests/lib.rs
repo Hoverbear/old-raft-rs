@@ -61,7 +61,6 @@ fn basic_test() {
     });
     log_0_sender.send(test_command.clone()).unwrap();
     // Get the result.
-    wait_a_second();
     let event = log_0_reciever.recv()
         .ok().expect("Didn't recieve in a reasonable time.");
     assert!(event.is_ok()); // Workaround until we build a proper stream.
@@ -88,7 +87,6 @@ fn basic_test() {
     });
     log_0_sender.send(test_command.clone()).unwrap();
     // Get the result.
-    wait_a_second();
     let event = log_0_reciever.recv()
         .ok().expect("Didn't recieve in a reasonable time.");
     assert!(event.is_ok()); // Workaround until we build a proper stream.

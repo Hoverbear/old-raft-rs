@@ -9,6 +9,7 @@
 #![feature(old_path)]
 #![feature(fs)]
 #![feature(std_misc)]
+#![feature(collections)]
 
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate uuid;
@@ -18,7 +19,7 @@ pub mod interchange;
 pub mod state;
 
 use std::{io, str, thread};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque, BitSet};
 use std::fmt::Debug;
 use std::num::Int;
 use std::old_io::IoError;
@@ -125,6 +126,7 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     leader: Option<SocketAddr>,
     address: SocketAddr,
     cluster_members: HashSet<SocketAddr>,
+    notice_requests: BitSet, // When append_request is issues this gets flagged for that commit.
     // Channels and Sockets
     heartbeat: Receiver<()>,
     socket: UdpSocket,
@@ -172,6 +174,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 leader: None,
                 address: address,
                 cluster_members: cluster_members,
+                notice_requests: BitSet::new(),
                 // Blank timer for now.
                 heartbeat: timer.oneshot(Duration::milliseconds(rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX))), // If this fails we're in trouble.
                 timer: timer,
@@ -237,12 +240,17 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                                 info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
                                 self.res_send.send(result).unwrap();
                             },
-                            // TODO: Redesign this...
                             ClientRequest::AppendRequest(request) => {
+                                let target = request.prev_log_index + request.entries.len() as u64;
                                 let result = self.handle_append_request(request)
                                     .map(|_| Vec::new());
+                                // If it's `Ok` we should respond once it's commited.
+                                if result.is_ok() {
+                                    self.notice_requests.insert(target.0 as usize);
+                                } else {
                                     info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
-                                self.res_send.send(result).unwrap();
+                                    self.res_send.send(result).unwrap();
+                                }
                             },
                         };
 
@@ -454,14 +462,16 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                         call.term,
                         self.persistent_state.get_current_term()
                     );
+                    let mut next = self.persistent_state.get_last_index().0;
+                    if next == 0 { next = 1; } else { next += 1; }
                     RemoteProcedureResponse::reject(
                         call.uuid,
                         self.persistent_state.get_current_term(),
                         self.volatile_state.commit_index, // TODO Maybe wrong.
-                        self.persistent_state.get_last_index() + 1,
+                        LogIndex(next),
                     )
                 } else if calculated_prev_log_term != call.prev_log_term {
-                    info!("ID {}:F: FROM {} REJECT append_entries: prev_log_term is wrong {:?} != {:?}", self.address, source,
+                    info!("ID {}:F: FROM {} ACCEPT append_entries: prev_log_term is wrong {:?} != {:?}", self.address, source,
                         calculated_prev_log_term,
                         call.prev_log_term
                     );
@@ -471,15 +481,15 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     self.persistent_state.set_current_term(call.term).unwrap();
                     self.persistent_state.purge_from_index(call.prev_log_index)
                         .unwrap();
+                    // Update Commit and notify if needed.
                     self.volatile_state.commit_index = call.leader_commit;
-                    self.persistent_state.append_entries(call.prev_log_index, call.prev_log_term, call.entries)
-                        .unwrap();
-                    self.reset_timer();
+                    let mut next = self.persistent_state.get_last_index().0;
+                    if next == 0 { next = 1; } else { next += 1; }
                     RemoteProcedureResponse::accept(
                         call.uuid,
                         self.persistent_state.get_current_term(),
                         self.volatile_state.commit_index, // TODO Maybe wrong.
-                        self.persistent_state.get_last_index(), // Will be -1
+                        LogIndex(next), // Will be -1
                     )
                 } else {
                     // Accept it!
@@ -493,12 +503,20 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     if call.leader_commit > self.volatile_state.commit_index {
                         self.volatile_state.commit_index = call.leader_commit;
                     }
+                    if self.notice_requests.remove(&(self.volatile_state.commit_index.0 as usize)) {
+                        // Need to notify.
+                        info!("ID {}:F: RESPONDS TO CLIENT OK", self.address);
+                        self.res_send.send(Ok(vec![])).unwrap();
+                    }
+                    self.reset_timer();
+                    let mut next = self.persistent_state.get_last_index().0;
+                    if next == 0 { next = 1; } else { next += 1; }
                     self.reset_timer();
                     RemoteProcedureResponse::accept(
                         call.uuid,
                         self.persistent_state.get_current_term(),
                         call.prev_log_index, // TODO Maybe wrong.
-                        self.persistent_state.get_last_index() + 1,
+                        LogIndex(next),
                     )
                 }
 
@@ -539,6 +557,11 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     && state.count_match_indexes(response.match_index) >= majority {
                     self.volatile_state.commit_index = response.match_index;
                     info!("ID {}:L: COMMITS {:?}", self.address, self.volatile_state.commit_index);
+                    if self.notice_requests.remove(&(self.volatile_state.commit_index.0 as usize)) {
+                        // Need to notify.
+                        info!("ID {}:F: RESPONDS TO CLIENT OK", self.address);
+                        self.res_send.send(Ok(vec![])).unwrap();
+                    }
                 }
             },
             Follower(_) => {
@@ -581,7 +604,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     let number_of_votes = status.values().filter(|&transaction| {
                         transaction.state == TransactionState::Accepted
                     }).count();
-                    info!("ID {}:C: VOTES {} NEEDS {}", self.address, number_of_votes, majority);
+                    info!("ID {}:C: VOTES {} NEEDS MORE THAN {}", self.address, number_of_votes, majority);
                     if number_of_votes > majority {  // +1 for itself.
                         // Won election.
                         self.candidate_to_leader();
@@ -796,7 +819,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     }
     /// Called when a Candidate successfully gets elected.
     fn candidate_to_leader(&mut self) {
-        info!("ID {}: LEADER -> LEADER", self.address);
+        info!("ID {}: CANDIDATE -> LEADER", self.address);
         self.state = match self.state {
             Candidate(_) => Leader(LeaderState::new(self.persistent_state.get_last_index())),
             _ => panic!("Called candidate_to_leader() but was not Candidate.")

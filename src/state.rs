@@ -174,6 +174,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         Ok(out)
     }
     pub fn retrieve_entry(&mut self, index: LogIndex) -> io::Result<(Term, T)> {
+        if index.0 == 0 { return Err(io::Error::new(io::ErrorKind::InvalidInput, "Could not parse term.", None)); }
         let _ = self.move_to(index);
         let chars = self.log.by_ref()
             .chars()
@@ -341,6 +342,13 @@ fn test_persistent_state() {
     let path = Path::new("/tmp/test_path");
     fs::remove_file(&path.clone()).ok();
     let mut state = PersistentState::new(Term(0), path.clone());
+    // Check heartbeat
+    assert_eq!(state.append_entries(LogIndex(0), Term(0),
+        vec![]),
+        Ok(()));
+    assert_eq!(state.get_last_index(), LogIndex(0));
+    assert_eq!(state.get_last_term(), Term(0));
+    assert!(state.retrieve_entry(LogIndex(0)).is_err());
     // Add 1
     assert_eq!(state.append_entries(LogIndex(0), Term(0), // Zero is the initialization state.
         vec![(Term(1), "One".to_string())]),
