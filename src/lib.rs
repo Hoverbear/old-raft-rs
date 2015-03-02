@@ -24,6 +24,7 @@ use std::old_io::IoError;
 use std::old_io::net::ip::SocketAddr;
 use std::old_io::net::udp::UdpSocket;
 use std::old_io::timer::Timer;
+use std::ops;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::Duration;
 
@@ -43,6 +44,46 @@ use state::{NodeState, TransactionState, Transaction};
 const BUFFER_SIZE: usize = 4096;
 const HEARTBEAT_MIN: i64 = 150;
 const HEARTBEAT_MAX: i64 = 300;
+
+/// The term of a log entry.
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
+pub struct Term(pub u64);
+impl ops::Add<u64> for Term {
+    type Output = Term;
+    fn add(self, rhs: u64) -> Term {
+        // TODO: reenable overflow checking
+        // Term(self.0.checked_add(rhs).expect("overflow while incrementing Term"))
+        Term(self.0 + rhs)
+    }
+}
+impl ops::Sub<u64> for Term {
+    type Output = Term;
+    fn sub(self, rhs: u64) -> Term {
+        // TODO: reenable underflow checking
+        // Term(self.0.checked_sub(rhs).expect("underflow while decrementing Term"))
+        Term(self.0 - rhs)
+    }
+}
+
+/// The index of a log entry.
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
+pub struct LogIndex(pub u64);
+impl ops::Add<u64> for LogIndex {
+    type Output = LogIndex;
+    fn add(self, rhs: u64) -> LogIndex {
+        // TODO: reenable overflow checking
+        // LogIndex(self.0.checked_add(rhs).expect("overflow while incrementing LogIndex"))
+        LogIndex(self.0 + rhs)
+    }
+}
+impl ops::Sub<u64> for LogIndex {
+    type Output = LogIndex;
+    fn sub(self, rhs: u64) -> LogIndex {
+        // TODO: reenable underflow checking
+        //LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
+        LogIndex(self.0 - rhs)
+    }
+}
 
 /// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
 ///
@@ -95,7 +136,7 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     heartbeat: Receiver<()>,
     socket: UdpSocket,
     req_recv: Receiver<ClientRequest<T>>,
-    res_send: Sender<io::Result<Vec<(u64, T)>>>,
+    res_send: Sender<io::Result<Vec<(Term, T)>>>,
     // State
     rng: ThreadRng,
     timer: Timer,
@@ -115,13 +156,13 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     pub fn start(address: SocketAddr,
                  cluster_members: HashSet<SocketAddr>,
                  state_file: Path)
-                 -> (Sender<ClientRequest<T>>, Receiver<io::Result<Vec<(u64, T)>>>) {
+                 -> (Sender<ClientRequest<T>>, Receiver<io::Result<Vec<(Term, T)>>>) {
         // Setup the socket, make it not block.
         let mut socket = UdpSocket::bind(address).unwrap(); // TODO: Can we do better?
         socket.set_read_timeout(Some(0));
         // Communication channels.
         let (req_send, req_recv) = channel::<ClientRequest<T>>();
-        let (res_send, res_recv) = channel::<io::Result<Vec<(u64, T)>>>();
+        let (res_send, res_recv) = channel::<io::Result<Vec<(Term, T)>>>();
         // Fire up the thread.
         thread::Builder::new().name(format!("RaftNode {}", address)).spawn(move || {
             // Start up a RNG and Timer
@@ -130,10 +171,10 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             // Create the struct.
             let mut raft_node = RaftNode {
                 state: Follower(VecDeque::new()),
-                persistent_state: PersistentState::new(0, state_file),
+                persistent_state: PersistentState::new(Term(0), state_file),
                 volatile_state: VolatileState {
-                    commit_index: 0,
-                    last_applied: 0,
+                    commit_index: LogIndex(0),
+                    last_applied: LogIndex(0),
                 },
                 leader: None,
                 address: address,
@@ -255,7 +296,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             let (uuid, request) = RemoteProcedureCall::request_vote(
                 self.persistent_state.get_current_term() + 1,
                 self.volatile_state.last_applied,
-                0); // TODO: Get this.
+                Term(0)); // TODO: Get this.
             if member == self.address {
                 // Don't request of self.
                 (member, Transaction { uuid: uuid, state: TransactionState::Accepted })
@@ -320,7 +361,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                         // Decrement next_index
                         let prev = {
                             let idx = last_index;
-                            if idx == 0 { 0 } else { idx - 1 }
+                            if idx == LogIndex(0) { idx } else { idx - 1 }
                         };
                         info!("ID {}:F: TO {} REJECT request_vote: Checks {:?}", self.address, source, checks);
                         RemoteProcedureResponse::reject(
@@ -412,11 +453,11 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 let calculated_prev_log_term = {
                     match self.persistent_state.retrieve_entry(last_index) {
                         Ok((term, _)) => term,
-                        Err(_) => 0, // Means we don't even have that entry.
+                        Err(_) => Term(0), // Means we don't even have that entry.
                     }
                 };
                 if call.term < self.persistent_state.get_current_term() {
-                    info!("ID {}:F: FROM {} REJECT append_entries: Term out of date {} < {}", self.address, source,
+                    info!("ID {}:F: FROM {} REJECT append_entries: Term out of date {:?} < {:?}", self.address, source,
                         call.term,
                         self.persistent_state.get_current_term()
                     );
@@ -427,7 +468,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                         self.persistent_state.get_last_index() + 1,
                     )
                 } else if calculated_prev_log_term != call.prev_log_term {
-                    info!("ID {}:F: FROM {} REJECT append_entries: prev_log_term is wrong {} != {}", self.address, source,
+                    info!("ID {}:F: FROM {} REJECT append_entries: prev_log_term is wrong {:?} != {:?}", self.address, source,
                         calculated_prev_log_term,
                         call.prev_log_term
                     );
@@ -504,7 +545,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 if response.match_index > self.volatile_state.commit_index
                     && state.count_match_indexes(response.match_index) >= majority {
                     self.volatile_state.commit_index = response.match_index;
-                    info!("ID {}:L: COMMITS {}", self.address, self.volatile_state.commit_index);
+                    info!("ID {}:L: COMMITS {:?}", self.address, self.volatile_state.commit_index);
                 }
             },
             Follower(_) => {
@@ -655,7 +696,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         }
     }
     /// This is called when the client requests a specific index range on it's channel.
-    fn handle_index_range(&mut self, request: IndexRange) -> io::Result<Vec<(u64, T)>> {
+    fn handle_index_range(&mut self, request: IndexRange) -> io::Result<Vec<(Term, T)>> {
         info!("ID {}: HANDLE index_range", self.address);
         let end = if request.end_index > self.volatile_state.commit_index {
             self.volatile_state.commit_index
@@ -686,10 +727,10 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     let (prev_log_term, prev_log_index) = {
                         if let Leader(ref mut state) = self.state {
                             let mut prev_log_index = state.next_index(member); // Want prev
-                            if prev_log_index != 0 { prev_log_index -= 1; }
+                            if prev_log_index != LogIndex(0) { prev_log_index = prev_log_index - 1; }
                             let term = self.persistent_state.retrieve_entry(prev_log_index)
                                 .map(|(t, _)| t)
-                                .unwrap_or(0);
+                                .unwrap_or(Term(0));
                             (term, prev_log_index)
                         } else { unreachable!() }
                     };
@@ -743,7 +784,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     /// Called on heartbeat timeout.
     fn follower_to_candidate(&mut self) {
         // Need to increase term.
-        debug!("ID {}: FOLLOWER -> CANDIDATE: Term {}", self.address, self.persistent_state.get_current_term());
+        debug!("ID {}: FOLLOWER -> CANDIDATE: Term {:?}", self.address, self.persistent_state.get_current_term());
         self.state = match self.state {
             Follower(_) => Candidate(HashMap::new()),
             _ => panic!("Called follower_to_candidate() but was not Follower.")
@@ -773,8 +814,8 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         self.handle_timer();
     }
     /// Called when a candidate fails an election. Takes the new leader's ID, term.
-    fn candidate_to_follower(&mut self, leader: SocketAddr, term: u64) {
-        info!("ID {}: CANDIDATE -> FOLLOWER: Leader {}, Term {}", self.address, leader, term);
+    fn candidate_to_follower(&mut self, leader: SocketAddr, term: Term) {
+        info!("ID {}: CANDIDATE -> FOLLOWER: Leader {}, Term {:?}", self.address, leader, term);
         self.state = match self.state {
             Candidate(_) => Follower(VecDeque::new()),
             _ => panic!("Called candidate_to_follower() but was not Candidate.")
