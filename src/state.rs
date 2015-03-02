@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use state::NodeState::{Leader, Follower, Candidate};
 use state::TransactionState::{Polling, Accepted, Rejected};
+use LogIndex;
 
 /// Persistent state
 /// **Must be updated to stable storage before RPC response.**
@@ -22,7 +23,7 @@ pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
     current_term: u64,
     voted_for: Option<SocketAddr>,  // request_vote cares if this is `None`
     log: File,
-    last_index: u64,                // The last index of the file.
+    last_index: LogIndex,           // The last index of the file.
     last_term: u64,                 // The last index of the file.
     marker: marker::PhantomData<T>, // A marker... Because of
     // https://github.com/rust-lang/rfcs/blob/master/text/0738-variance.md#the-corner-case-unused-parameters-and-parameters-that-are-only-used-unsafely
@@ -40,13 +41,13 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             current_term: current_term,
             voted_for: None,
             log: file,
-            last_index: 0,
+            last_index: LogIndex(0),
             last_term: 0,
             marker: marker::PhantomData,
         }
     }
     /// Gets the `last_index` which you can use to make append requests with.
-    pub fn get_last_index(&self) -> u64 { self.last_index }
+    pub fn get_last_index(&self) -> LogIndex { self.last_index }
     pub fn get_last_term(&self) -> u64 { self.last_term }
     /// Gets the `current_term` which is used for request vote.
     pub fn get_current_term(&self) -> u64 { self.current_term }
@@ -74,8 +75,10 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         let candidate = voted_for.map(|v| v.to_string()).unwrap_or("".to_string());
         write!(&mut self.log, "{:20} {:40}\n", term, candidate)
     }
-    pub fn append_entries(&mut self, prev_log_index: u64, prev_log_term: u64,
-                      entries: Vec<(u64, T)>) -> io::Result<()> {
+    pub fn append_entries(&mut self,
+                          prev_log_index: LogIndex, prev_log_term: u64,
+                          entries: Vec<(u64, T)>)
+                          -> io::Result<()> {
         // TODO: No checking of `prev_log_index` & `prev_log_term` yet... Do we need to?
         let position = try!(self.move_to(prev_log_index + 1));
         self.last_index = prev_log_index;
@@ -90,8 +93,8 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             // TODO: I don't like the "doubling" here. How can we do this better?
             write!(&mut self.log, "{} {}\n", term, PersistentState::encode(entry)).unwrap();
         }
-        self.last_index = if self.last_index == 0 { // Empty
-            number as u64
+        self.last_index = if self.last_index == LogIndex(0) { // Empty
+            LogIndex(number as u64)
         } else { self.last_index + number as u64 };
         self.last_term = last_term;
         Ok(())
@@ -115,7 +118,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     }
     /// Returns the number of bytes containing `line` lines.
     /// TODO: Cache?
-    fn move_to(&mut self, line: u64) -> io::Result<u64> {
+    fn move_to(&mut self, index: LogIndex) -> io::Result<u64> {
         // Gotcha: The first line is NOT a log entry.
         let mut lines_read = 0u64;
         self.log.seek(io::SeekFrom::Start(0)).unwrap(); // Take the start.
@@ -126,7 +129,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
                     if val == '\n' {
                         lines_read += 1;
                         // Greater than because 1 indexed.
-                        if lines_read >= line {
+                        if lines_read >= index.0 {
                             false // At right location.
                         } else {
                             true // Not done yet, more lines to go.
@@ -145,21 +148,21 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         self.log.set_len(from_bytes) // Chop off the file at the given position.
     }
     /// Removes all entries from `from` to the last entry, inclusively.
-    pub fn purge_from_index(&mut self, from_line: u64) -> io::Result<()> {
-        let position = try!(self.move_to(from_line));
-        let last_index = from_line - 1; // We're 1 indexed.
+    pub fn purge_from_index(&mut self, from_index: LogIndex) -> io::Result<()> {
+        let position = try!(self.move_to(from_index));
+        let last_index = from_index - 1; // We're 1 indexed.
         self.last_index = last_index;
         self.last_term = self.retrieve_entry(last_index).map(|(t, _)| t).unwrap_or(0);
         self.purge_from_bytes(position)
     }
-    pub fn retrieve_entries(&mut self, start: u64, end: u64) -> io::Result<Vec<(u64, T)>> {
+    pub fn retrieve_entries(&mut self, start: LogIndex, end: LogIndex) -> io::Result<Vec<(u64, T)>> {
         let _ = self.move_to(start);
         let mut out = vec![];
         let mut read_in = self.log.by_ref()
             .chars()
             .take_while(|val| val.is_ok())
             .filter_map(|val| val.ok()); // We don't really care about issues here.
-        for _ in range(start, end +1) {
+        for _ in range(start.0, end.0 + 1) {
             let chars = read_in.by_ref()
                 .take_while(|&val| val != '\n')
                 .collect::<String>();
@@ -169,7 +172,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         }
         Ok(out)
     }
-    pub fn retrieve_entry(&mut self, index: u64) -> io::Result<(u64, T)> {
+    pub fn retrieve_entry(&mut self, index: LogIndex) -> io::Result<(u64, T)> {
         let _ = self.move_to(index);
         let chars = self.log.by_ref()
             .chars()
@@ -205,15 +208,15 @@ fn parse_entry<T: Encodable + Decodable + Send + Clone>(val: String) -> io::Resu
 /// Volatile state
 #[derive(Copy)]
 pub struct VolatileState {
-    pub commit_index: u64,
-    pub last_applied: u64
+    pub commit_index: LogIndex,
+    pub last_applied: LogIndex,
 }
 
 #[derive(Clone)]
 pub struct LeaderState {
-    last_index: u64,
-    next_index: HashMap<SocketAddr, u64>,
-    match_index: HashMap<SocketAddr, u64>,
+    last_index: LogIndex,
+    next_index: HashMap<SocketAddr, LogIndex>,
+    match_index: HashMap<SocketAddr, LogIndex>,
 }
 
 impl LeaderState {
@@ -224,7 +227,7 @@ impl LeaderState {
     ///
     /// * `last_index` - The index of the leader's most recent log entry at the
     ///                  time of election.
-    pub fn new(last_index: u64) -> LeaderState {
+    pub fn new(last_index: LogIndex) -> LeaderState {
         LeaderState {
             last_index: last_index,
             next_index: HashMap::new(),
@@ -233,7 +236,7 @@ impl LeaderState {
     }
 
     /// Returns the next log entry index of the follower node.
-    pub fn next_index(&mut self, node: SocketAddr) -> u64 {
+    pub fn next_index(&mut self, node: SocketAddr) -> LogIndex {
         match self.next_index.entry(node) {
             hash_map::Entry::Occupied(entry) => *entry.get(),
             hash_map::Entry::Vacant(entry) => *entry.insert(self.last_index + 1),
@@ -241,24 +244,24 @@ impl LeaderState {
     }
 
     /// Sets the next log entry index of the follower node.
-    pub fn set_next_index(&mut self, node: SocketAddr, index: u64) {
+    pub fn set_next_index(&mut self, node: SocketAddr, index: LogIndex) {
         self.next_index.insert(node, index);
     }
 
     /// Returns the index of the highest log entry known to be replicated on
     /// the follower node.
-    pub fn match_index(&self, node: SocketAddr) -> u64 {
-        *self.match_index.get(&node).unwrap_or(&0)
+    pub fn match_index(&self, node: SocketAddr) -> LogIndex {
+        *self.match_index.get(&node).unwrap_or(&LogIndex(0))
     }
 
     /// Sets the index of the highest log entry known to be replicated on the
     /// follower node.
-    pub fn set_match_index(&mut self, node: SocketAddr, index: u64) {
+    pub fn set_match_index(&mut self, node: SocketAddr, index: LogIndex) {
         self.match_index.insert(node, index);
     }
 
     /// Counts the number of follower nodes containing the given log index.
-    pub fn count_match_indexes(&self, index: u64) -> usize {
+    pub fn count_match_indexes(&self, index: LogIndex) -> usize {
         self.match_index.values().filter(|&&i| i >= index).count()
     }
 }
@@ -303,31 +306,31 @@ fn test_update_header() {
     let mut state = PersistentState::new(0, path);
 
     // Add 1
-    assert_eq!(state.append_entries(0, 0, // Zero is the initialization state.
+    assert_eq!(state.append_entries(LogIndex(0), 0, // Zero is the initialization state.
         vec![(1, "One".to_string())]),
         Ok(()));
     // Check 1
-    assert_eq!(state.retrieve_entry(1),
+    assert_eq!(state.retrieve_entry(LogIndex(1)),
         Ok((1, "One".to_string())));
-    assert_eq!(state.get_last_index(), 1);
+    assert_eq!(state.get_last_index(), LogIndex(1));
     assert_eq!(state.get_last_term(), 1);
 
     // Update current term
     state.set_current_term(1);
 
     // Check again
-    assert_eq!(state.retrieve_entry(1),
+    assert_eq!(state.retrieve_entry(LogIndex(1)),
         Ok((1, "One".to_string())));
-    assert_eq!(state.get_last_index(), 1);
+    assert_eq!(state.get_last_index(), LogIndex(1));
     assert_eq!(state.get_last_term(), 1);
 
     // Update voted for
     state.set_voted_for(Some(SocketAddr::from_str("127.0.0.1:11110").unwrap())).unwrap();
 
     // Check again
-    assert_eq!(state.retrieve_entry(1),
+    assert_eq!(state.retrieve_entry(LogIndex(1)),
         Ok((1, "One".to_string())));
-    assert_eq!(state.get_last_index(), 1);
+    assert_eq!(state.get_last_index(), LogIndex(1));
     assert_eq!(state.get_last_term(), 1);
 }
 
@@ -338,80 +341,80 @@ fn test_persistent_state() {
     fs::remove_file(&path.clone()).ok();
     let mut state = PersistentState::new(0, path.clone());
     // Add 1
-    assert_eq!(state.append_entries(0, 0, // Zero is the initialization state.
+    assert_eq!(state.append_entries(LogIndex(0), 0, // Zero is the initialization state.
         vec![(1, "One".to_string())]),
         Ok(()));
     // Check 1
-    assert_eq!(state.retrieve_entry(1),
+    assert_eq!(state.retrieve_entry(LogIndex(1)),
         Ok((1, "One".to_string())));
-    assert_eq!(state.get_last_index(), 1);
+    assert_eq!(state.get_last_index(), LogIndex(1));
     assert_eq!(state.get_last_term(), 1);
     // Do a blank check.
-    assert_eq!(state.append_entries(1,1, vec![]),
+    assert_eq!(state.append_entries(LogIndex(1),1, vec![]),
         Ok(()));
-        assert_eq!(state.get_last_index(), 1);
+        assert_eq!(state.get_last_index(), LogIndex(1));
         assert_eq!(state.get_last_term(), 1);
     // Add 2
-    assert_eq!(state.append_entries(1, 1,
+    assert_eq!(state.append_entries(LogIndex(1), 1,
         vec![(2, "Two".to_string())]),
         Ok(()));
-    assert_eq!(state.get_last_index(), 2);
+    assert_eq!(state.get_last_index(), LogIndex(2));
     assert_eq!(state.get_last_term(), 2);
     // Check 1, 2
-    assert_eq!(state.retrieve_entries(1, 2),
+    assert_eq!(state.retrieve_entries(LogIndex(1), LogIndex(2)),
         Ok(vec![(1, "One".to_string()),
                 (2, "Two".to_string())
         ]));
     // Check 2
-    assert_eq!(state.retrieve_entry(2),
+    assert_eq!(state.retrieve_entry(LogIndex(2)),
         Ok((2, "Two".to_string())));
     // Add 3, 4
-    assert_eq!(state.append_entries(2, 2,
+    assert_eq!(state.append_entries(LogIndex(2), 2,
         vec![(3, "Three".to_string()),
              (4, "Four".to_string())]),
         Ok(()));
     // Check 3, 4
-    assert_eq!(state.retrieve_entries(3, 4),
+    assert_eq!(state.retrieve_entries(LogIndex(3), LogIndex(4)),
         Ok(vec![(3, "Three".to_string()),
                 (4, "Four".to_string())
         ]));
-    assert_eq!(state.get_last_index(), 4);
+    assert_eq!(state.get_last_index(), LogIndex(4));
     assert_eq!(state.get_last_term(), 4);
     // Remove 3, 4
-    assert_eq!(state.purge_from_index(3),
+    assert_eq!(state.purge_from_index(LogIndex(3)),
         Ok(()));
-    assert_eq!(state.get_last_index(), 2);
+    assert_eq!(state.get_last_index(), LogIndex(2));
     assert_eq!(state.get_last_term(), 2);
     // Check 3, 4 are removed, and that code handles lack of entry gracefully.
-    assert_eq!(state.retrieve_entries(0, 4),
+    assert_eq!(state.retrieve_entries(LogIndex(0), LogIndex(4)),
         Ok(vec![(1, "One".to_string()),
                 (2, "Two".to_string())
         ]));
     // Add 3, 4, 5
-    assert_eq!(state.append_entries(2, 2,
+    assert_eq!(state.append_entries(LogIndex(2), 2,
         vec![(3, "Three".to_string()),
              (4, "Four".to_string()),
              (5, "Five".to_string())]),
         Ok(()));
-    assert_eq!(state.get_last_index(), 5);
+    assert_eq!(state.get_last_index(), LogIndex(5));
     assert_eq!(state.get_last_term(), 5);
     // Add 3, 4 again. (5 should be purged)
-    assert_eq!(state.append_entries(2, 2,
+    assert_eq!(state.append_entries(LogIndex(2), 2,
         vec![(3, "Three".to_string()),
              (4, "Four".to_string())]),
         Ok(()));
-    assert_eq!(state.retrieve_entries(0, 4),
+    assert_eq!(state.retrieve_entries(LogIndex(0), LogIndex(4)),
         Ok(vec![(1, "One".to_string()),
                 (2, "Two".to_string()),
                 (3, "Three".to_string()),
                 (4, "Four".to_string()),
         ]));
-    assert_eq!(state.get_last_index(), 4);
+    assert_eq!(state.get_last_index(), LogIndex(4));
     assert_eq!(state.get_last_term(), 4);
     // Do a blank check.
-    assert_eq!(state.append_entries(4,4, vec![]),
+    assert_eq!(state.append_entries(LogIndex(4), 4, vec![]),
         Ok(()));
-    assert_eq!(state.get_last_index(), 4);
+    assert_eq!(state.get_last_index(), LogIndex(4));
     assert_eq!(state.get_last_term(), 4);
     fs::remove_file(&path.clone()).ok();
 }

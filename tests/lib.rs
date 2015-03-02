@@ -11,6 +11,7 @@ use std::old_io::net::ip::SocketAddr;
 use std::old_io::timer::Timer;
 use std::time::Duration;
 
+use raft::LogIndex;
 use raft::RaftNode;
 use raft::interchange::{ClientRequest, AppendRequest, IndexRange};
 
@@ -56,7 +57,7 @@ fn basic_test() {
     // Make a test send to that port.
     let test_command = ClientRequest::AppendRequest(AppendRequest {
         entries: vec!["foo".to_string()],
-        prev_log_index: 0,
+        prev_log_index: LogIndex(0),
         prev_log_term: 0,
     });
     log_0_sender.send(test_command.clone()).unwrap();
@@ -69,8 +70,8 @@ fn basic_test() {
 
     // Test Index.
     let test_index = ClientRequest::IndexRange(IndexRange {
-            start_index: 0,
-            end_index: 5,
+            start_index: LogIndex(0),
+            end_index: LogIndex(5),
     });
     log_0_sender.send(test_index.clone()).unwrap();
     // wait_a_second();
@@ -83,7 +84,7 @@ fn basic_test() {
     // Add something else.
     let test_command = ClientRequest::AppendRequest(AppendRequest {
         entries: vec!["bar".to_string(), "baz".to_string()],
-        prev_log_index: 1,
+        prev_log_index: LogIndex(1),
         prev_log_term: result.get(0).expect("Unable to get term.").0,
     });
     log_0_sender.send(test_command.clone()).unwrap();
@@ -95,8 +96,8 @@ fn basic_test() {
 
     // Test Index.
     let test_index = ClientRequest::IndexRange(IndexRange {
-            start_index: 0,
-            end_index: 5,
+            start_index: LogIndex(0),
+            end_index: LogIndex(5),
     });
     log_0_sender.send(test_index.clone()).unwrap();
     // wait_a_second();

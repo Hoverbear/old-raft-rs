@@ -7,6 +7,8 @@ extern crate uuid;
 use rustc_serialize::{Encodable};
 use uuid::Uuid;
 
+use LogIndex;
+
 /// Data interchange format for RPC calls. These should match directly to the Raft paper's RPC
 /// descriptions.
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
@@ -18,17 +20,17 @@ pub enum RemoteProcedureCall<T> {
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub struct AppendEntries<T> {
     pub term: u64,
-    pub prev_log_index: u64,
+    pub prev_log_index: LogIndex,
     pub prev_log_term: u64,
     pub entries: Vec<(u64, T)>,
-    pub leader_commit: u64,
+    pub leader_commit: LogIndex,
     pub uuid: uuid::Uuid, // For tracking ACKs
 }
 
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub struct RequestVote {
     pub term: u64,
-    pub last_log_index: u64,
+    pub last_log_index: LogIndex,
     pub last_log_term: u64,
     pub uuid: uuid::Uuid, // For tracking ACKs
 }
@@ -36,8 +38,8 @@ pub struct RequestVote {
 impl<T> RemoteProcedureCall<T> {
     /// Returns (term, success)
     pub fn append_entries(term: u64,
-                          prev_log_index: u64, prev_log_term: u64,
-                          entries: Vec<(u64, T)>, leader_commit: u64)
+                          prev_log_index: LogIndex, prev_log_term: u64,
+                          entries: Vec<(u64, T)>, leader_commit: LogIndex)
                           -> (Uuid, RemoteProcedureCall<T>) {
         let id = Uuid::new_v4();
         (id.clone(), RemoteProcedureCall::AppendEntries(AppendEntries::<T> {
@@ -52,7 +54,7 @@ impl<T> RemoteProcedureCall<T> {
 
     /// Returns (term, voteGranted)
     pub fn request_vote(term: u64,
-                        last_log_index: u64, last_log_term: u64)
+                        last_log_index: LogIndex, last_log_term: u64)
                         -> (Uuid, RemoteProcedureCall<T>) {
         let id = Uuid::new_v4();
         (id.clone(), RemoteProcedureCall::RequestVote(RequestVote {
@@ -80,21 +82,21 @@ pub enum RemoteProcedureResponse {
 pub struct Accepted {
     pub uuid: Uuid,
     pub term: u64,
-    pub match_index: u64, // For Leader State
-    pub next_index: u64,  // For Leader State
+    pub match_index: LogIndex, // For Leader State
+    pub next_index: LogIndex,  // For Leader State
 }
 
 #[derive(RustcEncodable, RustcDecodable, Debug)]
 pub struct Rejected {
     pub uuid: Uuid,
     pub term: u64,
-    pub match_index: u64, // For Leader State
-    pub next_index: u64,  // For Leader State
+    pub match_index: LogIndex, // For Leader State
+    pub next_index: LogIndex,  // For Leader State
 }
 
 impl RemoteProcedureResponse {
     /// Creates a new RemoteProcedureResponse::Accepted.
-    pub fn accept(uuid: Uuid, term: u64, match_index: u64, next_index: u64) -> RemoteProcedureResponse {
+    pub fn accept(uuid: Uuid, term: u64, match_index: LogIndex, next_index: LogIndex) -> RemoteProcedureResponse {
         RemoteProcedureResponse::Accepted(Accepted {
             uuid: uuid,
             term: term,
@@ -104,7 +106,7 @@ impl RemoteProcedureResponse {
     }
     /// Creates a new RemoteProcedureResponse::rejected.
     pub fn reject(uuid: Uuid, term: u64,
-                  match_index: u64, next_index: u64)
+                  match_index: LogIndex, next_index: LogIndex)
                   -> RemoteProcedureResponse {
         RemoteProcedureResponse::Rejected(Rejected {
             uuid: uuid,
@@ -132,20 +134,20 @@ pub enum ClientRequest<T> {
 
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub struct IndexRange {
-    pub start_index: u64,
-    pub end_index: u64,
+    pub start_index: LogIndex,
+    pub end_index: LogIndex,
 }
 
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 pub struct AppendRequest<T> {
-    pub prev_log_index: u64,
+    pub prev_log_index: LogIndex,
     pub prev_log_term: u64,
     pub entries: Vec<T>,
 }
 
 impl<T> ClientRequest<T> {
     /// Returns (term, success)
-    pub fn index_range(start: u64, end: u64) -> ClientRequest<T> {
+    pub fn index_range(start: LogIndex, end: LogIndex) -> ClientRequest<T> {
         ClientRequest::IndexRange(IndexRange {
             start_index: start,
             end_index: end,
@@ -153,7 +155,7 @@ impl<T> ClientRequest<T> {
     }
 
     /// Returns (term, voteGranted)
-    pub fn append_request(prev_log_index: u64, prev_log_term: u64, entries: Vec<T>) -> ClientRequest<T> {
+    pub fn append_request(prev_log_index: LogIndex, prev_log_term: u64, entries: Vec<T>) -> ClientRequest<T> {
         ClientRequest::AppendRequest(AppendRequest {
             prev_log_index: prev_log_index,
             prev_log_term: prev_log_term,
