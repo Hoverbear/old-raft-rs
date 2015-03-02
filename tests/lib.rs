@@ -1,21 +1,18 @@
-#![feature(old_path)]
-#![feature(old_io)]
-#![feature(fs)]
-#![feature(std_misc)]
+#![feature(fs, old_io, old_path, std_misc)]
 
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate raft;
 extern crate env_logger;
 extern crate log;
 
-use raft::interchange::{ClientRequest, AppendRequest, IndexRange};
-use raft::RaftNode;
-
+use std::fs;
+use std::old_io::net::ip::IpAddr::Ipv4Addr;
+use std::old_io::net::ip::SocketAddr;
 use std::old_io::timer::Timer;
 use std::time::Duration;
-use std::old_io::net::ip::SocketAddr;
-use std::old_io::net::ip::IpAddr::Ipv4Addr;
-use std::fs;
+
+use raft::RaftNode;
+use raft::interchange::{ClientRequest, AppendRequest, IndexRange};
 
 fn wait_a_second() {
     let mut timer = Timer::new().unwrap();
@@ -32,29 +29,29 @@ fn basic_test() {
     fs::remove_file(&Path::new("/tmp/test0")).ok();
     fs::remove_file(&Path::new("/tmp/test1")).ok();
     fs::remove_file(&Path::new("/tmp/test2")).ok();
+
     let nodes = vec![
-        (0, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11110 }),
-        (1, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 }),
-        (2, SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 }),
+        SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11110 },
+        SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 },
+        SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 },
     ];
 
     // Create the nodes.
     let (log_0_sender, log_0_reciever) = RaftNode::<String>::start(
-        0,
-        nodes.clone(),
+        nodes[0].clone(),
+        nodes.clone().into_iter().collect(),
         Path::new("/tmp/test0")
     );
     let (log_1_sender, log_1_reciever) = RaftNode::<String>::start(
-        1,
-        nodes.clone(),
+        nodes[1].clone(),
+        nodes.clone().into_iter().collect(),
         Path::new("/tmp/test1")
     );
     let (log_2_sender, log_2_reciever) = RaftNode::<String>::start(
-        2,
-        nodes.clone(),
+        nodes[2].clone(),
+        nodes.clone().into_iter().collect(),
         Path::new("/tmp/test2")
     );
-
 
     // Make a test send to that port.
     let test_command = ClientRequest::AppendRequest(AppendRequest {

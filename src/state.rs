@@ -1,27 +1,29 @@
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate uuid;
 
-use uuid::Uuid;
-use rustc_serialize::{json, Encodable, Decodable};
+use std::collections::{hash_map, HashMap, VecDeque};
+use std::fs::{File, OpenOptions};
+use std::io::{self, Write, ReadExt, Seek};
+use std::marker;
+use std::old_io::net::ip::SocketAddr;
+use std::str::{self, StrExt};
+use std::string::ToString;
+
 use rustc_serialize::base64::{ToBase64, FromBase64, Config, CharacterSet, Newline};
+use rustc_serialize::{json, Encodable, Decodable};
+use uuid::Uuid;
+
 use state::NodeState::{Leader, Follower, Candidate};
 use state::TransactionState::{Polling, Accepted, Rejected};
-use std::fs::{File, OpenOptions};
-use std::str;
-use std::str::StrExt;
-use std::io;
-use std::io::{Write, ReadExt, Seek};
-use std::marker;
-use std::collections::VecDeque;
 
 /// Persistent state
 /// **Must be updated to stable storage before RPC response.**
 pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
     current_term: u64,
-    voted_for: Option<u64>,      // request_vote cares if this is `None`
+    voted_for: Option<SocketAddr>,  // request_vote cares if this is `None`
     log: File,
-    last_index: u64,             // The last index of the file.
-    last_term: u64,              // The last index of the file.
+    last_index: u64,                // The last index of the file.
+    last_term: u64,                 // The last index of the file.
     marker: marker::PhantomData<T>, // A marker... Because of
     // https://github.com/rust-lang/rfcs/blob/master/text/0738-variance.md#the-corner-case-unused-parameters-and-parameters-that-are-only-used-unsafely
 }
@@ -33,7 +35,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         open_opts.write(true);
         open_opts.create(true);
         let mut file = open_opts.open(&log_path).unwrap();
-        write!(&mut file, "{:20} {:20}\n", current_term, 0).unwrap();
+        write!(&mut file, "{:20} {:40}\n", current_term, "").unwrap();
         PersistentState {
             current_term: current_term,
             voted_for: None,
@@ -49,24 +51,28 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     /// Gets the `current_term` which is used for request vote.
     pub fn get_current_term(&self) -> u64 { self.current_term }
     /// Sets the current_term. **This should reflect on stable storage.**
-    pub fn set_current_term(&mut self, new: u64) -> io::Result<()> {
-        // The first line is the header with `current_term`, `voted_for`.
-        self.log.seek(io::SeekFrom::Start(0)).unwrap(); // Take the start.
-        self.current_term = new;
-        // TODO: What do we do about the none case?
-        write!(&mut self.log, "{:20} {:20}\n", self.current_term, self.voted_for.unwrap_or(0))
+    pub fn set_current_term(&mut self, term: u64) -> io::Result<()> {
+        self.current_term = term;
+        let voted_for = self.voted_for;
+        self.set_header(term, voted_for)
     }
     /// Increments the current_term. **This should reflect on stable storage.**
     pub fn inc_current_term(&mut self) { self.current_term += 1 }
     /// Gets the `voted_for`.
-    pub fn get_voted_for(&mut self) -> Option<u64> { self.voted_for }
+    pub fn get_voted_for(&mut self) -> Option<SocketAddr> {
+        self.voted_for
+    }
     /// Sets the `voted_for. **This should reflect on stable storage.**
-    pub fn set_voted_for(&mut self, new: Option<u64>) -> io::Result<()> {
-        // The first line is the header with `current_term`, `voted_for`.
-        self.log.seek(io::SeekFrom::Start(0)).unwrap(); // Take the start.
-        self.voted_for = new;
-        // TODO: What do we do about the none case?
-        write!(&mut self.log, "{:20} {:20}\n", self.current_term, self.voted_for.unwrap_or(0))
+    pub fn set_voted_for(&mut self, node: Option<SocketAddr>) -> io::Result<()> {
+        let current_term = self.current_term;
+        self.voted_for = node.clone();
+        self.set_header(current_term, node)
+    }
+    /// Set the first line of the file with a header including `current_term` and `voted_for`.
+    fn set_header(&mut self, term: u64, voted_for: Option<SocketAddr>) -> io::Result<()> {
+        try!(self.log.seek(io::SeekFrom::Start(0))); // Take the start.
+        let candidate = voted_for.map(|v| v.to_string()).unwrap_or("".to_string());
+        write!(&mut self.log, "{:20} {:40}\n", term, candidate)
     }
     pub fn append_entries(&mut self, prev_log_index: u64, prev_log_term: u64,
                       entries: Vec<(u64, T)>) -> io::Result<()> {
@@ -203,14 +209,59 @@ pub struct VolatileState {
     pub last_applied: u64
 }
 
-/// Leader Only
-/// **Reinitialized after election.**
-#[derive(PartialEq, Eq, Clone)]
+#[derive(Clone)]
 pub struct LeaderState {
-    pub next_index: Vec<u64>,
-    pub match_index: Vec<u64>
+    last_index: u64,
+    next_index: HashMap<SocketAddr, u64>,
+    match_index: HashMap<SocketAddr, u64>,
 }
 
+impl LeaderState {
+
+    /// Returns a new `LeaderState` struct.
+    ///
+    /// # Arguments
+    ///
+    /// * `last_index` - The index of the leader's most recent log entry at the
+    ///                  time of election.
+    pub fn new(last_index: u64) -> LeaderState {
+        LeaderState {
+            last_index: last_index,
+            next_index: HashMap::new(),
+            match_index: HashMap::new(),
+        }
+    }
+
+    /// Returns the next log entry index of the follower node.
+    pub fn next_index(&mut self, node: SocketAddr) -> u64 {
+        match self.next_index.entry(node) {
+            hash_map::Entry::Occupied(entry) => *entry.get(),
+            hash_map::Entry::Vacant(entry) => *entry.insert(self.last_index + 1),
+        }
+    }
+
+    /// Sets the next log entry index of the follower node.
+    pub fn set_next_index(&mut self, node: SocketAddr, index: u64) {
+        self.next_index.insert(node, index);
+    }
+
+    /// Returns the index of the highest log entry known to be replicated on
+    /// the follower node.
+    pub fn match_index(&self, node: SocketAddr) -> u64 {
+        *self.match_index.get(&node).unwrap_or(&0)
+    }
+
+    /// Sets the index of the highest log entry known to be replicated on the
+    /// follower node.
+    pub fn set_match_index(&mut self, node: SocketAddr, index: u64) {
+        self.match_index.insert(node, index);
+    }
+
+    /// Counts the number of follower nodes containing the given log index.
+    pub fn count_match_indexes(&self, index: u64) -> usize {
+        self.match_index.values().filter(|&&i| i >= index).count()
+    }
+}
 
 /// Nodes can either be:
 ///
@@ -219,11 +270,11 @@ pub struct LeaderState {
 ///     replicated, and issuing heartbeats..
 ///   * A `Candidate`, which campaigns in an election and may become a `Leader` (if it gets enough
 ///     votes) or a `Follower`, if it hears from a `Leader`.
-#[derive(PartialEq, Eq, Clone)]
+#[derive(Clone)]
 pub enum NodeState {
     Follower(VecDeque<Transaction>),
     Leader(LeaderState),
-    Candidate(Vec<Transaction>),
+    Candidate(HashMap<SocketAddr, Transaction>),
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -239,6 +290,45 @@ pub enum TransactionState {
     Polling,
     Accepted,
     Rejected,
+}
+
+#[test]
+fn test_update_header() {
+    use std::fs;
+    use std::old_io::net::ip::SocketAddr;
+    use std::str::FromStr;
+
+    let path = Path::new("/tmp/test_path");
+    fs::remove_file(&path).ok();
+    let mut state = PersistentState::new(0, path);
+
+    // Add 1
+    assert_eq!(state.append_entries(0, 0, // Zero is the initialization state.
+        vec![(1, "One".to_string())]),
+        Ok(()));
+    // Check 1
+    assert_eq!(state.retrieve_entry(1),
+        Ok((1, "One".to_string())));
+    assert_eq!(state.get_last_index(), 1);
+    assert_eq!(state.get_last_term(), 1);
+
+    // Update current term
+    state.set_current_term(1);
+
+    // Check again
+    assert_eq!(state.retrieve_entry(1),
+        Ok((1, "One".to_string())));
+    assert_eq!(state.get_last_index(), 1);
+    assert_eq!(state.get_last_term(), 1);
+
+    // Update voted for
+    state.set_voted_for(Some(SocketAddr::from_str("127.0.0.1:11110").unwrap())).unwrap();
+
+    // Check again
+    assert_eq!(state.retrieve_entry(1),
+        Ok((1, "One".to_string())));
+    assert_eq!(state.get_last_index(), 1);
+    assert_eq!(state.get_last_term(), 1);
 }
 
 #[test]
