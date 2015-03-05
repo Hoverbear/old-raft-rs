@@ -56,6 +56,7 @@ impl ops::Add<u64> for Term {
         Term(self.0.checked_add(rhs).expect("overflow while incrementing Term"))
     }
 }
+
 impl ops::Sub<u64> for Term {
     type Output = Term;
     fn sub(self, rhs: u64) -> Term {
@@ -72,6 +73,7 @@ impl ops::Add<u64> for LogIndex {
         LogIndex(self.0.checked_add(rhs).expect("overflow while incrementing LogIndex"))
     }
 }
+
 impl ops::Sub<u64> for LogIndex {
     type Output = LogIndex;
     fn sub(self, rhs: u64) -> LogIndex {
@@ -191,6 +193,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         }).unwrap();
         (req_send, res_recv)
     }
+
     /// This is the main tick for a leader node.
     fn tick(&mut self) {
         // We need a read buffer.
@@ -269,9 +272,11 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             Err(_) => (),               // Timer hasn't fired.
         }
     }
+
     fn majority(&self) -> u64 {
         (self.cluster_members.len() as u64 + 2) >> 1
     }
+
     /// When a `Follower`'s heartbeat times out it's time to start a campaign for election and
     /// become a `Candidate`. If successful, the `RaftNode` will transistion state into a `Leader`,
     /// otherwise it will become `Follower` again.
@@ -310,6 +315,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         // We rely on the loop to handle incoming responses regarding `RequestVote`, don't worry
         // about that here.
     }
+
     //////////////
     // Handlers //
     //////////////
@@ -403,6 +409,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             }
         }
     }
+
     /// Handles an `AppendEntries` request from a caller.
     fn handle_append_entries(&mut self, call: AppendEntries<T>, source: SocketAddr) -> RemoteProcedureResponse {
         if !self.cluster_members.contains(&source) {
@@ -541,6 +548,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             },
         }
     }
+
     /// This function handles `RemoteProcedureResponse::Accepted` requests.
     fn handle_accepted(&mut self, response: Accepted, source: SocketAddr) {
         if !self.cluster_members.contains(&source) {
@@ -613,6 +621,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             }
         }
     }
+
     /// This function handles `RemoteProcedureResponse::Rejected` requests.
     fn handle_rejected(&mut self, response: Rejected, source: SocketAddr) {
         if !self.cluster_members.contains(&source) {
@@ -663,6 +672,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         }
 
     }
+
     /// This is called when the consuming application issues an append request on it's channel.
     fn handle_append_request(&mut self, request: AppendRequest<T>) -> io::Result<()> {
         info!("ID {}: HANDLE append_request", self.address);
@@ -711,6 +721,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             },
         }
     }
+
     /// This is called when the client requests a specific index range on it's channel.
     fn handle_index_range(&mut self, request: IndexRange) -> io::Result<Vec<(Term, T)>> {
         info!("ID {}: HANDLE index_range", self.address);
@@ -720,6 +731,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         let result = self.persistent_state.retrieve_entries(request.start_index, end);
         result
     }
+
     ////////////
     // Timers //
     ////////////
@@ -765,6 +777,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         }
         self.reset_timer();
     }
+
     fn reset_timer(&mut self) {
         debug!("Node {} timer RESET", self.address);
         self.heartbeat = match self.state {
@@ -776,6 +789,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             },
         }
     }
+
     //////////////////
     // Transmission //
     //////////////////
@@ -786,12 +800,14 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             .unwrap();
         self.socket.send_to(encoded.as_bytes(), node)
     }
+
     fn respond(&mut self, node: SocketAddr, rpr: RemoteProcedureResponse) -> Result<(), std::old_io::IoError> {
         debug!("ID {}: RESPOND {:?}", self.address, rpr);
         let encoded = json::encode::<RemoteProcedureResponse>(&rpr)
             .unwrap();
         self.socket.send_to(encoded.as_bytes(), node)
     }
+
     ///////////////////
     // State Changes //
     ///////////////////
@@ -808,6 +824,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         self.leader = None;
         self.reset_timer()
     }
+
     /// Called when the Leader recieves information that they are not the leader.
     fn leader_to_follower(&mut self) {
         info!("ID {}: LEADER -> FOLLOWER", self.address);
@@ -817,6 +834,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         };
         self.reset_timer()
     }
+
     /// Called when a Candidate successfully gets elected.
     fn candidate_to_leader(&mut self) {
         info!("ID {}: CANDIDATE -> LEADER", self.address);
@@ -829,6 +847,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         // This will cause us to immediately heartbeat.
         self.handle_timer();
     }
+
     /// Called when a candidate fails an election. Takes the new leader's ID, term.
     fn candidate_to_follower(&mut self, leader: SocketAddr, term: Term) {
         info!("ID {}: CANDIDATE -> FOLLOWER: Leader {}, Term {:?}", self.address, leader, term);
@@ -840,6 +859,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         self.leader = Some(leader);
         self.reset_timer();
     }
+
     /// Called when a Candidate needs to hold another election.
     /// TODO: This is currently pointless, but will be meaningful when Candidates
     /// have data as part of their variant.
