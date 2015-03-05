@@ -47,35 +47,43 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             marker: marker::PhantomData,
         }
     }
+
     /// Gets the `last_index` which you can use to make append requests with.
     pub fn get_last_index(&self) -> LogIndex { self.last_index }
     pub fn get_last_term(&self) -> Term { self.last_term }
     /// Gets the `current_term` which is used for request vote.
     pub fn get_current_term(&self) -> Term { self.current_term }
+
     /// Sets the current_term. **This should reflect on stable storage.**
     pub fn set_current_term(&mut self, term: Term) -> io::Result<()> {
         self.current_term = term;
         let voted_for = self.voted_for;
         self.set_header(term, voted_for)
     }
-    /// Increments the current_term. **This should reflect on stable storage.**
+
+    /// Increments the current_term.
+    /// **This should reflect on stable storage.**
     pub fn inc_current_term(&mut self) { self.current_term = self.current_term + 1 }
     /// Gets the `voted_for`.
     pub fn get_voted_for(&mut self) -> Option<SocketAddr> {
         self.voted_for
     }
-    /// Sets the `voted_for. **This should reflect on stable storage.**
+
+    /// Sets the `voted_for.
+    /// **This should reflect on stable storage.**
     pub fn set_voted_for(&mut self, node: Option<SocketAddr>) -> io::Result<()> {
         let current_term = self.current_term;
         self.voted_for = node.clone();
         self.set_header(current_term, node)
     }
+
     /// Set the first line of the file with a header including `current_term` and `voted_for`.
     fn set_header(&mut self, term: Term, voted_for: Option<SocketAddr>) -> io::Result<()> {
         try!(self.log.seek(io::SeekFrom::Start(0))); // Take the start.
         let candidate = voted_for.map(|v| v.to_string()).unwrap_or("".to_string());
         write!(&mut self.log, "{:20} {:40}\n", term.0, candidate)
     }
+
     pub fn append_entries(&mut self,
                           prev_log_index: LogIndex, prev_log_term: Term,
                           entries: Vec<(Term, T)>)
@@ -100,6 +108,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         self.last_term = last_term;
         Ok(())
     }
+
     fn encode(entry: T) -> String {
         let json_encoded = json::encode(&entry)
             .unwrap(); // TODO: Don't unwrap.
@@ -110,6 +119,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             line_length: None,
         })
     }
+
     fn decode(bytes: String) -> Result<T, rustc_serialize::json::DecoderError> {
         let based = bytes.from_base64()
             .ok().expect("Decoding error. log likely corrupt.");
@@ -117,6 +127,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
                 .unwrap();
         json::decode::<T>(string)
     }
+
     /// Returns the number of bytes containing `line` lines.
     /// TODO: Cache?
     fn move_to(&mut self, index: LogIndex) -> io::Result<u64> {
@@ -144,10 +155,12 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         }).next(); // Side effects.
         self.log.seek(io::SeekFrom::Current(0)) // Where are we?
     }
+
     /// Do *not* invoke this unless you update the `last_index`!
     fn purge_from_bytes(&mut self, from_bytes: u64) -> io::Result<()> {
         self.log.set_len(from_bytes) // Chop off the file at the given position.
     }
+
     /// Removes all entries from `from` to the last entry, inclusively.
     pub fn purge_from_index(&mut self, from_index: LogIndex) -> io::Result<()> {
         let position = try!(self.move_to(from_index));
@@ -156,6 +169,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         self.last_term = self.retrieve_entry(last_index).map(|(t, _)| t).unwrap_or(Term(0));
         self.purge_from_bytes(position)
     }
+
     pub fn retrieve_entries(&mut self, start: LogIndex, end: LogIndex) -> io::Result<Vec<(Term, T)>> {
         let _ = self.move_to(start);
         let mut out = vec![];
@@ -173,6 +187,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         }
         Ok(out)
     }
+
     pub fn retrieve_entry(&mut self, index: LogIndex) -> io::Result<(Term, T)> {
         if index.0 == 0 { return Err(io::Error::new(io::ErrorKind::InvalidInput, "Could not parse term.", None)); }
         let _ = self.move_to(index);
@@ -222,7 +237,6 @@ pub struct LeaderState {
 }
 
 impl LeaderState {
-
     /// Returns a new `LeaderState` struct.
     ///
     /// # Arguments
