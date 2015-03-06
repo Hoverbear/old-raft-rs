@@ -5,7 +5,7 @@ use std::collections::{hash_map, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write, ReadExt, Seek};
 use std::marker;
-use std::old_io::net::ip::SocketAddr;
+use std::net::SocketAddr;
 use std::str::{self, StrExt};
 use std::string::ToString;
 
@@ -342,6 +342,7 @@ fn test_persistent_state() {
     let path = Path::new("/tmp/test_path");
     fs::remove_file(&path.clone()).ok();
     let mut state = PersistentState::new(Term(0), path.clone());
+
     // Check heartbeat
     assert_eq!(state.append_entries(LogIndex(0), Term(0),
         vec![]),
@@ -349,39 +350,47 @@ fn test_persistent_state() {
     assert_eq!(state.get_last_index(), LogIndex(0));
     assert_eq!(state.get_last_term(), Term(0));
     assert!(state.retrieve_entry(LogIndex(0)).is_err());
+
     // Add 1
     assert_eq!(state.append_entries(LogIndex(0), Term(0), // Zero is the initialization state.
         vec![(Term(1), "One".to_string())]),
         Ok(()));
+
     // Check 1
     assert_eq!(state.retrieve_entry(LogIndex(1)),
         Ok((Term(1), "One".to_string())));
     assert_eq!(state.get_last_index(), LogIndex(1));
     assert_eq!(state.get_last_term(), Term(1));
+
     // Do a blank check.
     assert_eq!(state.append_entries(LogIndex(1), Term(1), vec![]),
         Ok(()));
         assert_eq!(state.get_last_index(), LogIndex(1));
         assert_eq!(state.get_last_term(), Term(1));
+
     // Add 2
     assert_eq!(state.append_entries(LogIndex(1), Term(1),
         vec![(Term(2), "Two".to_string())]),
         Ok(()));
     assert_eq!(state.get_last_index(), LogIndex(2));
     assert_eq!(state.get_last_term(), Term(2));
+
     // Check 1, 2
     assert_eq!(state.retrieve_entries(LogIndex(1), LogIndex(2)),
         Ok(vec![(Term(1), "One".to_string()),
                 (Term(2), "Two".to_string())
         ]));
+
     // Check 2
     assert_eq!(state.retrieve_entry(LogIndex(2)),
         Ok((Term(2), "Two".to_string())));
+
     // Add 3, 4
     assert_eq!(state.append_entries(LogIndex(2), Term(2),
         vec![(Term(3), "Three".to_string()),
              (Term(4), "Four".to_string())]),
         Ok(()));
+
     // Check 3, 4
     assert_eq!(state.retrieve_entries(LogIndex(3), LogIndex(4)),
         Ok(vec![(Term(3), "Three".to_string()),
@@ -389,16 +398,19 @@ fn test_persistent_state() {
         ]));
     assert_eq!(state.get_last_index(), LogIndex(4));
     assert_eq!(state.get_last_term(), Term(4));
+
     // Remove 3, 4
     assert_eq!(state.purge_from_index(LogIndex(3)),
         Ok(()));
     assert_eq!(state.get_last_index(), LogIndex(2));
     assert_eq!(state.get_last_term(), Term(2));
+
     // Check 3, 4 are removed, and that code handles lack of entry gracefully.
     assert_eq!(state.retrieve_entries(LogIndex(0), LogIndex(4)),
         Ok(vec![(Term(1), "One".to_string()),
                 (Term(2), "Two".to_string())
         ]));
+
     // Add 3, 4, 5
     assert_eq!(state.append_entries(LogIndex(2), Term(2),
         vec![(Term(3), "Three".to_string()),
@@ -407,6 +419,7 @@ fn test_persistent_state() {
         Ok(()));
     assert_eq!(state.get_last_index(), LogIndex(5));
     assert_eq!(state.get_last_term(), Term(5));
+
     // Add 3, 4 again. (5 should be purged)
     assert_eq!(state.append_entries(LogIndex(2), Term(2),
         vec![(Term(3), "Three".to_string()),
@@ -420,6 +433,7 @@ fn test_persistent_state() {
         ]));
     assert_eq!(state.get_last_index(), LogIndex(4));
     assert_eq!(state.get_last_term(), Term(4));
+
     // Do a blank check.
     assert_eq!(state.append_entries(LogIndex(4), Term(4), vec![]),
         Ok(()));

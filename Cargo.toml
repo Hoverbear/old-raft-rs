@@ -9,3 +9,6 @@ uuid = "*"
 rand = "*"
 log = "*"
 env_logger = "*" # Important for tests.
+
+[dependencies.mio]
+git = "https://github.com/carllerche/mio"

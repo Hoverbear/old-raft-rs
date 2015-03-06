@@ -5,8 +5,7 @@
 
 #![feature(core)]
 #![feature(io)]
-#![feature(old_io)]
-#![feature(old_path)]
+#![feature(net)]
 #![feature(fs)]
 #![feature(std_misc)]
 #![feature(collections)]
@@ -15,6 +14,7 @@ extern crate "rustc-serialize" as rustc_serialize;
 extern crate uuid;
 extern crate rand;
 #[macro_use] extern crate log;
+extern crate mio;
 pub mod interchange;
 pub mod state;
 
@@ -22,16 +22,17 @@ use std::{io, str, thread};
 use std::collections::{HashMap, HashSet, VecDeque, BitSet};
 use std::fmt::Debug;
 use std::num::Int;
-use std::old_io::IoError;
-use std::old_io::net::ip::SocketAddr;
-use std::old_io::net::udp::UdpSocket;
-use std::old_io::timer::Timer;
+use std::net::SocketAddr;
 use std::ops;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::Duration;
 
 use rand::{thread_rng, Rng, ThreadRng};
 use rustc_serialize::{json, Encodable, Decodable};
+
+// MIO
+use mio::net::udp::UdpSocket;
+use mio::{EventLoopSender, Token, EventLoop, Handler, ReadHint};
 
 // Enums and variants.
 use interchange::{ClientRequest, RemoteProcedureCall, RemoteProcedureResponse};
@@ -42,10 +43,15 @@ use interchange::{Accepted, Rejected};
 use state::{PersistentState, LeaderState, VolatileState};
 use state::NodeState::{Leader, Follower, Candidate};
 use state::{NodeState, TransactionState, Transaction};
+
 // The maximum size of the read buffer.
 const BUFFER_SIZE: usize = 4096;
 const HEARTBEAT_MIN: i64 = 150;
 const HEARTBEAT_MAX: i64 = 300;
+
+// MIO Tokens
+const SOCKET:  Token = Token(0);
+const TIMEOUT: Token = Token(1);
 
 /// The term of a log entry.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
@@ -128,18 +134,18 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     cluster_members: HashSet<SocketAddr>,
     notice_requests: BitSet, // When append_request is issues this gets flagged for that commit.
     // Channels and Sockets
-    heartbeat: Receiver<()>,
     socket: UdpSocket,
-    req_recv: Receiver<ClientRequest<T>>,
     res_send: Sender<io::Result<Vec<(Term, T)>>>,
     // State
     rng: ThreadRng,
-    timer: Timer,
 }
+
+type Reactor<T> = EventLoop<Token, ClientRequest<T>>;
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
 /// done via `::new()`.
 impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
+
     /// Creates a new Raft node with the cluster members specified.
     ///
     /// # Arguments
@@ -151,18 +157,20 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     pub fn start(address: SocketAddr,
                  cluster_members: HashSet<SocketAddr>,
                  state_file: Path)
-                 -> (Sender<ClientRequest<T>>, Receiver<io::Result<Vec<(Term, T)>>>) {
+                 -> (EventLoopSender<ClientRequest<T>>, Receiver<io::Result<Vec<(Term, T)>>>) {
+        // Create an event loop
+        let mut event_loop = Reactor::new().unwrap();
+        let req_send = event_loop.channel();
         // Setup the socket, make it not block.
-        let mut socket = UdpSocket::bind(address).unwrap(); // TODO: Can we do better?
-        socket.set_read_timeout(Some(0));
+        let socket = UdpSocket::bind(&address).unwrap();
+        event_loop.register(&socket, SOCKET).unwrap();
+        event_loop.timeout(TIMEOUT, Duration::milliseconds(250)).unwrap();
         // Communication channels.
-        let (req_send, req_recv) = channel::<ClientRequest<T>>();
         let (res_send, res_recv) = channel::<io::Result<Vec<(Term, T)>>>();
         // Fire up the thread.
         thread::Builder::new().name(format!("RaftNode {}", address)).spawn(move || {
             // Start up a RNG and Timer
             let mut rng = thread_rng();
-            let mut timer = Timer::new().unwrap();
             // Create the struct.
             let mut raft_node = RaftNode {
                 state: Follower(VecDeque::new()),
@@ -175,122 +183,77 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 address: address,
                 cluster_members: cluster_members,
                 notice_requests: BitSet::new(),
-                // Blank timer for now.
-                heartbeat: timer.oneshot(Duration::milliseconds(rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX))), // If this fails we're in trouble.
-                timer: timer,
                 rng: rng,
                 socket: socket,
-                req_recv: req_recv,
                 res_send: res_send,
+                // Recieve reqs from event_loop
             };
             // This is the main, strongly typed state machine. It loops indefinitely for now. It
             // would be nice if this was event based.
-            loop {
-                raft_node.tick();
-            }
+            event_loop.run(&mut raft_node).unwrap();
         }).unwrap();
         (req_send, res_recv)
     }
     /// This is the main tick for a leader node.
-    fn tick(&mut self) {
-        // We need a read buffer.
-        let mut read_buffer = [0; BUFFER_SIZE];
-        // If socket has data.
-        match self.socket.recv_from(&mut read_buffer) {
-            Ok((num_read, source)) => { // Something on the socket.
-                // TODO: Verify this is a legitimate request, just check if it's
-                //       in the cluster for now?
-                // This is possibly an RPC from another node. Try to parse it out
-                // and determine what to do based on it's variant.
-                let data = str::from_utf8(&mut read_buffer[.. num_read])
-                    .unwrap();
-                if let Ok(rpc) = json::decode::<RemoteProcedureCall<T>>(data) {
-                    debug!("ID {}: FROM {:?} RECIEVED {:?}", self.address, source, rpc);
-                    let rpr = match rpc {
-                        RemoteProcedureCall::RequestVote(call) =>
-                            self.handle_request_vote(call, source),
-                        RemoteProcedureCall::AppendEntries(call) =>
-                            self.handle_append_entries(call, source),
-                    };
-                    debug!("ID {}: TO {:?} RESPONDS {:?}", self.address, source, rpr);
-                    self.respond(source, rpr).unwrap();
-                } else if let Ok(rpr) = json::decode::<RemoteProcedureResponse>(data) {
-                    debug!("ID {}: FROM {:?} RECIEVED {:?}", self.address, source, rpr);
-                    match rpr {
-                        RemoteProcedureResponse::Accepted(response) =>
-                            self.handle_accepted(response, source),
-                        RemoteProcedureResponse::Rejected(response) =>
-                            self.handle_rejected(response, source),
-                    }
-                }
-            },
-            Err(_) => (),                 // Nothing on the socket.
-        }
-        // Only check the channel if we can actually deal with a request.
-        // (This is mostly a problem for Followers in initialization and Candidates)
-        match self.state {
-            Follower(_) | Leader(_) if self.leader != None => {
-                // If channel has data.
-                match self.req_recv.try_recv() {
-                    Ok(request) => {          // Something in channel.
-                        debug!("ID {}: GOT CLIENT REQUEST {:?}, LEADER: {:?}", self.address, request, self.leader);
-                        match request {
-                            ClientRequest::IndexRange(request) => {
-                                let result = self.handle_index_range(request);
-                                info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
-                                self.res_send.send(result).unwrap();
-                            },
-                            ClientRequest::AppendRequest(request) => {
-                                let target = request.prev_log_index + request.entries.len() as u64;
-                                let result = self.handle_append_request(request)
-                                    .map(|_| Vec::new());
-                                // If it's `Ok` we should respond once it's commited.
-                                if result.is_ok() {
-                                    self.notice_requests.insert(target.0 as usize);
-                                } else {
-                                    info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
-                                    self.res_send.send(result).unwrap();
-                                }
-                            },
-                        };
-
-                    },
-                    Err(_) => (),               // Nothing in channel.
-                }
-            },
-            _ => (),
-        }
-        // If timer has fired.
-        match self.heartbeat.try_recv() {
-            Ok(_) => {                  // Timer has fired.
-                // A heartbeat has fired.
-                self.handle_timer()
-            },
-            Err(_) => (),               // Timer hasn't fired.
-        }
-    }
+    // fn tick(&mut self) {
+    //     // Only check the channel if we can actually deal with a request.
+    //     // (This is mostly a problem for Followers in initialization and Candidates)
+    //     match self.state {
+    //         Follower(_) | Leader(_) if self.leader != None => {
+    //             // If channel has data.
+    //             match self.req_recv.try_recv() {
+    //                 Ok(request) => {          // Something in channel.
+    //                     debug!("ID {}: GOT CLIENT REQUEST {:?}, LEADER: {:?}", self.address, request, self.leader);
+    //                     match request {
+    //                         ClientRequest::IndexRange(request) => {
+    //                             let result = self.handle_index_range(request);
+    //                             info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
+    //                             self.res_send.send(result).unwrap();
+    //                         },
+    //                         ClientRequest::AppendRequest(request) => {
+    //                             let target = request.prev_log_index + request.entries.len() as u64;
+    //                             let result = self.handle_append_request(request)
+    //                                 .map(|_| Vec::new());
+    //                             // If it's `Ok` we should respond once it's commited.
+    //                             if result.is_ok() {
+    //                                 self.notice_requests.insert(target.0 as usize);
+    //                             } else {
+    //                                 info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
+    //                                 self.res_send.send(result).unwrap();
+    //                             }
+    //                         },
+    //                     };
+    //
+    //                 },
+    //                 Err(_) => (),               // Nothing in channel.
+    //             }
+    //         },
+    //         _ => (),
+    //     }
+    // }
     fn majority(&self) -> u64 {
         (self.cluster_members.len() as u64 + 2) >> 1
     }
+
     /// When a `Follower`'s heartbeat times out it's time to start a campaign for election and
     /// become a `Candidate`. If successful, the `RaftNode` will transistion state into a `Leader`,
     /// otherwise it will become `Follower` again.
     /// This function accepts a `Follower` and transforms it into a `Candidate` then attempts to
     /// issue `RequestVote` remote procedure calls to other known nodes. If a majority come back
     /// accepted, it will become the leader.
-    fn campaign(&mut self) {
+    fn campaign(&mut self, reactor: &mut Reactor<T>) {
         // On conversion to Candidate:
         // * Increment current_term
         // * Vote for self
         // * Reset election timer
         // * Send RequestVote RPC to all other nodes.
         match self.state {
-            Follower(_)  => self.follower_to_candidate(),
+            Follower(_)  => self.follower_to_candidate(reactor),
             Candidate(_) => self.reset_candidate(),
             _ => panic!("Should not campaign as a Leader!")
         };
         self.persistent_state.set_voted_for(Some(self.address)).unwrap(); // TODO: Is this correct?
-        self.reset_timer();
+        self.reset_timer(reactor);
         // TODO: get rid of clone
         let status: HashMap<SocketAddr, Transaction> = self.cluster_members.clone().into_iter().map(|member| {
             // Do it in the loop so we different Uuids.
@@ -310,15 +273,17 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         // We rely on the loop to handle incoming responses regarding `RequestVote`, don't worry
         // about that here.
     }
+
     //////////////
     // Handlers //
     //////////////
+
     /// Handles a `RemoteProcedureCall::RequestVote` call.
     ///
     ///   * Reply false if term < currentTerm.
     ///   * If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as
     ///     receiver’s log, grant vote.
-    fn handle_request_vote(&mut self, call: RequestVote, source: SocketAddr) -> RemoteProcedureResponse {
+    fn handle_request_vote(&mut self, reactor: &mut Reactor<T>, call: RequestVote, source: SocketAddr) -> RemoteProcedureResponse {
         if !self.cluster_members.contains(&source) {
             panic!("Received request vote request from unknown node {}.", source)
         };
@@ -352,7 +317,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 match checks.iter().all(|&x| x) {
                     true  => {
                         self.persistent_state.set_voted_for(Some(source)).unwrap();
-                        self.reset_timer();
+                        self.reset_timer(reactor);
                         info!("ID {}:F: TO {} ACCEPT request_vote", self.address, source);
                         RemoteProcedureResponse::accept(call.uuid, current_term,
                             last_index, self.volatile_state.commit_index)
@@ -403,8 +368,9 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             }
         }
     }
+
     /// Handles an `AppendEntries` request from a caller.
-    fn handle_append_entries(&mut self, call: AppendEntries<T>, source: SocketAddr) -> RemoteProcedureResponse {
+    fn handle_append_entries(&mut self, reactor: &mut Reactor<T>, call: AppendEntries<T>, source: SocketAddr) -> RemoteProcedureResponse {
         if !self.cluster_members.contains(&source) {
             panic!("Received append entries request from unknown node {}.", source)
         };
@@ -508,10 +474,10 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                         info!("ID {}:F: RESPONDS TO CLIENT OK", self.address);
                         self.res_send.send(Ok(vec![])).unwrap();
                     }
-                    self.reset_timer();
+                    self.reset_timer(reactor);
                     let mut next = self.persistent_state.get_last_index().0;
                     if next == 0 { next = 1; } else { next += 1; }
-                    self.reset_timer();
+                    self.reset_timer(reactor);
                     RemoteProcedureResponse::accept(
                         call.uuid,
                         self.persistent_state.get_current_term(),
@@ -526,9 +492,9 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 // Otherwise, reject it.
                 if call.term >= self.persistent_state.get_current_term() {
                     info!("ID {}:C: FROM {} ACCEPT append_entries", self.address, source);
-                    self.candidate_to_follower(source, call.term);
+                    self.candidate_to_follower(reactor, source, call.term);
                     // Pass back into Follower.
-                    self.handle_append_entries(call, source)
+                    self.handle_append_entries(reactor, call, source)
                 } else {
                     info!("ID {}:C: FROM {} REJECT append_entries: Term not higher or equal.", self.address, source);
                     RemoteProcedureResponse::reject(
@@ -541,8 +507,9 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             },
         }
     }
+
     /// This function handles `RemoteProcedureResponse::Accepted` requests.
-    fn handle_accepted(&mut self, response: Accepted, source: SocketAddr) {
+    fn handle_accepted(&mut self, reactor: &mut Reactor<T>, response: Accepted, source: SocketAddr) {
         if !self.cluster_members.contains(&source) {
             panic!("Received accepted response from unknown node {}.", source)
         };
@@ -607,14 +574,15 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     info!("ID {}:C: VOTES {} NEEDS MORE THAN {}", self.address, number_of_votes, majority);
                     if number_of_votes > majority {  // +1 for itself.
                         // Won election.
-                        self.candidate_to_leader();
+                        self.candidate_to_leader(reactor);
                     }
                 }
             }
         }
     }
+
     /// This function handles `RemoteProcedureResponse::Rejected` requests.
-    fn handle_rejected(&mut self, response: Rejected, source: SocketAddr) {
+    fn handle_rejected(&mut self, reactor: &mut Reactor<T>, response: Rejected, source: SocketAddr) {
         if !self.cluster_members.contains(&source) {
             panic!("Received rejected response from unknown node {}.", source)
         };
@@ -663,6 +631,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         }
 
     }
+
     /// This is called when the consuming application issues an append request on it's channel.
     fn handle_append_request(&mut self, request: AppendRequest<T>) -> io::Result<()> {
         info!("ID {}: HANDLE append_request", self.address);
@@ -693,6 +662,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                             queue.push_back(Transaction { uuid: uuid, state: TransactionState::Polling });
                         } else { unreachable!(); }
                         self.send(leader, rpc)
+                            .map(|_| ())
                             // TODO: Update to be io::Result
                             .map_err(|_| {
                                 info!("ID {}: RESPONDS ERROR", self.address);
@@ -711,6 +681,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             },
         }
     }
+
     /// This is called when the client requests a specific index range on it's channel.
     fn handle_index_range(&mut self, request: IndexRange) -> io::Result<Vec<(Term, T)>> {
         info!("ID {}: HANDLE index_range", self.address);
@@ -720,10 +691,12 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         let result = self.persistent_state.retrieve_entries(request.start_index, end);
         result
     }
+
     ////////////
     // Timers //
     ////////////
-    fn handle_timer(&mut self) {
+
+    fn handle_timer(&mut self, reactor: &mut Reactor<T>) {
         info!("ID {}: HANDLE timer", self.address);
         match self.state {
             Leader(_) => {
@@ -760,45 +733,51 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     self.send(member, rpc).unwrap();
                 }
             },
-            Follower(_) => self.campaign(),
-            Candidate(_) => self.campaign(),
+            Follower(_) => self.campaign(reactor),
+            Candidate(_) => self.campaign(reactor),
         }
-        self.reset_timer();
+        self.reset_timer(reactor);
     }
-    fn reset_timer(&mut self) {
+
+    fn reset_timer(&mut self, reactor: &mut Reactor<T>) {
         debug!("Node {} timer RESET", self.address);
-        self.heartbeat = match self.state {
+        match self.state {
             Leader(_) => {
-                self.timer.oneshot(Duration::milliseconds(HEARTBEAT_MIN))
+                reactor.timeout(TIMEOUT, Duration::milliseconds(250)).unwrap();
             },
             Follower(_) | Candidate(_) => {
-                self.timer.oneshot(Duration::milliseconds(self.rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX)))
+                reactor.timeout(TIMEOUT, Duration::milliseconds(self.rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX))).unwrap();
             },
         }
     }
+
     //////////////////
     // Transmission //
     //////////////////
+
     // TODO: Improve "message" to not be &[u8]
-    fn send(&mut self, node: SocketAddr, rpc: RemoteProcedureCall<T>) -> Result<(), std::old_io::IoError> {
+    fn send(&mut self, node: SocketAddr, rpc: RemoteProcedureCall<T>) -> io::Result<usize> {
         debug!("ID {}: SEND {:?}", self.address, rpc);
         let encoded = json::encode::<RemoteProcedureCall<T>>(&rpc)
             .unwrap();
-        self.socket.send_to(encoded.as_bytes(), node)
+        self.socket.send_to(encoded.as_bytes(), &node)
     }
-    fn respond(&mut self, node: SocketAddr, rpr: RemoteProcedureResponse) -> Result<(), std::old_io::IoError> {
+
+    fn respond(&mut self, node: SocketAddr, rpr: RemoteProcedureResponse) -> io::Result<usize> {
         debug!("ID {}: RESPOND {:?}", self.address, rpr);
         let encoded = json::encode::<RemoteProcedureResponse>(&rpr)
             .unwrap();
-        self.socket.send_to(encoded.as_bytes(), node)
+        self.socket.send_to(encoded.as_bytes(), &node)
     }
+
     ///////////////////
     // State Changes //
     ///////////////////
+
     /// Why are these in `RaftNode`? So we can use data available in the `RaftNode`.
     /// TODO: Would it be pleasant to spin these into `NodeState` itself?
     /// Called on heartbeat timeout.
-    fn follower_to_candidate(&mut self) {
+    fn follower_to_candidate(&mut self, reactor: &mut Reactor<T>) {
         // Need to increase term.
         debug!("ID {}: FOLLOWER -> CANDIDATE: Term {:?}", self.address, self.persistent_state.get_current_term());
         self.state = match self.state {
@@ -806,19 +785,21 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             _ => panic!("Called follower_to_candidate() but was not Follower.")
         };
         self.leader = None;
-        self.reset_timer()
+        self.reset_timer(reactor)
     }
+
     /// Called when the Leader recieves information that they are not the leader.
-    fn leader_to_follower(&mut self) {
+    fn leader_to_follower(&mut self, reactor: &mut Reactor<T>) {
         info!("ID {}: LEADER -> FOLLOWER", self.address);
         self.state = match self.state {
             Leader(_) => Follower(VecDeque::new()),
             _ => panic!("Called leader_to_follower() but was not Leader.")
         };
-        self.reset_timer()
+        self.reset_timer(reactor)
     }
+
     /// Called when a Candidate successfully gets elected.
-    fn candidate_to_leader(&mut self) {
+    fn candidate_to_leader(&mut self, reactor: &mut Reactor<T>) {
         info!("ID {}: CANDIDATE -> LEADER", self.address);
         self.state = match self.state {
             Candidate(_) => Leader(LeaderState::new(self.persistent_state.get_last_index())),
@@ -827,10 +808,12 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         self.persistent_state.inc_current_term();
         self.leader = Some(self.address);
         // This will cause us to immediately heartbeat.
-        self.handle_timer();
+        self.handle_timer(reactor);
     }
+
     /// Called when a candidate fails an election. Takes the new leader's ID, term.
-    fn candidate_to_follower(&mut self, leader: SocketAddr, term: Term) {
+    /// *Note:* This does not reset the timer.
+    fn candidate_to_follower(&mut self, reactor: &mut Reactor<T>, leader: SocketAddr, term: Term) {
         info!("ID {}: CANDIDATE -> FOLLOWER: Leader {}, Term {:?}", self.address, leader, term);
         self.state = match self.state {
             Candidate(_) => Follower(VecDeque::new()),
@@ -838,8 +821,9 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         };
         self.persistent_state.set_current_term(term).unwrap();
         self.leader = Some(leader);
-        self.reset_timer();
+        self.reset_timer(reactor);
     }
+
     /// Called when a Candidate needs to hold another election.
     /// TODO: This is currently pointless, but will be meaningful when Candidates
     /// have data as part of their variant.
@@ -849,5 +833,82 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
             Candidate(_) => Candidate(HashMap::new()),
             _ => panic!("Called reset_candidate() but was not Candidate.")
         }
+    }
+}
+
+impl<T> Handler<Token, ClientRequest<T>> for RaftNode<T>
+where T: Encodable + Decodable + Debug + Send + 'static + Clone {
+
+    /// A registered IoHandle has available data to read
+    fn readable(&mut self, reactor: &mut Reactor<T>, token: Token, hint: ReadHint) {
+        if token == SOCKET && hint == ReadHint::data() {
+            // We need a read buffer.
+            let mut read_buffer = [0; BUFFER_SIZE];
+            // If socket has data.
+            match self.socket.recv_from(&mut read_buffer) {
+                Ok((num_read, source)) => { // Something on the socket.
+                    // TODO: Verify this is a legitimate request, just check if it's
+                    //       in the cluster for now?
+                    // This is possibly an RPC from another node. Try to parse it out
+                    // and determine what to do based on it's variant.
+                    let data = str::from_utf8(&mut read_buffer[.. num_read])
+                        .unwrap();
+                    if let Ok(rpc) = json::decode::<RemoteProcedureCall<T>>(data) {
+                        debug!("ID {}: FROM {:?} RECIEVED {:?}", self.address, source, rpc);
+                        let rpr = match rpc {
+                            RemoteProcedureCall::RequestVote(call) =>
+                                self.handle_request_vote(reactor, call, source),
+                            RemoteProcedureCall::AppendEntries(call) =>
+                                self.handle_append_entries(reactor, call, source),
+                        };
+                        debug!("ID {}: TO {:?} RESPONDS {:?}", self.address, source, rpr);
+                        self.respond(source, rpr).unwrap();
+                    } else if let Ok(rpr) = json::decode::<RemoteProcedureResponse>(data) {
+                        debug!("ID {}: FROM {:?} RECIEVED {:?}", self.address, source, rpr);
+                        match rpr {
+                            RemoteProcedureResponse::Accepted(response) =>
+                                self.handle_accepted(reactor, response, source),
+                            RemoteProcedureResponse::Rejected(response) =>
+                                self.handle_rejected(reactor, response, source),
+                        }
+                    }
+                },
+                Err(_) => (),                 // Nothing on the socket.
+            }
+        } else {
+            unimplemented!();
+        }
+
+    }
+
+    /// A registered timer has expired
+    fn timeout(&mut self, reactor: &mut Reactor<T>, token: Token) {
+        // If timer has fired.
+        self.handle_timer(reactor)
+    }
+
+    /// A message has been delivered.
+    fn notify(&mut self, _reactor: &mut Reactor<T>, request: ClientRequest<T>) {
+        // Something in channel.
+        debug!("ID {}: GOT CLIENT REQUEST {:?}, LEADER: {:?}", self.address, request, self.leader);
+        match request {
+            ClientRequest::IndexRange(request) => {
+                let result = self.handle_index_range(request);
+                info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
+                self.res_send.send(result).unwrap();
+            },
+            ClientRequest::AppendRequest(request) => {
+                let target = request.prev_log_index + request.entries.len() as u64;
+                let result = self.handle_append_request(request)
+                    .map(|_| Vec::new());
+                // If it's `Ok` we should respond once it's commited.
+                if result.is_ok() {
+                    self.notice_requests.insert(target.0 as usize);
+                } else {
+                    info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
+                    self.res_send.send(result).unwrap();
+                }
+            },
+        };
     }
 }
