@@ -3,12 +3,14 @@
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Hoverbear/raft/master/raft.png")]
 #![doc(html_root_url = "https://hoverbear.github.io/raft/raft/")]
 
-#![feature(core)]
-#![feature(io)]
-#![feature(net)]
-#![feature(fs)]
-#![feature(std_misc)]
-#![feature(collections)]
+#![feature(
+    core,
+    io,
+    net,
+    fs,
+    std_misc,
+    collections
+)]
 
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate uuid;
