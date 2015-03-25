@@ -49,8 +49,8 @@ use state::{NodeState, TransactionState, Transaction};
 
 // The maximum size of the read buffer.
 const BUFFER_SIZE: usize = 4096;
-const HEARTBEAT_MIN: i64 = 150;
-const HEARTBEAT_MAX: i64 = 300;
+const HEARTBEAT_MIN: u64 = 150;
+const HEARTBEAT_MAX: u64 = 300;
 
 // MIO Tokens
 const SOCKET:  Token = Token(0);
@@ -166,7 +166,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         // Setup the socket, make it not block.
         let socket = UdpSocket::bind(&address).unwrap();
         event_loop.register(&socket, SOCKET).unwrap();
-        event_loop.timeout(TIMEOUT, Duration::milliseconds(250)).unwrap();
+        event_loop.timeout_ms(TIMEOUT, 250).unwrap();
         // Communication channels.
         let (res_send, res_recv) = channel::<io::Result<Vec<(Term, T)>>>();
         let req_send = event_loop.channel();
@@ -711,10 +711,10 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         debug!("Node {} timer RESET", self.address);
         match self.state {
             Leader(_) => {
-                reactor.timeout(TIMEOUT, Duration::milliseconds(250)).unwrap();
+                reactor.timeout_ms(TIMEOUT, 250).unwrap();
             },
             Follower(_) | Candidate(_) => {
-                reactor.timeout(TIMEOUT, Duration::milliseconds(self.rng.gen_range::<i64>(HEARTBEAT_MIN, HEARTBEAT_MAX))).unwrap();
+                reactor.timeout_ms(TIMEOUT, self.rng.gen_range::<u64>(HEARTBEAT_MIN, HEARTBEAT_MAX)).unwrap();
             },
         }
     }

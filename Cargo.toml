@@ -3,12 +3,18 @@ name = "raft"
 version = "0.0.1"
 authors = ["Andrew Hobden <andrew@hoverbear.org>"]
 
+[build-dependencies]
+capnpc = "*"
+
 [dependencies]
+capnp = "*"
 rustc-serialize = "*"
 uuid = "*"
 rand = "*"
 log = "*"
-env_logger = "*" # Important for tests.
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio"
+
+[dev-dependencies]
+env_logger = "*"
