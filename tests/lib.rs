@@ -11,6 +11,7 @@ use std::str::FromStr;
 
 use raft::{LogIndex, RaftNode, Term};
 use raft::interchange::{ClientRequest, AppendRequest, IndexRange};
+use raft::store::MemStore;
 
 #[test]
 #[allow(unused_variables)]
@@ -30,27 +31,27 @@ fn basic_test() {
     ];
 
     // Create the nodes.
-    let (log_0_sender, log_0_reciever) = RaftNode::<String>::start(
+    let (log_0_sender, log_0_reciever) = RaftNode::<String, MemStore>::start(
         nodes[0].clone(),
         nodes.clone().into_iter().collect(),
-        PathBuf::from("/tmp/test0")
+        MemStore::new()
     );
-    let (log_1_sender, log_1_reciever) = RaftNode::<String>::start(
+    let (log_1_sender, log_1_reciever) = RaftNode::<String, MemStore>::start(
         nodes[1].clone(),
         nodes.clone().into_iter().collect(),
-        PathBuf::from("/tmp/test1")
+        MemStore::new()
     );
-    let (log_2_sender, log_2_reciever) = RaftNode::<String>::start(
+    let (log_2_sender, log_2_reciever) = RaftNode::<String, MemStore>::start(
         nodes[2].clone(),
         nodes.clone().into_iter().collect(),
-        PathBuf::from("/tmp/test2")
+        MemStore::new()
     );
 
     // Make a test send to that port.
     let test_command = ClientRequest::AppendRequest(AppendRequest {
         entries: vec!["foo".to_string()],
-        prev_log_index: LogIndex(0),
-        prev_log_term: Term(0),
+        prev_log_index: LogIndex::from(0),
+        prev_log_term: Term::from(0),
     });
     log_0_sender.send(test_command.clone()).unwrap();
     // Get the result.
@@ -61,8 +62,8 @@ fn basic_test() {
 
     // Test Index.
     let test_index = ClientRequest::IndexRange(IndexRange {
-            start_index: LogIndex(0),
-            end_index: LogIndex(5),
+            start_index: LogIndex::from(0),
+            end_index: LogIndex::from(5),
     });
     log_0_sender.send(test_index.clone()).unwrap();
     // wait_a_second();
@@ -75,7 +76,7 @@ fn basic_test() {
     // Add something else.
     let test_command = ClientRequest::AppendRequest(AppendRequest {
         entries: vec!["bar".to_string(), "baz".to_string()],
-        prev_log_index: LogIndex(1),
+        prev_log_index: LogIndex::from(1),
         prev_log_term: result.get(0).expect("Unable to get term.").0,
     });
     log_0_sender.send(test_command.clone()).unwrap();
@@ -86,8 +87,8 @@ fn basic_test() {
 
     // Test Index.
     let test_index = ClientRequest::IndexRange(IndexRange {
-            start_index: LogIndex(0),
-            end_index: LogIndex(5),
+            start_index: LogIndex::from(0),
+            end_index: LogIndex::from(5),
     });
     log_0_sender.send(test_index.clone()).unwrap();
     // wait_a_second();
