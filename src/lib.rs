@@ -22,6 +22,7 @@ pub mod state;
 
 use std::{io, str, thread};
 use std::collections::{HashMap, HashSet, VecDeque, BitSet};
+use std::path::PathBuf;
 use std::fmt::Debug;
 use std::num::Int;
 use std::net::SocketAddr;
@@ -142,7 +143,7 @@ pub struct RaftNode<T: Encodable + Decodable + Send + Clone> {
     rng: ThreadRng,
 }
 
-type Reactor<T> = EventLoop<Token, ClientRequest<T>>;
+type Reactor<T> = EventLoop<RaftNode<T>>;
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
 /// done via `::new()`.
@@ -158,7 +159,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     /// * `state_file` - The path the to the file in which node state will be persisted.
     pub fn start(address: SocketAddr,
                  cluster_members: HashSet<SocketAddr>,
-                 state_file: Path)
+                 state_file: PathBuf)
                  -> (EventLoopSender<ClientRequest<T>>, Receiver<io::Result<Vec<(Term, T)>>>) {
         // Create an event loop
         let mut event_loop = Reactor::new().unwrap();
@@ -838,7 +839,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
     }
 }
 
-impl<T> Handler<Token, ClientRequest<T>> for RaftNode<T>
+impl<T> Handler for RaftNode<T>
 where T: Encodable + Decodable + Debug + Send + 'static + Clone {
 
     /// A registered IoHandle has available data to read

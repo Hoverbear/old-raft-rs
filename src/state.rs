@@ -3,10 +3,11 @@ extern crate uuid;
 
 use std::collections::{hash_map, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write, ReadExt, Seek};
+use std::io::{self, Write, Read, Seek};
+use std::path::PathBuf;
 use std::marker;
 use std::net::SocketAddr;
-use std::str::{self, StrExt};
+use std::str;
 use std::string::ToString;
 
 use rustc_serialize::base64::{ToBase64, FromBase64, Config, CharacterSet, Newline};
@@ -31,7 +32,7 @@ pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
 }
 
 impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
-    pub fn new(current_term: Term, log_path: Path) -> PersistentState<T> {
+    pub fn new(current_term: Term, log_path: PathBuf) -> PersistentState<T> {
         let mut open_opts = OpenOptions::new();
         open_opts.read(true);
         open_opts.write(true);
@@ -124,7 +125,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         let mut lines_read = 0u64;
         self.log.seek(io::SeekFrom::Start(0)).unwrap(); // Take the start.
         // Go until we've reached `from` new lines.
-        let _ = self.log.by_ref().chars().skip_while(|opt| {
+        let _ = Read::by_ref(&mut self.log).chars().skip_while(|opt| {
             match *opt {
                 Ok(val) => {
                     if val == '\n' {
@@ -159,11 +160,11 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     pub fn retrieve_entries(&mut self, start: LogIndex, end: LogIndex) -> io::Result<Vec<(Term, T)>> {
         let _ = self.move_to(start);
         let mut out = vec![];
-        let mut read_in = self.log.by_ref()
+        let mut read_in = Read::by_ref(&mut self.log)
             .chars()
             .take_while(|val| val.is_ok())
             .filter_map(|val| val.ok()); // We don't really care about issues here.
-        for _ in range(start.0, end.0 + 1) {
+        for _ in start.0 .. end.0 + 1 {
             let chars = read_in.by_ref()
                 .take_while(|&val| val != '\n')
                 .collect::<String>();
@@ -176,7 +177,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     pub fn retrieve_entry(&mut self, index: LogIndex) -> io::Result<(Term, T)> {
         if index.0 == 0 { return Err(io::Error::new(io::ErrorKind::InvalidInput, "Could not parse term.", None)); }
         let _ = self.move_to(index);
-        let chars = self.log.by_ref()
+        let chars = Read::by_ref(&mut self.log)
             .chars()
             .take_while(|val| val.is_ok())
             .filter_map(|val| val.ok()) // We don't really care about issues here.
