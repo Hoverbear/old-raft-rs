@@ -1,56 +1,47 @@
-#![feature(fs, old_io, old_path, std_misc)]
-
 extern crate "rustc-serialize" as rustc_serialize;
 extern crate raft;
 extern crate env_logger;
 extern crate log;
 
 use std::fs;
-use std::old_io::net::ip::IpAddr::Ipv4Addr;
-use std::old_io::net::ip::SocketAddr;
-use std::old_io::timer::Timer;
-use std::time::Duration;
+use std::path::PathBuf;
+use std::str::FromStr;
 
 use raft::{LogIndex, RaftNode, Term};
 use raft::interchange::{ClientRequest, AppendRequest, IndexRange};
 
-fn wait_a_second() {
-    let mut timer = Timer::new().unwrap();
-    let clock = timer.oneshot(Duration::milliseconds(1000)); // If this fails we're in trouble.
-    let _ = clock.recv();
-}
-
 #[test]
 #[allow(unused_variables)]
 fn basic_test() {
+    use std::net::SocketAddr;
     // Start the logger.
     env_logger::init().unwrap();
 
-    fs::remove_file(&Path::new("/tmp/test0")).ok();
-    fs::remove_file(&Path::new("/tmp/test1")).ok();
-    fs::remove_file(&Path::new("/tmp/test2")).ok();
+    fs::remove_file(&PathBuf::new("/tmp/test0")).ok();
+    fs::remove_file(&PathBuf::new("/tmp/test1")).ok();
+    fs::remove_file(&PathBuf::new("/tmp/test2")).ok();
 
     let nodes = vec![
-        SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11110 },
-        SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 },
-        SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 },
+        SocketAddr::from_str("127.0.0.1:11110").unwrap(),
+        SocketAddr::from_str("127.0.0.1:11111").unwrap(),
+        SocketAddr::from_str("127.0.0.1:11112").unwrap(),
     ];
 
     // Create the nodes.
     let (log_0_sender, log_0_reciever) = RaftNode::<String>::start(
         nodes[0].clone(),
         nodes.clone().into_iter().collect(),
-        Path::new("/tmp/test0")
+        PathBuf::new("/tmp/test0")
     );
     let (log_1_sender, log_1_reciever) = RaftNode::<String>::start(
         nodes[1].clone(),
         nodes.clone().into_iter().collect(),
-        Path::new("/tmp/test1")
+        PathBuf::new("/tmp/test1")
     );
     let (log_2_sender, log_2_reciever) = RaftNode::<String>::start(
         nodes[2].clone(),
         nodes.clone().into_iter().collect(),
-        Path::new("/tmp/test2")
+        PathBuf::new("/tmp/test2")
     );
 
     // Make a test send to that port.

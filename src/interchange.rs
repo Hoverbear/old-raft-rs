@@ -105,6 +105,7 @@ impl RemoteProcedureResponse {
             next_index: next_index,
         })
     }
+    
     /// Creates a new RemoteProcedureResponse::rejected.
     pub fn reject(uuid: Uuid, term: Term,
                   match_index: LogIndex, next_index: LogIndex)

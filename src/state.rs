@@ -3,10 +3,11 @@ extern crate uuid;
 
 use std::collections::{hash_map, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write, ReadExt, Seek};
+use std::io::{self, Write, Read, Seek};
+use std::path::PathBuf;
 use std::marker;
-use std::old_io::net::ip::SocketAddr;
-use std::str::{self, StrExt};
+use std::net::SocketAddr;
+use std::str;
 use std::string::ToString;
 
 use rustc_serialize::base64::{ToBase64, FromBase64, Config, CharacterSet, Newline};
@@ -31,7 +32,7 @@ pub struct PersistentState<T: Encodable + Decodable + Send + Clone> {
 }
 
 impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
-    pub fn new(current_term: Term, log_path: Path) -> PersistentState<T> {
+    pub fn new(current_term: Term, log_path: PathBuf) -> PersistentState<T> {
         let mut open_opts = OpenOptions::new();
         open_opts.read(true);
         open_opts.write(true);
@@ -124,7 +125,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
         let mut lines_read = 0u64;
         self.log.seek(io::SeekFrom::Start(0)).unwrap(); // Take the start.
         // Go until we've reached `from` new lines.
-        let _ = self.log.by_ref().chars().skip_while(|opt| {
+        let _ = Read::by_ref(&mut self.log).chars().skip_while(|opt| {
             match *opt {
                 Ok(val) => {
                     if val == '\n' {
@@ -159,11 +160,11 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     pub fn retrieve_entries(&mut self, start: LogIndex, end: LogIndex) -> io::Result<Vec<(Term, T)>> {
         let _ = self.move_to(start);
         let mut out = vec![];
-        let mut read_in = self.log.by_ref()
+        let mut read_in = Read::by_ref(&mut self.log)
             .chars()
             .take_while(|val| val.is_ok())
             .filter_map(|val| val.ok()); // We don't really care about issues here.
-        for _ in range(start.0, end.0 + 1) {
+        for _ in start.0 .. end.0 + 1 {
             let chars = read_in.by_ref()
                 .take_while(|&val| val != '\n')
                 .collect::<String>();
@@ -176,7 +177,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
     pub fn retrieve_entry(&mut self, index: LogIndex) -> io::Result<(Term, T)> {
         if index.0 == 0 { return Err(io::Error::new(io::ErrorKind::InvalidInput, "Could not parse term.", None)); }
         let _ = self.move_to(index);
-        let chars = self.log.by_ref()
+        let chars = Read::by_ref(&mut self.log)
             .chars()
             .take_while(|val| val.is_ok())
             .filter_map(|val| val.ok()) // We don't really care about issues here.
@@ -300,10 +301,10 @@ pub enum TransactionState {
 #[test]
 fn test_update_header() {
     use std::fs;
-    use std::old_io::net::ip::SocketAddr;
+    use std::net::SocketAddr;
     use std::str::FromStr;
 
-    let path = Path::new("/tmp/test_path");
+    let path = PathBuf::new("/tmp/test_path");
     fs::remove_file(&path).ok();
     let mut state = PersistentState::new(Term(0), path);
 
@@ -339,9 +340,10 @@ fn test_update_header() {
 #[test]
 fn test_persistent_state() {
     use std::fs;
-    let path = Path::new("/tmp/test_path");
+    let path = PathBuf::new("/tmp/test_path");
     fs::remove_file(&path.clone()).ok();
     let mut state = PersistentState::new(Term(0), path.clone());
+
     // Check heartbeat
     assert_eq!(state.append_entries(LogIndex(0), Term(0),
         vec![]),
@@ -349,39 +351,47 @@ fn test_persistent_state() {
     assert_eq!(state.get_last_index(), LogIndex(0));
     assert_eq!(state.get_last_term(), Term(0));
     assert!(state.retrieve_entry(LogIndex(0)).is_err());
+
     // Add 1
     assert_eq!(state.append_entries(LogIndex(0), Term(0), // Zero is the initialization state.
         vec![(Term(1), "One".to_string())]),
         Ok(()));
+
     // Check 1
     assert_eq!(state.retrieve_entry(LogIndex(1)),
         Ok((Term(1), "One".to_string())));
     assert_eq!(state.get_last_index(), LogIndex(1));
     assert_eq!(state.get_last_term(), Term(1));
+
     // Do a blank check.
     assert_eq!(state.append_entries(LogIndex(1), Term(1), vec![]),
         Ok(()));
         assert_eq!(state.get_last_index(), LogIndex(1));
         assert_eq!(state.get_last_term(), Term(1));
+
     // Add 2
     assert_eq!(state.append_entries(LogIndex(1), Term(1),
         vec![(Term(2), "Two".to_string())]),
         Ok(()));
     assert_eq!(state.get_last_index(), LogIndex(2));
     assert_eq!(state.get_last_term(), Term(2));
+
     // Check 1, 2
     assert_eq!(state.retrieve_entries(LogIndex(1), LogIndex(2)),
         Ok(vec![(Term(1), "One".to_string()),
                 (Term(2), "Two".to_string())
         ]));
+
     // Check 2
     assert_eq!(state.retrieve_entry(LogIndex(2)),
         Ok((Term(2), "Two".to_string())));
+
     // Add 3, 4
     assert_eq!(state.append_entries(LogIndex(2), Term(2),
         vec![(Term(3), "Three".to_string()),
              (Term(4), "Four".to_string())]),
         Ok(()));
+
     // Check 3, 4
     assert_eq!(state.retrieve_entries(LogIndex(3), LogIndex(4)),
         Ok(vec![(Term(3), "Three".to_string()),
@@ -389,16 +399,19 @@ fn test_persistent_state() {
         ]));
     assert_eq!(state.get_last_index(), LogIndex(4));
     assert_eq!(state.get_last_term(), Term(4));
+
     // Remove 3, 4
     assert_eq!(state.purge_from_index(LogIndex(3)),
         Ok(()));
     assert_eq!(state.get_last_index(), LogIndex(2));
     assert_eq!(state.get_last_term(), Term(2));
+
     // Check 3, 4 are removed, and that code handles lack of entry gracefully.
     assert_eq!(state.retrieve_entries(LogIndex(0), LogIndex(4)),
         Ok(vec![(Term(1), "One".to_string()),
                 (Term(2), "Two".to_string())
         ]));
+
     // Add 3, 4, 5
     assert_eq!(state.append_entries(LogIndex(2), Term(2),
         vec![(Term(3), "Three".to_string()),
@@ -407,6 +420,7 @@ fn test_persistent_state() {
         Ok(()));
     assert_eq!(state.get_last_index(), LogIndex(5));
     assert_eq!(state.get_last_term(), Term(5));
+
     // Add 3, 4 again. (5 should be purged)
     assert_eq!(state.append_entries(LogIndex(2), Term(2),
         vec![(Term(3), "Three".to_string()),
@@ -420,6 +434,7 @@ fn test_persistent_state() {
         ]));
     assert_eq!(state.get_last_index(), LogIndex(4));
     assert_eq!(state.get_last_term(), Term(4));
+
     // Do a blank check.
     assert_eq!(state.append_entries(LogIndex(4), Term(4), vec![]),
         Ok(()));
