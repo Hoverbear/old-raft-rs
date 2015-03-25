@@ -1,4 +1,6 @@
-extern crate "rustc-serialize" as rustc_serialize;
+#![feature(convert)]
+
+extern crate rustc_serialize;
 extern crate raft;
 extern crate env_logger;
 extern crate log;
@@ -17,9 +19,9 @@ fn basic_test() {
     // Start the logger.
     env_logger::init().unwrap();
 
-    fs::remove_file(&PathBuf::new("/tmp/test0")).ok();
-    fs::remove_file(&PathBuf::new("/tmp/test1")).ok();
-    fs::remove_file(&PathBuf::new("/tmp/test2")).ok();
+    fs::remove_file(&PathBuf::from("/tmp/test0")).ok();
+    fs::remove_file(&PathBuf::from("/tmp/test1")).ok();
+    fs::remove_file(&PathBuf::from("/tmp/test2")).ok();
 
     let nodes = vec![
         SocketAddr::from_str("127.0.0.1:11110").unwrap(),
@@ -31,17 +33,17 @@ fn basic_test() {
     let (log_0_sender, log_0_reciever) = RaftNode::<String>::start(
         nodes[0].clone(),
         nodes.clone().into_iter().collect(),
-        PathBuf::new("/tmp/test0")
+        PathBuf::from("/tmp/test0")
     );
     let (log_1_sender, log_1_reciever) = RaftNode::<String>::start(
         nodes[1].clone(),
         nodes.clone().into_iter().collect(),
-        PathBuf::new("/tmp/test1")
+        PathBuf::from("/tmp/test1")
     );
     let (log_2_sender, log_2_reciever) = RaftNode::<String>::start(
         nodes[2].clone(),
         nodes.clone().into_iter().collect(),
-        PathBuf::new("/tmp/test2")
+        PathBuf::from("/tmp/test2")
     );
 
     // Make a test send to that port.

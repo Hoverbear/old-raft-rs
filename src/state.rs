@@ -1,6 +1,3 @@
-extern crate "rustc-serialize" as rustc_serialize;
-extern crate uuid;
-
 use std::collections::{hash_map, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write, Read, Seek};
@@ -111,7 +108,7 @@ impl<T: Encodable + Decodable + Send + Clone> PersistentState<T> {
             line_length: None,
         })
     }
-    fn decode(bytes: String) -> Result<T, rustc_serialize::json::DecoderError> {
+    fn decode(bytes: String) -> json::DecodeResult<T> {
         let based = bytes.from_base64()
             .ok().expect("Decoding error. log likely corrupt.");
         let string = str::from_utf8(based.as_slice())
@@ -304,7 +301,7 @@ fn test_update_header() {
     use std::net::SocketAddr;
     use std::str::FromStr;
 
-    let path = PathBuf::new("/tmp/test_path");
+    let path = PathBuf::from("/tmp/test_path");
     fs::remove_file(&path).ok();
     let mut state = PersistentState::new(Term(0), path);
 
@@ -340,7 +337,7 @@ fn test_update_header() {
 #[test]
 fn test_persistent_state() {
     use std::fs;
-    let path = PathBuf::new("/tmp/test_path");
+    let path = PathBuf::from("/tmp/test_path");
     fs::remove_file(&path.clone()).ok();
     let mut state = PersistentState::new(Term(0), path.clone());
 
