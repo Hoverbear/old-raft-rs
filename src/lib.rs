@@ -6,8 +6,6 @@
 #![feature(
     core,
     io,
-    net,
-    fs,
     std_misc,
     collections
 )]
@@ -34,7 +32,7 @@ use rand::{thread_rng, Rng, ThreadRng};
 use rustc_serialize::{json, Encodable, Decodable};
 
 // MIO
-use mio::net::udp::UdpSocket;
+use mio::udp::UdpSocket;
 use mio::{EventLoopSender, Token, EventLoop, Handler, ReadHint};
 
 // Enums and variants.
@@ -163,13 +161,13 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                  -> (EventLoopSender<ClientRequest<T>>, Receiver<io::Result<Vec<(Term, T)>>>) {
         // Create an event loop
         let mut event_loop = Reactor::new().unwrap();
-        let req_send = event_loop.channel();
         // Setup the socket, make it not block.
         let socket = UdpSocket::bind(&address).unwrap();
         event_loop.register(&socket, SOCKET).unwrap();
         event_loop.timeout(TIMEOUT, Duration::milliseconds(250)).unwrap();
         // Communication channels.
         let (res_send, res_recv) = channel::<io::Result<Vec<(Term, T)>>>();
+        let req_send = event_loop.channel();
         // Fire up the thread.
         thread::Builder::new().name(format!("RaftNode {}", address)).spawn(move || {
             // Start up a RNG and Timer
@@ -562,7 +560,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                     if status[source].uuid == response.uuid {
                         // Set it.
                         debug!("ID {}:C: FROM {} MATCHED", self.address, source);
-                        status[source].state = TransactionState::Accepted;
+                        status.get_mut(&source).unwrap().state = TransactionState::Accepted;
                         check_polls = true;
                     } else {
                         debug!("ID {}:C: FROM {} NO MATCH", self.address, source);
@@ -622,7 +620,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 // The vote has failed. This means there is most likely an existing leader.
                 // Check the UUID and make sure it's fresh.
                 if let Candidate(ref mut transactions) = self.state {
-                    let transaction = &mut transactions[source];
+                    let transaction = transactions.get_mut(&source).unwrap();
                     if transaction.uuid == response.uuid {
                         transaction.state = TransactionState::Rejected;
                     }
@@ -841,6 +839,8 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
 
 impl<T> Handler for RaftNode<T>
 where T: Encodable + Decodable + Debug + Send + 'static + Clone {
+    type Message = ClientRequest<T>;
+    type Timeout = Token;
 
     /// A registered IoHandle has available data to read
     fn readable(&mut self, reactor: &mut Reactor<T>, token: Token, hint: ReadHint) {
