@@ -6,9 +6,7 @@
 #![feature(
     collections,
     convert,
-    core,
     io,
-    std_misc,
 )]
 
 extern crate rustc_serialize;
@@ -22,13 +20,11 @@ pub mod store;
 
 use std::{io, str, thread};
 use std::collections::{HashMap, HashSet, VecDeque, BitSet};
-use std::path::PathBuf;
 use std::fmt::Debug;
 use std::num::Int;
 use std::net::SocketAddr;
 use std::ops;
 use std::sync::mpsc::{channel, Sender, Receiver};
-use std::time::Duration;
 
 use rand::{thread_rng, Rng, ThreadRng};
 use rustc_serialize::{json, Encodable, Decodable};
@@ -199,7 +195,7 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
         // Fire up the thread.
         thread::Builder::new().name(format!("RaftNode {}", address)).spawn(move || {
             // Start up a RNG and Timer
-            let mut rng = thread_rng();
+            let rng = thread_rng();
             // Create the struct.
             let mut raft_node = RaftNode {
                 state: Follower(VecDeque::new()),
@@ -798,7 +794,7 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
             Candidate(_) => Leader(LeaderState::new(self.store.latest_index().unwrap())),
             _ => panic!("Called candidate_to_leader() but was not Candidate.")
         };
-        self.store.inc_current_term();
+        self.store.inc_current_term().unwrap();
         self.leader = Some(self.address);
         // This will cause us to immediately heartbeat.
         self.handle_timer(reactor);
