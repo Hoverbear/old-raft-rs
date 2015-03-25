@@ -10,7 +10,9 @@
     collections
 )]
 
-extern crate "rustc-serialize" as rustc_serialize;
+#![cfg_attr(test, feature(convert))]
+
+extern crate rustc_serialize;
 extern crate uuid;
 extern crate rand;
 #[macro_use] extern crate log;
@@ -522,7 +524,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
                 // Hopefully a response to one of our request_votes.
                 let mut check_polls = false;
                 if let Candidate(ref mut status) = self.state {
-                    if status[source].uuid == response.uuid {
+                    if status[&source].uuid == response.uuid {
                         // Set it.
                         debug!("ID {}:C: FROM {} MATCHED", self.address, source);
                         status.get_mut(&source).unwrap().state = TransactionState::Accepted;

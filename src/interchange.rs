@@ -1,9 +1,6 @@
 /// This module exposes a variety of data-interchange formats used by the library. In general,
 /// a consumer of the library won't need to utilize any of these.
 
-extern crate "rustc-serialize" as rustc_serialize;
-extern crate uuid;
-
 use rustc_serialize::{Encodable};
 use uuid::Uuid;
 
@@ -25,7 +22,7 @@ pub struct AppendEntries<T> {
     pub prev_log_term: Term,
     pub entries: Vec<(Term, T)>,
     pub leader_commit: LogIndex,
-    pub uuid: uuid::Uuid, // For tracking ACKs
+    pub uuid: Uuid, // For tracking ACKs
 }
 
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
@@ -33,7 +30,7 @@ pub struct RequestVote {
     pub term: Term,
     pub last_log_index: LogIndex,
     pub last_log_term: Term,
-    pub uuid: uuid::Uuid, // For tracking ACKs
+    pub uuid: Uuid, // For tracking ACKs
 }
 
 impl<T> RemoteProcedureCall<T> {
@@ -105,7 +102,7 @@ impl RemoteProcedureResponse {
             next_index: next_index,
         })
     }
-    
+
     /// Creates a new RemoteProcedureResponse::rejected.
     pub fn reject(uuid: Uuid, term: Term,
                   match_index: LogIndex, next_index: LogIndex)
