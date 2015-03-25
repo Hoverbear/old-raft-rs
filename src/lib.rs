@@ -195,43 +195,8 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
         }).unwrap();
         (req_send, res_recv)
     }
-    /// This is the main tick for a leader node.
-    // fn tick(&mut self) {
-    //     // Only check the channel if we can actually deal with a request.
-    //     // (This is mostly a problem for Followers in initialization and Candidates)
-    //     match self.state {
-    //         Follower(_) | Leader(_) if self.leader != None => {
-    //             // If channel has data.
-    //             match self.req_recv.try_recv() {
-    //                 Ok(request) => {          // Something in channel.
-    //                     debug!("ID {}: GOT CLIENT REQUEST {:?}, LEADER: {:?}", self.address, request, self.leader);
-    //                     match request {
-    //                         ClientRequest::IndexRange(request) => {
-    //                             let result = self.handle_index_range(request);
-    //                             info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
-    //                             self.res_send.send(result).unwrap();
-    //                         },
-    //                         ClientRequest::AppendRequest(request) => {
-    //                             let target = request.prev_log_index + request.entries.len() as u64;
-    //                             let result = self.handle_append_request(request)
-    //                                 .map(|_| Vec::new());
-    //                             // If it's `Ok` we should respond once it's commited.
-    //                             if result.is_ok() {
-    //                                 self.notice_requests.insert(target.0 as usize);
-    //                             } else {
-    //                                 info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
-    //                                 self.res_send.send(result).unwrap();
-    //                             }
-    //                         },
-    //                     };
-    //
-    //                 },
-    //                 Err(_) => (),               // Nothing in channel.
-    //             }
-    //         },
-    //         _ => (),
-    //     }
-    // }
+
+    /// Returns the required number of nodes for a majority.
     fn majority(&self) -> u64 {
         (self.cluster_members.len() as u64 + 2) >> 1
     }
@@ -281,7 +246,7 @@ impl<T: Encodable + Decodable + Debug + Send + 'static + Clone> RaftNode<T> {
 
     /// Handles a `RemoteProcedureCall::RequestVote` call.
     ///
-    ///   * Reply false if term < currentTerm.
+    ///   * Reply false if `term` < `currentTerm`.
     ///   * If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as
     ///     receiver’s log, grant vote.
     fn handle_request_vote(&mut self, reactor: &mut Reactor<T>, call: RequestVote, source: SocketAddr) -> RemoteProcedureResponse {

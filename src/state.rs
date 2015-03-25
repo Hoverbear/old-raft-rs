@@ -301,10 +301,10 @@ pub enum TransactionState {
 #[test]
 fn test_update_header() {
     use std::fs;
-    use std::old_io::net::ip::SocketAddr;
+    use std::net::SocketAddr;
     use std::str::FromStr;
 
-    let path = Path::new("/tmp/test_path");
+    let path = PathBuf::new("/tmp/test_path");
     fs::remove_file(&path).ok();
     let mut state = PersistentState::new(Term(0), path);
 
@@ -340,7 +340,7 @@ fn test_update_header() {
 #[test]
 fn test_persistent_state() {
     use std::fs;
-    let path = Path::new("/tmp/test_path");
+    let path = PathBuf::new("/tmp/test_path");
     fs::remove_file(&path.clone()).ok();
     let mut state = PersistentState::new(Term(0), path.clone());
 
