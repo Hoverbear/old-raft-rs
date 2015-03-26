@@ -15,6 +15,7 @@ extern crate rand;
 #[macro_use] extern crate log;
 extern crate mio;
 pub mod state;
+pub mod state_machine;
 pub mod store;
 pub mod node;
 pub mod interchange;
