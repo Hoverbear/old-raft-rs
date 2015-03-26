@@ -9,14 +9,21 @@
     io,
 )]
 
+extern crate capnp;
+extern crate mio;
+extern crate rand;
 extern crate rustc_serialize;
 extern crate uuid;
-extern crate rand;
+
 #[macro_use] extern crate log;
-extern crate mio;
+
 pub mod interchange;
 pub mod state;
 pub mod store;
+
+pub mod messages_capnp {
+  include!(concat!(env!("OUT_DIR"), "/messages_capnp.rs"));
+}
 
 use std::{io, str, thread};
 use std::collections::{HashMap, HashSet, VecDeque, BitSet};
