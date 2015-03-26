@@ -31,7 +31,7 @@ use rustc_serialize::{json, Encodable, Decodable};
 
 // MIO
 use mio::udp::UdpSocket;
-use mio::{EventLoopSender, Token, EventLoop, Handler, ReadHint};
+use mio::{Token, EventLoop, Handler, ReadHint};
 
 // Enums and variants.
 use interchange::{ClientRequest, RemoteProcedureCall, RemoteProcedureResponse};
@@ -182,7 +182,7 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
     pub fn start(address: SocketAddr,
                  cluster_members: HashSet<SocketAddr>,
                  store: S)
-                 -> (EventLoopSender<ClientRequest<T>>, Receiver<io::Result<Vec<(Term, T)>>>) {
+                 -> (mio::Sender<ClientRequest<T>>, Receiver<io::Result<Vec<(Term, T)>>>) {
         // Create an event loop
         let mut event_loop = Reactor::new().unwrap();
         // Setup the socket, make it not block.
