@@ -24,7 +24,7 @@ use std::fmt::Debug;
 use std::num::Int;
 use std::net::SocketAddr;
 use std::ops;
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::marker::PhantomData;
 
 use rand::{thread_rng, Rng, ThreadRng};
 use rustc_serialize::{json, Encodable, Decodable};
@@ -53,58 +53,6 @@ const HEARTBEAT_MAX: u64 = 300;
 const SOCKET:  Token = Token(0);
 const TIMEOUT: Token = Token(1);
 
-/// The term of a log entry.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
-pub struct Term(u64);
-impl From<u64> for Term {
-    fn from(val: u64) -> Term {
-        Term(val)
-    }
-}
-impl Into<u64> for Term {
-    fn into(self) -> u64 {
-        self.0
-    }
-}
-impl ops::Add<u64> for Term {
-    type Output = Term;
-    fn add(self, rhs: u64) -> Term {
-        Term(self.0.checked_add(rhs).expect("overflow while incrementing Term"))
-    }
-}
-impl ops::Sub<u64> for Term {
-    type Output = Term;
-    fn sub(self, rhs: u64) -> Term {
-        Term(self.0.checked_sub(rhs).expect("underflow while decrementing Term"))
-    }
-}
-
-/// The index of a log entry.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
-pub struct LogIndex(u64);
-impl From<u64> for LogIndex {
-    fn from(val: u64) -> LogIndex {
-        LogIndex(val)
-    }
-}
-impl Into<u64> for LogIndex {
-    fn into(self) -> u64 {
-        self.0
-    }
-}
-impl ops::Add<u64> for LogIndex {
-    type Output = LogIndex;
-    fn add(self, rhs: u64) -> LogIndex {
-        LogIndex(self.0.checked_add(rhs).expect("overflow while incrementing LogIndex"))
-    }
-}
-impl ops::Sub<u64> for LogIndex {
-    type Output = LogIndex;
-    fn sub(self, rhs: u64) -> LogIndex {
-        LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
-    }
-}
-
 /// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
 ///
 ///   * `append_entries` which is used as both a heartbeat (with no payload) and the primary
@@ -116,32 +64,7 @@ impl ops::Sub<u64> for LogIndex {
 /// state (which must be carefully stored and kept safe).
 ///
 /// Currently, the `RaftNode` API is not well defined. **We are looking for feedback and suggestions.**
-///
-/// You can create a cluster like so:
-///
-/// ```
-/// #![feature(old_io)]
-/// #![feature(old_path)]
-/// use raft::RaftNode;
-/// use std::old_io::net::ip::SocketAddr;
-/// use std::old_io::net::ip::IpAddr::Ipv4Addr;
-/// // Generally, your nodes will come from a file, or something.
-/// let nodes = vec![
-///     SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11110 },
-///     SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11111 },
-///     SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 11112 },
-/// ];
-/// // Create the nodes. You recieve a channel back to communicate on.
-/// // TODO: We will probably change this and make it less awkward.
-/// let (command_sender, result_reciever) = RaftNode::<String>::start(
-///     nodes[0].clone(),
-///     nodes.into_iter().collect(),
-///     Path::new("/tmp/test0")
-/// );
-/// ```
-///
-/// > Note: The Raft paper suggests a minimum cluster size of 3 nodes.
-pub struct RaftNode<T, S>
+struct RaftNode<T, S>
 where T: Encodable + Decodable + Clone + Debug + Send + 'static,
       S: Store + Debug
 {
@@ -158,16 +81,17 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
     notice_requests: BitSet, // When append_request is issues this gets flagged for that commit.
     // Channels and Sockets
     socket: UdpSocket,
-    res_send: Sender<io::Result<Vec<(Term, T)>>>,
     // State
     rng: ThreadRng,
+    // TODO: Can we get rid of these?
+    phantom_type: PhantomData<T>,
 }
 
 type Reactor<T, S> = EventLoop<RaftNode<T, S>>;
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
 /// done via `::new()`.
-impl <T, S> RaftNode<T, S>
+impl<T, S> RaftNode<T, S>
 where T: Encodable + Decodable + Clone + Debug + Send + 'static,
       S: Store + Debug {
 
@@ -178,20 +102,17 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
     /// * `address` - The address of the new node.
     /// * `cluster_members` - The address of every cluster member, including all
     ///                       peer nodes and the new node.
-    /// * `state_file` - The path the to the file in which node state will be persisted.
-    pub fn start(address: SocketAddr,
+    /// * `store` - The storage implementation.
+    pub fn spawn(address: SocketAddr,
                  cluster_members: HashSet<SocketAddr>,
                  store: S)
-                 -> (mio::Sender<ClientRequest<T>>, Receiver<io::Result<Vec<(Term, T)>>>) {
+    {
         // Create an event loop
-        let mut event_loop = Reactor::new().unwrap();
+        let mut event_loop = EventLoop::<RaftNode<T, S>>::new().unwrap();
         // Setup the socket, make it not block.
         let socket = UdpSocket::bind(&address).unwrap();
         event_loop.register(&socket, SOCKET).unwrap();
         event_loop.timeout_ms(TIMEOUT, 250).unwrap();
-        // Communication channels.
-        let (res_send, res_recv) = channel::<io::Result<Vec<(Term, T)>>>();
-        let req_send = event_loop.channel();
         // Fire up the thread.
         thread::Builder::new().name(format!("RaftNode {}", address)).spawn(move || {
             // Start up a RNG and Timer
@@ -210,14 +131,13 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
                 notice_requests: BitSet::new(),
                 rng: rng,
                 socket: socket,
-                res_send: res_send,
+                phantom_type: PhantomData,
                 // Recieve reqs from event_loop
             };
             // This is the main, strongly typed state machine. It loops indefinitely for now. It
             // would be nice if this was event based.
             event_loop.run(&mut raft_node).unwrap();
         }).unwrap();
-        (req_send, res_recv)
     }
 
     /// Returns the required number of nodes for a majority.
@@ -457,11 +377,6 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
                     if call.leader_commit > self.volatile_state.commit_index {
                         self.volatile_state.commit_index = call.leader_commit;
                     }
-                    if self.notice_requests.remove(&(self.volatile_state.commit_index.0 as usize)) {
-                        // Need to notify.
-                        info!("ID {}:F: RESPONDS TO CLIENT OK", self.address);
-                        self.res_send.send(Ok(vec![])).unwrap();
-                    }
                     self.reset_timer(reactor);
                     let mut next = self.store.latest_index().unwrap().0;
                     if next == 0 { next = 1; } else { next += 1; }
@@ -512,34 +427,9 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
                     && state.count_match_indexes(response.match_index) >= majority {
                     self.volatile_state.commit_index = response.match_index;
                     info!("ID {}:L: COMMITS {:?}", self.address, self.volatile_state.commit_index);
-                    if self.notice_requests.remove(&(self.volatile_state.commit_index.0 as usize)) {
-                        // Need to notify.
-                        info!("ID {}:F: RESPONDS TO CLIENT OK", self.address);
-                        self.res_send.send(Ok(vec![])).unwrap();
-                    }
                 }
             },
-            Follower(_) => {
-                // Must have been a response to our last AppendEntries request?
-                // We should ~not~ act on it, the Leader is the only one who
-                // really tells us what to do.
-                // TODO: Is it possible that a request_vote might fool us? Check here~
-                let mut found = false;
-                if let Follower(ref mut queue) = self.state {
-                    match queue.front() {
-                        Some(head) => {
-                            if head.uuid == response.uuid {
-                                found = true;
-                            }
-                        },
-                        None => (),
-                    }
-                    if found == true {
-                        debug!("ID {}:F: FOUND MATCH", self.address);
-                        let _ = queue.pop_front();
-                    }
-                };
-            },
+            Follower(_) => unreachable!(),
             Candidate(_) => {
                 // Hopefully a response to one of our request_votes.
                 let mut check_polls = false;
@@ -581,28 +471,7 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
                 // Great! Update `next_index` and `match_index`
                 unimplemented!();
             },
-            Follower(_) => {
-                // Must have been a response to our last AppendEntries request?
-                // Might also be a stale response to a request_vote.
-                let mut found = false;
-                if let Follower(ref mut queue) = self.state {
-                    match queue.front() {
-                        Some(head) => {
-                            if head.uuid == response.uuid {
-                                found = true;
-                            }
-                        },
-                        None => (),
-                    }
-                    if found == true {
-                        let _ = queue.pop_front();
-                    }
-                };
-                if found == true {
-                    info!("ID {}:F: FROM {} MATCHED: Rejected by leader.", self.address, source);
-                    self.res_send.send(Err(io::Error::new(io::ErrorKind::Other, "Request was rejected by leader.", None))).unwrap();
-                }
-            },
+            Follower(_) => unreachable!(),
             Candidate(_) => {
                 // The vote has failed. This means there is most likely an existing leader.
                 // Check the UUID and make sure it's fresh.
@@ -635,39 +504,8 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
                 Ok(self.store.append_entries_encode(request.prev_log_index, &entries).unwrap())
                 // Once a majority of nodes have commited this we will return a response.
             },
-            Follower(_) => {
-                let current_term = self.store.current_term().unwrap();
-                // Make a request to the leader.
-                match self.leader {
-                    Some(leader) => {
-                        // Can act.
-                        let (uuid, rpc) = RemoteProcedureCall::append_entries(
-                            self.store.current_term().unwrap(),
-                            request.prev_log_index,
-                            request.prev_log_term,
-                            request.entries.into_iter().map(|x| (current_term, x)).collect(),
-                            self.volatile_state.commit_index);
-                        if let Follower(ref mut queue) = self.state {
-                            queue.push_back(Transaction { uuid: uuid, state: TransactionState::Polling });
-                        } else { unreachable!(); }
-                        self.send(leader, rpc)
-                            .map(|_| ())
-                            // TODO: Update to be io::Result
-                            .map_err(|_| {
-                                info!("ID {}: RESPONDS ERROR", self.address);
-                                io::Error::new(io::ErrorKind::Other, "TODO", None)
-                            })
-                    },
-                    None     => {
-                        // Need to wait... Store it? Same implementation as a candidate.
-                        unreachable!()
-                    },
-                }
-            },
-            Candidate(_) => {
-                // ???
-                unreachable!();
-            },
+            Follower(_) => unreachable!(),
+            Candidate(_) => unreachable!(),
         }
     }
 
@@ -881,26 +719,98 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
 
     /// A message has been delivered.
     fn notify(&mut self, _reactor: &mut Reactor<T, S>, request: ClientRequest<T>) {
-        // Something in channel.
-        debug!("ID {}: GOT CLIENT REQUEST {:?}, LEADER: {:?}", self.address, request, self.leader);
-        match request {
-            ClientRequest::IndexRange(request) => {
-                let result = self.handle_index_range(request);
-                info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
-                self.res_send.send(result).unwrap();
-            },
-            ClientRequest::AppendRequest(request) => {
-                let target = request.prev_log_index + request.entries.len() as u64;
-                let result = self.handle_append_request(request)
-                    .map(|_| Vec::new());
-                // If it's `Ok` we should respond once it's commited.
-                if result.is_ok() {
-                    self.notice_requests.insert(target.0 as usize);
-                } else {
-                    info!("ID {}:F: RESPONDS TO CLIENT {:?}", self.address, result);
-                    self.res_send.send(result).unwrap();
-                }
-            },
-        };
+        unimplemented!();
+    }
+}
+
+/// This is the primary interface with a `RaftNode` in the cluster. Creating a new `Raft` client
+/// will, for now, automatically spawn a `RaftNode` with the relevant parameters. This may be
+/// changed in the future. This is based on the assumption that any consuming appliaction
+/// interacting with a Raft cluster will also be a participant.
+pub struct Raft<T, S>
+where T: Encodable + Decodable + Clone + Debug + Send + 'static,
+      S: Store + Debug
+{
+    current_leader: Option<SocketAddr>,
+    related_raftnode: SocketAddr, // Not RaftNode because we move that to another thread.
+    cluster_members: HashSet<SocketAddr>,
+    // TODO: Can we get rid of these?
+    phantom_store: PhantomData<S>,
+    phantom_type: PhantomData<T>,
+}
+
+impl<T, S> Raft<T,S>
+where T: Encodable + Decodable + Clone + Debug + Send + 'static,
+      S: Store + Debug {
+    /// Create a new `Raft` client that has a cooresponding `RaftNode` attached. Note that this
+    /// `Raft` may not necessarily interact with the cooreponding `RaftNode`, it will interact with
+    /// the `Leader` of a cluster in almost all cases.
+    pub fn new(address: SocketAddr, cluster_members: HashSet<SocketAddr>, store: S) -> Raft<T, S> {
+        // TODO: How do we know if this panics?
+        RaftNode::<T, S>::spawn(address, cluster_members.clone(), store);
+        // Store relevant information.
+        Raft {
+            current_leader: None,
+            related_raftnode: address,
+            cluster_members: cluster_members,
+            phantom_store: PhantomData,
+            phantom_type: PhantomData,
+        }
+    }
+    pub fn append(entries: Vec<T>) -> io::Result<()> {
+        unimplemented!();
+    }
+}
+
+
+/// The term of a log entry.
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
+pub struct Term(u64);
+impl From<u64> for Term {
+    fn from(val: u64) -> Term {
+        Term(val)
+    }
+}
+impl Into<u64> for Term {
+    fn into(self) -> u64 {
+        self.0
+    }
+}
+impl ops::Add<u64> for Term {
+    type Output = Term;
+    fn add(self, rhs: u64) -> Term {
+        Term(self.0.checked_add(rhs).expect("overflow while incrementing Term"))
+    }
+}
+impl ops::Sub<u64> for Term {
+    type Output = Term;
+    fn sub(self, rhs: u64) -> Term {
+        Term(self.0.checked_sub(rhs).expect("underflow while decrementing Term"))
+    }
+}
+
+/// The index of a log entry.
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
+pub struct LogIndex(u64);
+impl From<u64> for LogIndex {
+    fn from(val: u64) -> LogIndex {
+        LogIndex(val)
+    }
+}
+impl Into<u64> for LogIndex {
+    fn into(self) -> u64 {
+        self.0
+    }
+}
+impl ops::Add<u64> for LogIndex {
+    type Output = LogIndex;
+    fn add(self, rhs: u64) -> LogIndex {
+        LogIndex(self.0.checked_add(rhs).expect("overflow while incrementing LogIndex"))
+    }
+}
+impl ops::Sub<u64> for LogIndex {
+    type Output = LogIndex;
+    fn sub(self, rhs: u64) -> LogIndex {
+        LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
     }
 }
