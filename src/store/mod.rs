@@ -13,7 +13,7 @@ use Term;
 pub use store::mem::{MemStore, Error};
 
 /// A store of persistent Raft state.
-pub trait Store: Send + Clone + 'static {
+pub trait Store: Clone + Debug + Send + 'static {
 
     type Error: error::Error + Debug + Sized + 'static;
 
