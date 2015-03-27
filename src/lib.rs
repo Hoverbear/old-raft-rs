@@ -3,42 +3,34 @@
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Hoverbear/raft/master/raft.png")]
 #![doc(html_root_url = "https://hoverbear.github.io/raft/raft/")]
 
-#![feature(
-    collections,
-    convert,
-    io,
-)]
+#![feature(collections, convert)]
 
+extern crate capnp;
+extern crate mio;
+extern crate rand;
 extern crate rustc_serialize;
 extern crate uuid;
-extern crate rand;
 #[macro_use] extern crate log;
-extern crate mio;
+
+pub mod interchange;
+pub mod node;
 pub mod state;
 pub mod state_machine;
 pub mod store;
-pub mod node;
-pub mod interchange;
 
-use std::{io, str, thread};
-use std::collections::{HashMap, HashSet, VecDeque, BitSet};
+pub mod messages_capnp {
+    include!(concat!(env!("OUT_DIR"), "/messages_capnp.rs"));
+}
+
+use std::{io, ops};
+use std::collections::HashSet;
 use std::fmt::Debug;
-use std::num::Int;
-use std::net::SocketAddr;
-use std::ops;
 use std::marker::PhantomData;
+use std::net::SocketAddr;
 
-use rand::{thread_rng, Rng, ThreadRng};
-use rustc_serialize::{json, Encodable, Decodable};
-
-// MIO
-use mio::udp::UdpSocket;
-use mio::{Token, EventLoop, Handler, ReadHint};
+use rustc_serialize::{Encodable, Decodable};
 
 // Data structures.
-use state::{LeaderState, VolatileState};
-use state::NodeState::{Leader, Follower, Candidate};
-use state::{NodeState, TransactionState, Transaction};
 use store::Store;
 use node::RaftNode;
 
