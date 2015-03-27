@@ -14,6 +14,7 @@ extern crate uuid;
 
 pub mod interchange;
 pub mod node;
+pub mod replica;
 pub mod state;
 pub mod state_machine;
 pub mod store;
