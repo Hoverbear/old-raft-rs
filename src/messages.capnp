@@ -93,7 +93,13 @@ struct RequestVoteResponse {
 }
 
 struct ClientRequest {
-    entry @0 :Data;
+    union {
+        entry @0 :Data;
+        # An entry to append.
+
+        die @1 :Text;
+        # Die order, include a reason when killing. Mostly for testing.
+    }
 }
 
 struct ClientResponse {

@@ -34,14 +34,16 @@ use rustc_serialize::{Encodable, Decodable};
 // Data structures.
 use store::Store;
 use node::RaftNode;
+use state_machine::StateMachine;
 
 /// This is the primary interface with a `RaftNode` in the cluster. Creating a new `Raft` client
 /// will, for now, automatically spawn a `RaftNode` with the relevant parameters. This may be
 /// changed in the future. This is based on the assumption that any consuming appliaction
 /// interacting with a Raft cluster will also be a participant.
-pub struct Raft<T, S>
+pub struct Raft<T, S, M>
 where T: Encodable + Decodable + Clone + Debug + Send + 'static,
-      S: Store + Debug
+      S: Store + Debug,
+      M: StateMachine
 {
     current_leader: Option<SocketAddr>,
     related_raftnode: SocketAddr, // Not RaftNode because we move that to another thread.
@@ -49,17 +51,21 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
     // TODO: Can we get rid of these?
     phantom_store: PhantomData<S>,
     phantom_type: PhantomData<T>,
+    phantom_state_machine: PhantomData<M>,
 }
 
-impl<T, S> Raft<T,S>
+impl<T, S, M> Raft<T, S, M>
 where T: Encodable + Decodable + Clone + Debug + Send + 'static,
-      S: Store + Debug {
+      S: Store + Debug,
+      M: StateMachine {
     /// Create a new `Raft` client that has a cooresponding `RaftNode` attached. Note that this
     /// `Raft` may not necessarily interact with the cooreponding `RaftNode`, it will interact with
     /// the `Leader` of a cluster in almost all cases.
-    pub fn new(address: SocketAddr, cluster_members: HashSet<SocketAddr>, store: S) -> Raft<T, S> {
+    pub fn new(address: SocketAddr, cluster_members: HashSet<SocketAddr>, store: S,
+        state_machine: M) -> Raft<T, S, M>
+    {
         // TODO: How do we know if this panics?
-        RaftNode::<T, S>::spawn(address, cluster_members.clone(), store);
+        RaftNode::<T, S, M>::spawn(address, cluster_members.clone(), store, state_machine);
         // Store relevant information.
         Raft {
             current_leader: None,
@@ -67,6 +73,7 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
             cluster_members: cluster_members,
             phantom_store: PhantomData,
             phantom_type: PhantomData,
+            phantom_state_machine: PhantomData,
         }
     }
     pub fn append(entries: Vec<T>) -> io::Result<()> {

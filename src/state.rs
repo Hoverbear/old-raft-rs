@@ -70,7 +70,7 @@ impl LeaderState {
 
 /// Nodes can either be:
 ///
-///   * A `Follower`, which replicates AppendEntries requests and votes for it's leader.
+///   * A `Follower`, which replicates AppendEntries requests and votes for its leader.
 ///   * A `Leader`, which leads the cluster by serving incoming requests, ensuring data is
 ///     replicated, and issuing heartbeats..
 ///   * A `Candidate`, which campaigns in an election and may become a `Leader` (if it gets enough

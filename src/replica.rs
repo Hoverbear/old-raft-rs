@@ -91,7 +91,7 @@ struct CandidateState {
 
 /// A replica of a Raft distributed state machine. A Raft replica controls a client state machine,
 /// to which it applies commands in a globally consistent order.
-struct Replica<S, M> {
+pub struct Replica<S, M> {
     addr: SocketAddr,
     peers: HashSet<SocketAddr>,
 
