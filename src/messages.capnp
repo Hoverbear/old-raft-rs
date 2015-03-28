@@ -101,7 +101,8 @@ struct ClientResponse {
         success @0 :Void;
         # The client request succeeded.
 
-        notLeader @1 :Void;
+        notLeader @1 :Text;
         # The client request failed because the Raft node is not the leader.
+        # The value returned is the address of the leader.
     }
 }
