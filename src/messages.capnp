@@ -94,7 +94,7 @@ struct RequestVoteResponse {
 
 struct ClientRequest {
     union {
-        entry @0 :Data;
+        append @0 :Data;
         # An entry to append.
 
         die @1 :Text;

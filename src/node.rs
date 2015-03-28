@@ -14,7 +14,7 @@ use mio::tcp::{TcpStream, TcpListener};
 use mio::{Token, EventLoop, Handler, ReadHint};
 
 // Data structures.
-use state::{LeaderState, VolatileState};
+use state::LeaderState;
 use state::NodeState::{Leader, Follower, Candidate};
 use state::{NodeState, TransactionState, Transaction};
 use store::Store;
@@ -61,10 +61,6 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
       S: Store + Debug,
       M: StateMachine + Debug,
 {
-    // Raft related.
-    state: NodeState,
-    volatile_state: VolatileState,
-    // Auxilary Data.
     // TODO: This should probably be split off.
     // All nodes need to know this otherwise they can't effectively lead or hold elections.
     leader: Option<SocketAddr>,
@@ -112,11 +108,6 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
             let rng = thread_rng();
             // Create the struct.
             let mut raft_node = RaftNode {
-                state: Follower(VecDeque::new()),
-                volatile_state: VolatileState {
-                    commit_index: LogIndex(0),
-                    last_applied: LogIndex(0),
-                },
                 leader: None,
                 rng: rng,
                 listener: listener,
@@ -131,14 +122,7 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
     }
 
     fn reset_timer(&mut self, reactor: &mut Reactor<T, S, M>) {
-        match self.state {
-            Leader(_) => {
-                reactor.timeout_ms(TIMEOUT, 250).unwrap();
-            },
-            Follower(_) | Candidate(_) => {
-                reactor.timeout_ms(TIMEOUT, self.rng.gen_range::<u64>(HEARTBEAT_MIN, HEARTBEAT_MAX)).unwrap();
-            },
-        }
+        reactor.timeout_ms(TIMEOUT, self.rng.gen_range::<u64>(HEARTBEAT_MIN, HEARTBEAT_MAX)).unwrap();
     }
 }
 
@@ -181,23 +165,32 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
             } else if let Ok(response) = message_reader.get_root::<rpc_response::Reader>() {
                 match response.which().unwrap() {
                     rpc_response::Which::AppendEntries(Ok(call)) => {
-                        unimplemented!()
+                        self.replica.append_entries_response(from, call);
                     },
                     rpc_response::Which::RequestVote(Ok(call)) => {
+                        self.replica.request_vote_response(from, call);
+                    },
+                    _ => {
+                        // TODO Log this?
+                        unimplemented!()
+                    },
+                }
+            } else if let Ok(client_req) = message_reader.get_root::<client_request::Reader>() {
+                match client_req.which().unwrap() {
+                    client_request::Which::Append(Ok(call)) => {
+                        unimplemented!()
+                    },
+                    client_request::Which::Die(Ok(call)) => {
                         unimplemented!()
                     },
                     _ => {
-                        unimplemented!()
-                    },
-                }
-            } else if let Ok(client_request) = message_reader.get_root::<client_request::Reader>() {
-                if client_request.has_entry() {
-                    unimplemented!();
-                } else if client_request.has_die() {
-                    unimplemented!();
+                        // TODO Log this?
+                        unimplemented!();
+                    }
                 }
             }
         } else {
+            // TODO Log this?
             unimplemented!();
         }
     }

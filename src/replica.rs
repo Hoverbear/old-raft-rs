@@ -99,6 +99,8 @@ pub struct Replica<S, M> {
     state_machine: M,
 
     state: ReplicaState,
+
+    /// Volatile State
     commit_index: LogIndex,
     last_applied: LogIndex,
 }
@@ -173,7 +175,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Apply an append entries response to the Raft replica.
-    pub fn append_entries_response(&mut self, from: &SocketAddr, response: append_entries_response::Reader) {
+    pub fn append_entries_response(&mut self, from: SocketAddr, response: append_entries_response::Reader) {
         assert!(self.peers.contains(&from), "Received append entries response from unknown node {}.", from);
         debug!("ID {}: FROM {} HANDLE append_entries_response", self.addr, from);
 
