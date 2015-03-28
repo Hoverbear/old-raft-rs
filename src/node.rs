@@ -135,40 +135,41 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
 
     /// A registered IoHandle has available data to read
     fn readable(&mut self, reactor: &mut Reactor<T, S, M>, token: Token, hint: ReadHint) {
+        let mut message = MallocMessageBuilder::new_default();
+
         // TODO: Determine the stream we got a message on?
         if token == SOCKET && hint == ReadHint::data() {
             let (mut stream, from) = self.listener.accept().unwrap();
             let message_reader = serialize_packed::new_reader_unbuffered(&stream, ReaderOptions::new())
                 .unwrap();
             if let Ok(request) = message_reader.get_root::<rpc_request::Reader>() {
-                // Build a response.
-                let mut message = MallocMessageBuilder::new_default();
-                // Act on it!
-                {
-                    match request.which().unwrap() {
-                        // TODO: Move these into replica?
-                        rpc_request::Which::AppendEntries(Ok(call)) => {
-                            let mut res = message.init_root::<append_entries_response::Builder>();
-                            self.replica.append_entries_request(from, call, res);
-                        },
-                        rpc_request::Which::RequestVote(Ok(call)) => {
-                            let mut res = message.init_root::<request_vote_response::Builder>();
-                            self.replica.request_vote_request(from, call, res);
-                        },
-                        _ => {
-                            // TODO Log this?
-                            unimplemented!()
-                        },
-                    }
+                match request.which().unwrap() {
+                    // TODO: Move these into replica?
+                    rpc_request::Which::AppendEntries(Ok(call)) => {
+                        let mut res = message.init_root::<append_entries_response::Builder>();
+                        self.replica.append_entries_request(from, call, res);
+                    },
+                    rpc_request::Which::RequestVote(Ok(call)) => {
+                        let mut res = message.init_root::<request_vote_response::Builder>();
+                        self.replica.request_vote_request(from, call, res);
+                    },
+                    _ => {
+                        // TODO Log this?
+                        unimplemented!()
+                    },
                 }
                 serialize_packed::write_packed_message_unbuffered(&mut stream, &mut message).unwrap();
             } else if let Ok(response) = message_reader.get_root::<rpc_response::Reader>() {
                 match response.which().unwrap() {
                     rpc_response::Which::AppendEntries(Ok(call)) => {
-                        self.replica.append_entries_response(from, call);
+                        let mut request = message.init_root::<rpc_request::Builder>();
+                        self.replica.append_entries_response(from, call, request.init_append_entries());
+                        // TODO: send the AppendEntries requests if necessary
                     },
                     rpc_response::Which::RequestVote(Ok(call)) => {
-                        self.replica.request_vote_response(from, call);
+                        let mut request = message.init_root::<rpc_request::Builder>();
+                        self.replica.request_vote_response(from, call, request.init_append_entries());
+                        // TODO: send the AppendEntries requests if necessary
                     },
                     _ => {
                         // TODO Log this?
@@ -197,8 +198,9 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
 
     /// A registered timer has expired
     fn timeout(&mut self, reactor: &mut Reactor<T, S, M>, token: Token) {
-        // If timer has fired.
-        // TODO: Reset timer.
-        self.replica.timeout()
+        let mut message = MallocMessageBuilder::new_default();
+        let mut request = message.init_root::<rpc_request::Builder>();
+        let (new_timeout, send_message) = self.replica.timeout(request.init_request_vote());
+        // TODO: Reset timer and send messages if necessary
     }
 }

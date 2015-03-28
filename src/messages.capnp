@@ -35,24 +35,22 @@ struct AppendEntriesRequest {
 
 struct AppendEntriesResponse {
 
-    struct LogInfo {
-        term @0 :UInt64;
-        index @1 :UInt64;
-    }
+  term @0 :UInt64;
+  # The responder's current term.
 
   union {
-    success @0 :LogInfo;
+    success @1 :Void;
     # The `AppendEntries` request was a success.
 
-    staleTerm @1 :UInt64;
+    staleTerm @2 :Void;
     # The `AppendEntries` request failed because the follower has a greater term
-    # than the leader. The follower's term is included.
+    # than the leader.
 
-    inconsistentPrevEntry @2 :Void;
+    inconsistentPrevEntry @3 :Void;
     # The `AppendEntries` request failed because the follower failed the
     # previous entry term and index checks.
 
-    internalError @3 :Text;
+    internalError @4 :Text;
     # an internal error occured; a description is included.
   }
 }
@@ -71,23 +69,26 @@ struct RequestVoteRequest {
 
 struct RequestVoteResponse {
 
+  term @0 :UInt64;
+  # The responder's current term.
+
   union {
-    granted @0 :UInt64;
-    # The voter voted for the candidate; the candidate's term is included.
+    granted @1 :Void;
+    # The voter voted for the candidate.
 
-    staleTerm @1 :UInt64;
+    staleTerm @2 :Void;
     # The `RequestVote` request failed because the voter has a greater term
-    # than the candidate. The voter's term is included.
+    # than the candidate.
 
-    alreadyVoted @2 :Void;
+    alreadyVoted @3 :Void;
     # The voter did not vote for the candidate, because the voter already voted
     # in the term.
 
-    inconsistentLog @3 :Void;
+    inconsistentLog @4 :Void;
     # The `RequestVote` request failed because the candidate's log is not
     # up-to-date with the voter's log.
 
-    internalError @4 :Text;
+    internalError @5 :Text;
     # an internal error occured; a description is included.
   }
 }
