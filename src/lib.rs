@@ -113,6 +113,32 @@ impl Raft {
         }
     }
 
+    /// Kills the node. Should only really be used for testing purposes.
+    /// Accepts a `SocketAddr` because if you're going to kill a node you should be able to pick
+    /// your victim.
+    pub fn die(&mut self, target: SocketAddr, reason: String) -> Result<(), RaftError> {
+        if !self.cluster_members.contains(&target) {
+            return Err(RaftError::Raft(RaftErrorKind::NotInCluster))
+        }
+        let mut message = MallocMessageBuilder::new_default();
+        {
+            let mut client_req = message.init_root::<client_request::Builder>();
+            client_req.set_die(&reason)
+        }
+        // We know current leader `is_some()` because `refresh_leader()` didn't fail.
+        let mut socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
+        serialize_packed::write_packed_message_unbuffered(&mut socket, &mut message);
+
+        // Wait for a response.
+        let mut response = try!(serialize_packed::new_reader_unbuffered(socket, ReaderOptions::new()));
+        let client_res = try!(response.get_root::<client_response::Reader>());
+        // Set the current leader.
+        match try!(client_res.which()) {
+            client_response::Which::Success(()) => Ok(()),
+            _ => unimplemented!(),
+        }
+    }
+
     /// This function will force the `Raft` interface to refresh it's knowledge of the leader from
     /// The cooresponding `RaftNode` running alongside it.
     pub fn refresh_leader(&mut self) -> Result<(), RaftError> {
