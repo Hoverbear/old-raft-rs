@@ -100,6 +100,9 @@ struct ClientRequest {
 
         die @1 :Text;
         # Die order, include a reason when killing. Mostly for testing.
+
+        leaderRefresh @2 :Void;
+        # Requests a current pointer to the leader. Expect a `notLeader` response.
     }
 }
 
