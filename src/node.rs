@@ -1,22 +1,12 @@
-use std::{io, str, thread};
-use std::collections::{HashMap, HashSet, VecDeque, BitSet};
-use std::fmt::Debug;
-use std::num::Int;
+use std::thread;
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::ops;
-use std::marker::PhantomData;
-
-use rand::{thread_rng, Rng, ThreadRng};
-use rustc_serialize::{json, Encodable, Decodable};
 
 // MIO
-use mio::tcp::{TcpStream, TcpListener};
+use mio::tcp::TcpListener;
 use mio::{Token, EventLoop, Handler, ReadHint};
 
 // Data structures.
-use state::LeaderState;
-use state::NodeState::{Leader, Follower, Candidate};
-use state::{NodeState, TransactionState, Transaction};
 use store::Store;
 use replica::Replica;
 use state_machine::StateMachine;
@@ -30,16 +20,7 @@ use messages_capnp::{
     client_request,
     request_vote_response,
     append_entries_response,
-    client_response,
 };
-
-use Term;
-use LogIndex;
-
-// The maximum size of the read buffer.
-const BUFFER_SIZE: usize = 4096;
-const HEARTBEAT_MIN: u64 = 150;
-const HEARTBEAT_MAX: u64 = 300;
 
 // MIO Tokens
 const SOCKET:  Token = Token(0);
@@ -56,85 +37,55 @@ const TIMEOUT: Token = Token(1);
 /// state (which must be carefully stored and kept safe).
 ///
 /// Currently, the `RaftNode` API is not well defined. **We are looking for feedback and suggestions.**
-pub struct RaftNode<T, S, M>
-where T: Encodable + Decodable + Clone + Debug + Send + 'static,
-      S: Store + Debug,
-      M: StateMachine + Debug,
-{
-    // TODO: This should probably be split off.
-    // All nodes need to know this otherwise they can't effectively lead or hold elections.
-    leader: Option<SocketAddr>,
+pub struct RaftNode<S, M> where S: Store, M: StateMachine {
     replica: Replica<S, M>,
     // Channels and Sockets
     listener: TcpListener, // TODO: Just use streams??
-    // State
-    rng: ThreadRng,
-    // TODO: Can we get rid of these?
-    phantom_type: PhantomData<T>,
 }
 
-type Reactor<T, S, M> = EventLoop<RaftNode<T, S, M>>;
+type Reactor<S, M> = EventLoop<RaftNode<S, M>>;
 
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
 /// done via `::new()`.
-impl<T, S, M> RaftNode<T, S, M>
-where T: Encodable + Decodable + Clone + Debug + Send + 'static,
-      S: Store + Debug,
-      M: StateMachine + Debug
-{
+impl<S, M> RaftNode<S, M> where S: Store, M: StateMachine {
 
     /// Creates a new Raft node with the cluster members specified.
     ///
     /// # Arguments
     ///
-    /// * `address` - The address of the new node.
-    /// * `cluster_members` - The address of every cluster member, including all
-    ///                       peer nodes and the new node.
-    /// * `store` - The storage implementation.
-    pub fn spawn(address: SocketAddr,
-                 cluster_members: HashSet<SocketAddr>,
-                 store: S, state_machine: M)
-    {
+    /// * `addr` - The address of the new node.
+    /// * `peers` - The address of all peers in the Raft cluster.
+    /// * `store` - The persitent log store.
+    /// * `state_machine` - The client state machine to which client commands will be applied.
+    pub fn spawn(addr: SocketAddr,
+                 peers: HashSet<SocketAddr>,
+                 store: S,
+                 state_machine: M) {
         // Create an event loop
-        let mut event_loop = EventLoop::<RaftNode<T, S, M>>::new().unwrap();
+        let mut event_loop = Reactor::<S, M>::new().unwrap();
         // Setup the socket, make it not block.
-        let listener = TcpListener::bind(&address).unwrap();
+        let listener = TcpListener::bind(&addr).unwrap();
         event_loop.register(&listener, SOCKET).unwrap();
         event_loop.timeout_ms(TIMEOUT, 250).unwrap();
-        let replica = Replica::new(address, cluster_members, store, state_machine);
+        let replica = Replica::new(addr, peers, store, state_machine);
         // Fire up the thread.
-        thread::Builder::new().name(format!("RaftNode {}", address)).spawn(move || {
-            // Start up a RNG and Timer
-            let rng = thread_rng();
-            // Create the struct.
+        thread::Builder::new().name(format!("RaftNode {}", addr)).spawn(move || {
             let mut raft_node = RaftNode {
-                leader: None,
-                rng: rng,
                 listener: listener,
                 replica: replica,
-                phantom_type: PhantomData,
-                // Recieve reqs from event_loop
             };
-            // This is the main, strongly typed state machine. It loops indefinitely for now. It
-            // would be nice if this was event based.
             event_loop.run(&mut raft_node).unwrap();
         }).unwrap();
     }
-
-    fn reset_timer(&mut self, reactor: &mut Reactor<T, S, M>) {
-        reactor.timeout_ms(TIMEOUT, self.rng.gen_range::<u64>(HEARTBEAT_MIN, HEARTBEAT_MAX)).unwrap();
-    }
 }
 
-impl<T, S, M> Handler for RaftNode<T, S, M>
-where T: Encodable + Decodable + Clone + Debug + Send + 'static,
-      S: Store + Debug,
-      M: StateMachine {
-    type Message = T;
+impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
+
+    type Message = ();
     type Timeout = Token;
 
     /// A registered IoHandle has available data to read
-    fn readable(&mut self, reactor: &mut Reactor<T, S, M>, token: Token, hint: ReadHint) {
+    fn readable(&mut self, _reactor: &mut Reactor<S, M>, token: Token, hint: ReadHint) {
         let mut message = MallocMessageBuilder::new_default();
 
         // TODO: Determine the stream we got a message on?
@@ -146,11 +97,11 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
                 match request.which().unwrap() {
                     // TODO: Move these into replica?
                     rpc_request::Which::AppendEntries(Ok(call)) => {
-                        let mut res = message.init_root::<append_entries_response::Builder>();
+                        let res = message.init_root::<append_entries_response::Builder>();
                         self.replica.append_entries_request(from, call, res);
                     },
                     rpc_request::Which::RequestVote(Ok(call)) => {
-                        let mut res = message.init_root::<request_vote_response::Builder>();
+                        let res = message.init_root::<request_vote_response::Builder>();
                         self.replica.request_vote_request(from, call, res);
                     },
                     _ => {
@@ -162,12 +113,12 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
             } else if let Ok(response) = message_reader.get_root::<rpc_response::Reader>() {
                 match response.which().unwrap() {
                     rpc_response::Which::AppendEntries(Ok(call)) => {
-                        let mut request = message.init_root::<rpc_request::Builder>();
+                        let request = message.init_root::<rpc_request::Builder>();
                         self.replica.append_entries_response(from, call, request.init_append_entries());
                         // TODO: send the AppendEntries requests if necessary
                     },
                     rpc_response::Which::RequestVote(Ok(call)) => {
-                        let mut request = message.init_root::<rpc_request::Builder>();
+                        let request = message.init_root::<rpc_request::Builder>();
                         self.replica.request_vote_response(from, call, request.init_append_entries());
                         // TODO: send the AppendEntries requests if necessary
                     },
@@ -197,10 +148,11 @@ where T: Encodable + Decodable + Clone + Debug + Send + 'static,
     }
 
     /// A registered timer has expired
-    fn timeout(&mut self, reactor: &mut Reactor<T, S, M>, token: Token) {
+    fn timeout(&mut self, reactor: &mut Reactor<S, M>, token: Token) {
         let mut message = MallocMessageBuilder::new_default();
-        let mut request = message.init_root::<rpc_request::Builder>();
-        let (new_timeout, send_message) = self.replica.timeout(request.init_request_vote());
-        // TODO: Reset timer and send messages if necessary
+        let request = message.init_root::<rpc_request::Builder>();
+        let (timeout, _send_message) = self.replica.timeout(request.init_request_vote());
+        reactor.timeout_ms(TIMEOUT, timeout).unwrap();
+        // TODO: send messages if necessary
     }
 }

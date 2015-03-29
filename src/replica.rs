@@ -1,4 +1,4 @@
-use std::collections::{hash_map, HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddr;
 
@@ -12,101 +12,41 @@ use messages_capnp::{
     request_vote_request,
     request_vote_response,
 };
+use state::{ReplicaState, LeaderState, CandidateState, FollowerState};
 use state_machine::StateMachine;
 use store::Store;
 
-const HEARTBEAT_MIN: u64 = 150;
-const HEARTBEAT_MAX: u64 = 300;
-
-/// Replicas can be in one of three state:
-///
-/// * `Follower` - which replicates AppendEntries requests and votes for it's leader.
-/// * `Leader` - which leads the cluster by serving incoming requests, ensuring
-///              data is replicated, and issuing heartbeats.
-/// * `Candidate` -  which campaigns in an election and may become a `Leader`
-///                  (if it gets enough votes) or a `Follower`, if it hears from
-///                  a `Leader`.
-#[derive(Clone, Debug)]
-enum ReplicaState {
-    Follower,
-    Candidate(CandidateState),
-    Leader(LeaderState),
-}
-
-#[derive(Clone, Debug)]
-struct LeaderState {
-    last_index: LogIndex,
-    next_index: HashMap<SocketAddr, LogIndex>,
-    match_index: HashMap<SocketAddr, LogIndex>,
-}
-
-impl LeaderState {
-
-    /// Returns a new `LeaderState` struct.
-    ///
-    /// # Arguments
-    ///
-    /// * `last_index` - The index of the leader's most recent log entry at the
-    ///                  time of election.
-    pub fn new(last_index: LogIndex) -> LeaderState {
-        LeaderState {
-            last_index: last_index,
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
-        }
-    }
-
-    /// Returns the next log entry index of the follower node.
-    pub fn next_index(&mut self, node: SocketAddr) -> LogIndex {
-        match self.next_index.entry(node) {
-            hash_map::Entry::Occupied(entry) => *entry.get(),
-            hash_map::Entry::Vacant(entry) => *entry.insert(self.last_index + 1),
-        }
-    }
-
-    /// Sets the next log entry index of the follower node.
-    pub fn set_next_index(&mut self, node: SocketAddr, index: LogIndex) {
-        self.next_index.insert(node, index);
-    }
-
-    /// Returns the index of the highest log entry known to be replicated on
-    /// the follower node.
-    pub fn match_index(&self, node: SocketAddr) -> LogIndex {
-        *self.match_index.get(&node).unwrap_or(&LogIndex(0))
-    }
-
-    /// Sets the index of the highest log entry known to be replicated on the
-    /// follower node.
-    pub fn set_match_index(&mut self, node: SocketAddr, index: LogIndex) {
-        self.match_index.insert(node, index);
-    }
-
-    /// Counts the number of follower nodes containing the given log index.
-    pub fn count_match_indexes(&self, index: LogIndex) -> usize {
-        self.match_index.values().filter(|&&i| i >= index).count()
-    }
-}
-
-#[derive(Clone, Debug)]
-struct CandidateState {
-    granted_votes: usize,
-}
+const ELECTION_MIN: u64 = 150;
+const ELECTION_MAX: u64 = 300;
 
 /// A replica of a Raft distributed state machine. A Raft replica controls a client state machine,
 /// to which it applies commands in a globally consistent order.
 pub struct Replica<S, M> {
+    /// The network address of this `Replica`.
     addr: SocketAddr,
+    /// The network addresses of the other `Replica`s in the Raft cluster.
     peers: HashSet<SocketAddr>,
 
+    /// The persistent log store.
     store: S,
+    /// The client state machine to which client commands will be applied.
     state_machine: M,
 
-    state: ReplicaState,
-
-    /// Volatile State
+    /// Index of the latest entry known to be committed.
     commit_index: LogIndex,
+    /// Index of the latest entry applied to the state machine.
     last_applied: LogIndex,
+    /// Whether this replica should campaign after the next election timeout.
     should_campaign: bool,
+
+    /// The current state of the `Replica` (`Leader`, `Candidate`, or `Follower`).
+    state: ReplicaState,
+    /// State necessary while a `Leader`. Should not be used otherwise.
+    leader_state: LeaderState,
+    /// State necessary while a `Candidate`. Should not be used otherwise.
+    candidate_state: CandidateState,
+    /// State necessary while a `Follower`. Should not be used otherwise.
+    follower_state: FollowerState,
 }
 
 impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
@@ -116,15 +56,19 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                store: S,
                state_machine: M)
                -> Replica<S, M> {
+        let leader_state = LeaderState::new(store.latest_log_index().unwrap(), &peers);
         Replica {
             addr: addr,
             peers: peers,
-            state: ReplicaState::Follower,
             store: store,
             state_machine: state_machine,
             commit_index: LogIndex(0),
             last_applied: LogIndex(0),
             should_campaign: true,
+            state: ReplicaState::Follower,
+            leader_state: leader_state,
+            candidate_state: CandidateState::new(),
+            follower_state: FollowerState::new(),
         }
     }
 
@@ -179,12 +123,12 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                     }
                 }
             },
-            ReplicaState::Candidate(..) => {
+            ReplicaState::Candidate => {
                 // recognize the new leader, return to follower state, and apply the entries
-                self.transition_to_follower(leader_term);
+                self.transition_to_follower(leader_term, from.clone());
                 return self.append_entries_request(from, request, response)
             },
-            ReplicaState::Leader(..) => {
+            ReplicaState::Leader => {
                 if leader_term == current_term {
                     // The single leader-per-term invariant is broken; there is a bug in the Raft
                     // implementation.
@@ -193,7 +137,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 }
 
                 // recognize the new leader, return to follower state, and apply the entries
-                self.transition_to_follower(leader_term);
+                self.transition_to_follower(leader_term, from.clone());
                 return self.append_entries_request(from, request, response)
             },
         }
@@ -282,19 +226,18 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
         if local_term < voter_term {
             // Respondent has a higher term number. The election is compromised; abandon it and
-            // update the local term number. We will stay in candidate state, since we don't
-            // know of a valid leader to follow, but any further responses we receive from this
-            // election cycle will be ignored because the term will be outdated.
-            self.store.set_current_term(voter_term).unwrap();
-            if let ReplicaState::Candidate(ref mut candidate_state) = self.state {
-                candidate_state.granted_votes = 0;
-            }
+            // revert to follower state with the updated term number. Any further responses we
+            // receive from this election term will be ignored because the term will be outdated.
+
+            // The responder is not necessarily a leader, but it is somewhat likely, so we will use
+            // it as the leader hint.
+            self.transition_to_follower(voter_term, from);
         } else if local_term > voter_term {
             // Ignore this message; it came from a previous election cycle.
-        } else if let ReplicaState::Candidate(ref mut state) = self.state {
+        } else if self.state == ReplicaState::Candidate {
             if let Ok(request_vote_response::Granted(_)) = response.which() {
-                state.granted_votes += 1;
-                if state.granted_votes >= majority {
+                self.candidate_state.record_vote(from);
+                if self.candidate_state.count_votes() >= majority {
                     transition_to_leader = true;
                 }
             }
@@ -331,7 +274,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 self.store.inc_current_term().unwrap();
                 self.store.set_voted_for(self.addr).unwrap();
                 let latest_log_index = self.store.latest_log_index().unwrap();
-                self.state = ReplicaState::Leader(LeaderState::new(latest_log_index));
+                self.state = ReplicaState::Leader;
+                self.leader_state.reinitialize(latest_log_index);
                 false
             } else {
                 self.transition_to_candidate(message);
@@ -340,7 +284,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         } else { false };
 
         self.should_campaign = true;
-        let timeout = rand::thread_rng().gen_range::<u64>(HEARTBEAT_MIN, HEARTBEAT_MAX);
+        let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
 
         (timeout, send_message)
     }
@@ -354,7 +298,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         let current_term = self.store.current_term().unwrap();
         let latest_log_index = self.store.latest_log_index().unwrap();
         let latest_log_term = self.store.latest_log_term().unwrap();
-        self.state = ReplicaState::Leader(LeaderState::new(latest_log_index));
+        self.state = ReplicaState::Leader;
+        self.leader_state.reinitialize(latest_log_index);
 
         message.set_term(current_term.into());
         message.set_prev_log_index(latest_log_index.into());
@@ -370,7 +315,9 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         info!("{:?}: Transition to Candidate", self);
         self.store.inc_current_term().unwrap();
         self.store.set_voted_for(self.addr).unwrap();
-        self.state = ReplicaState::Candidate(CandidateState { granted_votes: 1 });
+        self.state = ReplicaState::Candidate;
+        self.candidate_state.clear();
+        self.candidate_state.record_vote(self.addr.clone());
 
         let current_term = self.store.current_term().unwrap();
         let latest_index = self.store.latest_log_index().unwrap();
@@ -382,47 +329,38 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Transition to follower state with the provided term. The `voted_for` field will be reset.
-    fn transition_to_follower(&mut self, term: Term) {
+    /// The provided leader hint will replace the last known leader.
+    fn transition_to_follower(&mut self, term: Term, leader: SocketAddr) {
         info!("{:?}: Transition to Follower", self);
         self.store.set_current_term(term).unwrap();
         self.state = ReplicaState::Follower;
+        self.follower_state.set_leader(leader);
     }
 
     /// Returns `true` if the replica is in the Leader state.
-    ///
-    /// public for testing.
     fn is_leader(&self) -> bool {
-        if let ReplicaState::Leader(..) = self.state { true } else { false }
+        self.state == ReplicaState::Leader
     }
 
     /// Returns `true` if the replica is in the Follower state.
-    ///
-    /// public for testing.
-    pub fn is_follower(&self) -> bool {
-        if let ReplicaState::Follower = self.state { true } else { false }
+    fn is_follower(&self) -> bool {
+        self.state == ReplicaState::Follower
     }
 
     /// Returns `true` if the replica is in the Candidate state.
-    ///
-    /// public for testing.
-    pub fn is_candidate(&self) -> bool {
-        if let ReplicaState::Candidate(..) = self.state { true } else { false }
+    fn is_candidate(&self) -> bool {
+        self.state == ReplicaState::Candidate
     }
 
     /// Returns the address of the replica.
-    ///
-    /// public for testing.
-    pub fn addr(&self) -> &SocketAddr {
+    fn addr(&self) -> &SocketAddr {
         &self.addr
     }
 
     /// Returns the current term of the replica.
-    ///
-    /// public for testing.
-    pub fn current_term(&self) -> Term {
+    fn current_term(&self) -> Term {
         self.store.current_term().unwrap()
     }
-
 
     /// Get the cluster quorum majority size.
     fn majority(&self) -> usize {

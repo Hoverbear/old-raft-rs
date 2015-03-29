@@ -3,7 +3,7 @@
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Hoverbear/raft/master/raft.png")]
 #![doc(html_root_url = "https://hoverbear.github.io/raft/raft/")]
 
-#![feature(collections, convert)]
+#![feature(convert)]
 
 extern crate capnp;
 extern crate mio;
@@ -12,24 +12,22 @@ extern crate rustc_serialize;
 extern crate uuid;
 #[macro_use] extern crate log;
 
-pub mod interchange;
-pub mod node;
-pub mod replica;
-pub mod state;
 pub mod state_machine;
 pub mod store;
 
-pub mod messages_capnp {
+mod node;
+mod replica;
+mod state;
+
+mod messages_capnp {
+    #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/messages_capnp.rs"));
 }
 
 use std::{io, ops};
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::net::SocketAddr;
-
-use rustc_serialize::{Encodable, Decodable};
 
 // Data structures.
 use store::Store;
@@ -40,43 +38,33 @@ use state_machine::StateMachine;
 /// will, for now, automatically spawn a `RaftNode` with the relevant parameters. This may be
 /// changed in the future. This is based on the assumption that any consuming appliaction
 /// interacting with a Raft cluster will also be a participant.
-pub struct Raft<T, S, M>
-where T: Encodable + Decodable + Clone + Debug + Send + 'static,
-      S: Store + Debug,
-      M: StateMachine
-{
+pub struct Raft {
     current_leader: Option<SocketAddr>,
     related_raftnode: SocketAddr, // Not RaftNode because we move that to another thread.
     cluster_members: HashSet<SocketAddr>,
-    // TODO: Can we get rid of these?
-    phantom_store: PhantomData<S>,
-    phantom_type: PhantomData<T>,
-    phantom_state_machine: PhantomData<M>,
 }
 
-impl<T, S, M> Raft<T, S, M>
-where T: Encodable + Decodable + Clone + Debug + Send + 'static,
-      S: Store + Debug,
-      M: StateMachine {
+impl Raft {
     /// Create a new `Raft` client that has a cooresponding `RaftNode` attached. Note that this
     /// `Raft` may not necessarily interact with the cooreponding `RaftNode`, it will interact with
     /// the `Leader` of a cluster in almost all cases.
-    pub fn new(address: SocketAddr, cluster_members: HashSet<SocketAddr>, store: S,
-        state_machine: M) -> Raft<T, S, M>
-    {
-        // TODO: How do we know if this panics?
-        RaftNode::<T, S, M>::spawn(address, cluster_members.clone(), store, state_machine);
+    pub fn new<S, M>(addr: SocketAddr,
+                     cluster_members: HashSet<SocketAddr>,
+                     store: S,
+                     state_machine: M)
+                     -> Raft
+    where S: Store, M: StateMachine {
+        let mut peers = cluster_members.clone();
+        peers.remove(&addr);
+        RaftNode::<S, M>::spawn(addr, peers, store, state_machine);
         // Store relevant information.
         Raft {
             current_leader: None,
-            related_raftnode: address,
+            related_raftnode: addr,
             cluster_members: cluster_members,
-            phantom_store: PhantomData,
-            phantom_type: PhantomData,
-            phantom_state_machine: PhantomData,
         }
     }
-    pub fn append(entries: Vec<T>) -> io::Result<()> {
+    pub fn append(entry: &[u8]) -> io::Result<()> {
         unimplemented!();
     }
 }
