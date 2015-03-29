@@ -380,7 +380,7 @@ impl <S, M> fmt::Debug for Replica<S, M> {
 mod test {
 
     use std::collections::HashSet;
-    use std::net::{IpAddr, SocketAddr};
+    use std::net::{SocketAddr};
     use std::sync::mpsc;
     use std::str::FromStr;
 
