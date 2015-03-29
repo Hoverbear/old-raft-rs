@@ -18,8 +18,10 @@ use messages_capnp::{
     rpc_request,
     rpc_response,
     client_request,
+    client_response,
     request_vote_response,
     append_entries_response,
+    append_entries_request,
 };
 
 // MIO Tokens
@@ -87,13 +89,13 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
     /// A registered IoHandle has available data to read
     fn readable(&mut self, _reactor: &mut Reactor<S, M>, token: Token, hint: ReadHint) {
         let mut message = MallocMessageBuilder::new_default();
-
         // TODO: Determine the stream we got a message on?
         if token == SOCKET && hint == ReadHint::data() {
             let (mut stream, from) = self.listener.accept().unwrap();
             let message_reader = serialize_packed::new_reader_unbuffered(&stream, ReaderOptions::new())
                 .unwrap();
             if let Ok(request) = message_reader.get_root::<rpc_request::Reader>() {
+                // We will be responding.
                 match request.which().unwrap() {
                     // TODO: Move these into replica?
                     rpc_request::Which::AppendEntries(Ok(call)) => {
@@ -104,42 +106,52 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
                         let res = message.init_root::<request_vote_response::Builder>();
                         self.replica.request_vote_request(from, call, res);
                     },
-                    _ => {
-                        // TODO Log this?
-                        unimplemented!()
-                    },
+                    _ => unimplemented!(),
                 }
                 serialize_packed::write_packed_message_unbuffered(&mut stream, &mut message).unwrap();
             } else if let Ok(response) = message_reader.get_root::<rpc_response::Reader>() {
+                // We won't be responding. This is already a response.
                 match response.which().unwrap() {
                     rpc_response::Which::AppendEntries(Ok(call)) => {
-                        let request = message.init_root::<rpc_request::Builder>();
-                        self.replica.append_entries_response(from, call, request.init_append_entries());
-                        // TODO: send the AppendEntries requests if necessary
+                        self.replica.append_entries_response(from, call);
                     },
                     rpc_response::Which::RequestVote(Ok(call)) => {
-                        let request = message.init_root::<rpc_request::Builder>();
-                        self.replica.request_vote_response(from, call, request.init_append_entries());
+                        let res = message.init_root::<append_entries_request::Builder>();
+                        self.replica.request_vote_response(from, call, res);
                         // TODO: send the AppendEntries requests if necessary
+                        // TODO: Can we just reset the timer?
+                        unimplemented!();
                     },
-                    _ => {
-                        // TODO Log this?
-                        unimplemented!()
-                    },
+                    _ => unimplemented!(),
                 }
             } else if let Ok(client_req) = message_reader.get_root::<client_request::Reader>() {
+                let mut should_die = false;
+                // We will be responding.
                 match client_req.which().unwrap() {
                     client_request::Which::Append(Ok(call)) => {
-                        unimplemented!()
+                        let mut res = message.init_root::<client_response::Builder>();
+                        self.replica.client_append(from, call, res)
                     },
                     client_request::Which::Die(Ok(call)) => {
-                        unimplemented!()
+                        should_die = true;
+                        let mut res = message.init_root::<client_response::Builder>();
+                        res.set_success(());
+                        debug!("Got a Die request from Client({}). Reason: {}", from, call);
                     },
-                    _ => {
-                        // TODO Log this?
-                        unimplemented!();
-                    }
+                    client_request::Which::LeaderRefresh(()) => {
+                        let mut res = message.init_root::<client_response::Builder>();
+                        self.replica.client_leader_refresh(from, res)
+                    },
+                    _ => unimplemented!(),
                 }
+                serialize_packed::write_packed_message_unbuffered(&mut stream, &mut message);
+                // Do this here so that we can send the response.
+                if should_die {
+                    panic!("Got a Die request.");
+                }
+            } else {
+                // It's something we don't understand.
+                unimplemented!();
             }
         } else {
             // TODO Log this?

@@ -9,6 +9,7 @@ use messages_capnp::{
     append_entries_request,
     append_entries_response,
     client_request,
+    client_response,
     request_vote_request,
     request_vote_response,
 };
@@ -151,10 +152,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// # Returns
     ///
     /// Returns `true` if the passed in message should be sent to the responder.
-    pub fn append_entries_response(&mut self,
-                                   from: SocketAddr,
-                                   response: append_entries_response::Reader,
-                                   message: append_entries_request::Builder) -> bool {
+    pub fn append_entries_response(&mut self, from: SocketAddr,
+                                   response: append_entries_response::Reader) {
         assert!(self.peers.contains(&from), "Received append entries response from unknown node {}.", from);
         debug!("{:?}: AppendEntriesResponse from Replica({})", self, from);
 
@@ -210,11 +209,9 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     ///
     /// Returns `true` if the provided AppendEntriesRequest should be sent to every peer cluster
     /// member.
-    pub fn request_vote_response(&mut self,
-                                 from: SocketAddr,
+    pub fn request_vote_response(&mut self, from: SocketAddr,
                                  response: request_vote_response::Reader,
-                                 message: append_entries_request::Builder)
-                                 -> bool {
+                                 message: append_entries_request::Builder) -> bool {
         assert!(self.peers.contains(&from), "Received request vote response from unknown node {}.", from);
         debug!("{:?}: RequestVoteResponse from Replica({})", self, from);
 
@@ -249,9 +246,17 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         transition_to_leader
     }
 
-    /// Apply a client request to the Raft replica.
-    pub fn client_request(&mut self, from: SocketAddr, _request: client_request::Reader) {
-        debug!("{:?}: ClientRequest from Client({})", self, from);
+    /// Apply a client append request to the Raft replica.
+    pub fn client_append(&mut self, from: SocketAddr, entry: &[u8],
+                         message: client_response::Builder) {
+        debug!("{:?}: Append from Client({})", self, from);
+        unimplemented!();
+    }
+
+    /// Refreshes the client with the leader address.
+    pub fn client_leader_refresh(&mut self, from: SocketAddr,
+                                 message: client_response::Builder) {
+        debug!("{:?}: LeaderRefresh from Client({})", self, from);
         unimplemented!();
     }
 
