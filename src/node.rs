@@ -14,9 +14,6 @@ use mio::tcp::{TcpStream, TcpListener};
 use mio::{Token, EventLoop, Handler, ReadHint};
 
 // Data structures.
-use state::LeaderState;
-use state::NodeState::{Leader, Follower, Candidate};
-use state::{NodeState, TransactionState, Transaction};
 use store::Store;
 use replica::Replica;
 use state_machine::StateMachine;
