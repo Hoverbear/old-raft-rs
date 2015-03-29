@@ -47,10 +47,11 @@ use messages_capnp::{
     client_response,
 };
 
-/// This is the primary interface with a `RaftNode` in the cluster. Creating a new `Raft` client
-/// will, for now, automatically spawn a `RaftNode` with the relevant parameters. This may be
-/// changed in the future. This is based on the assumption that any consuming appliaction
-/// interacting with a Raft cluster will also be a participant.
+/// This is the primary interface with a `RaftNode` in the cluster.
+///
+/// Note: Creating a new `Raft` client will, for now, automatically spawn a `RaftNode` with the
+/// relevant parameters. This may be changed in the future. This is based on the assumption that
+/// any consuming application interacting with a Raft cluster will also be a participant.
 pub struct Raft {
     current_leader: Option<SocketAddr>,
     related_raftnode: SocketAddr, // Not RaftNode because we move that to another thread.

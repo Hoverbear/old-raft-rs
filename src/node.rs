@@ -50,8 +50,6 @@ pub struct RaftNode<S, M> where S: Store, M: StateMachine {
     connections: Slab<RaftConnection>,
 }
 
-type Reactor<S, M> = EventLoop<RaftNode<S, M>>;
-
 /// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
 /// done via `::new()`.
 impl<S, M> RaftNode<S, M> where S: Store, M: StateMachine {
@@ -69,7 +67,7 @@ impl<S, M> RaftNode<S, M> where S: Store, M: StateMachine {
                  store: S,
                  state_machine: M) {
         // Create an event loop
-        let mut event_loop = Reactor::<S, M>::new().unwrap();
+        let mut event_loop = EventLoop::<RaftNode<S, M>>::new().unwrap();
         // Setup the socket, make it not block.
         let listener = listen(&addr).unwrap();
         listener.set_reuseaddr(true);
@@ -94,7 +92,7 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
     type Timeout = Token;
 
     /// A registered IoHandle has available writing space.
-    fn writable(&mut self, reactor: &mut Reactor<S, M>, token: Token) {
+    fn writable(&mut self, reactor: &mut EventLoop<RaftNode<S, M>>, token: Token) {
         match token {
             TIMEOUT => unreachable!(),
             LISTENER => unreachable!(),
@@ -105,7 +103,7 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
     }
 
     /// A registered IoHandle has available data to read
-    fn readable(&mut self, reactor: &mut Reactor<S, M>, token: Token, hint: ReadHint) {
+    fn readable(&mut self, reactor: &mut EventLoop<RaftNode<S, M>>, token: Token, hint: ReadHint) {
         match token {
             TIMEOUT => unreachable!(),
             LISTENER => {
@@ -126,7 +124,7 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
     }
 
     /// A registered timer has expired
-    fn timeout(&mut self, reactor: &mut Reactor<S, M>, token: Token) {
+    fn timeout(&mut self, reactor: &mut EventLoop<RaftNode<S, M>>, token: Token) {
         let mut message = MallocMessageBuilder::new_default();
         let request = message.init_root::<rpc_request::Builder>();
         let (timeout, _send_message) = self.replica.timeout(request.init_request_vote());
