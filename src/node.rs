@@ -1,10 +1,13 @@
 use std::thread;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-
+use std::ops::Deref;
 // MIO
-use mio::tcp::TcpListener;
-use mio::{Token, EventLoop, Handler, ReadHint};
+use mio::tcp::{listen, TcpListener, TcpStream};
+use mio::util::Slab;
+use mio::Socket;
+use mio::buf::{ByteBuf, MutByteBuf, SliceBuf};
+use mio::{Interest, PollOpt, NonBlock, Token, EventLoop, Handler, ReadHint};
 
 // Data structures.
 use store::Store;
@@ -23,10 +26,11 @@ use messages_capnp::{
     append_entries_response,
     append_entries_request,
 };
+use super::RaftError;
 
 // MIO Tokens
-const SOCKET:  Token = Token(0);
-const TIMEOUT: Token = Token(1);
+const TIMEOUT: Token = Token(0);
+const LISTENER:  Token = Token(1);
 
 /// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
 ///
@@ -42,7 +46,8 @@ const TIMEOUT: Token = Token(1);
 pub struct RaftNode<S, M> where S: Store, M: StateMachine {
     replica: Replica<S, M>,
     // Channels and Sockets
-    listener: TcpListener, // TODO: Just use streams??
+    listener: NonBlock<TcpListener>,
+    connections: Slab<RaftConnection>,
 }
 
 type Reactor<S, M> = EventLoop<RaftNode<S, M>>;
@@ -66,8 +71,9 @@ impl<S, M> RaftNode<S, M> where S: Store, M: StateMachine {
         // Create an event loop
         let mut event_loop = Reactor::<S, M>::new().unwrap();
         // Setup the socket, make it not block.
-        let listener = TcpListener::bind(&addr).unwrap();
-        event_loop.register(&listener, SOCKET).unwrap();
+        let listener = listen(&addr).unwrap();
+        listener.set_reuseaddr(true);
+        event_loop.register(&listener, LISTENER).unwrap();
         event_loop.timeout_ms(TIMEOUT, 250).unwrap();
         let replica = Replica::new(addr, peers, store, state_machine);
         // Fire up the thread.
@@ -75,6 +81,7 @@ impl<S, M> RaftNode<S, M> where S: Store, M: StateMachine {
             let mut raft_node = RaftNode {
                 listener: listener,
                 replica: replica,
+                connections: Slab::new_starting_at(Token(2), 128),
             };
             event_loop.run(&mut raft_node).unwrap();
         }).unwrap();
@@ -86,76 +93,35 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
     type Message = ();
     type Timeout = Token;
 
-    /// A registered IoHandle has available data to read
-    fn readable(&mut self, _reactor: &mut Reactor<S, M>, token: Token, hint: ReadHint) {
-        let mut message = MallocMessageBuilder::new_default();
-        // TODO: Determine the stream we got a message on?
-        if token == SOCKET && hint == ReadHint::data() {
-            let (mut stream, from) = self.listener.accept().unwrap();
-            let message_reader = serialize_packed::new_reader_unbuffered(&stream, ReaderOptions::new())
-                .unwrap();
-            if let Ok(request) = message_reader.get_root::<rpc_request::Reader>() {
-                // We will be responding.
-                match request.which().unwrap() {
-                    // TODO: Move these into replica?
-                    rpc_request::Which::AppendEntries(Ok(call)) => {
-                        let res = message.init_root::<append_entries_response::Builder>();
-                        self.replica.append_entries_request(from, call, res);
-                    },
-                    rpc_request::Which::RequestVote(Ok(call)) => {
-                        let res = message.init_root::<request_vote_response::Builder>();
-                        self.replica.request_vote_request(from, call, res);
-                    },
-                    _ => unimplemented!(),
-                }
-                serialize_packed::write_packed_message_unbuffered(&mut stream, &mut message).unwrap();
-            } else if let Ok(response) = message_reader.get_root::<rpc_response::Reader>() {
-                // We won't be responding. This is already a response.
-                match response.which().unwrap() {
-                    rpc_response::Which::AppendEntries(Ok(call)) => {
-                        self.replica.append_entries_response(from, call);
-                    },
-                    rpc_response::Which::RequestVote(Ok(call)) => {
-                        let res = message.init_root::<append_entries_request::Builder>();
-                        self.replica.request_vote_response(from, call, res);
-                        // TODO: send the AppendEntries requests if necessary
-                        // TODO: Can we just reset the timer?
-                        unimplemented!();
-                    },
-                    _ => unimplemented!(),
-                }
-            } else if let Ok(client_req) = message_reader.get_root::<client_request::Reader>() {
-                let mut should_die = false;
-                // We will be responding.
-                match client_req.which().unwrap() {
-                    client_request::Which::Append(Ok(call)) => {
-                        let mut res = message.init_root::<client_response::Builder>();
-                        self.replica.client_append(from, call, res)
-                    },
-                    client_request::Which::Die(Ok(call)) => {
-                        should_die = true;
-                        let mut res = message.init_root::<client_response::Builder>();
-                        res.set_success(());
-                        debug!("Got a Die request from Client({}). Reason: {}", from, call);
-                    },
-                    client_request::Which::LeaderRefresh(()) => {
-                        let mut res = message.init_root::<client_response::Builder>();
-                        self.replica.client_leader_refresh(from, res)
-                    },
-                    _ => unimplemented!(),
-                }
-                serialize_packed::write_packed_message_unbuffered(&mut stream, &mut message);
-                // Do this here so that we can send the response.
-                if should_die {
-                    panic!("Got a Die request.");
-                }
-            } else {
-                // It's something we don't understand.
-                unimplemented!();
+    /// A registered IoHandle has available writing space.
+    fn writable(&mut self, reactor: &mut Reactor<S, M>, token: Token) {
+        match token {
+            TIMEOUT => unreachable!(),
+            LISTENER => unreachable!(),
+            tok => {
+                self.connections[tok].writable(reactor, &mut self.replica);
             }
-        } else {
-            // TODO Log this?
-            unimplemented!();
+        }
+    }
+
+    /// A registered IoHandle has available data to read
+    fn readable(&mut self, reactor: &mut Reactor<S, M>, token: Token, hint: ReadHint) {
+        match token {
+            TIMEOUT => unreachable!(),
+            LISTENER => {
+                let stream = self.listener.accept().unwrap().unwrap(); // Result<Option<_>,_>
+                let conn = RaftConnection::new(stream);
+                let tok = self.connections.insert(conn)
+                    .ok().expect("Could not add connection to slab.");
+
+                // Register the connection
+                self.connections[tok].token = tok;
+                reactor.register_opt(&self.connections[tok].stream, tok, Interest::readable(), PollOpt::edge() | PollOpt::oneshot())
+                    .ok().expect("Could not register socket with event loop.");
+            },
+            tok => {
+                self.connections[tok].readable(reactor, &mut self.replica);
+            }
         }
     }
 
@@ -168,3 +134,112 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
         // TODO: send messages if necessary
     }
 }
+
+struct RaftConnection {
+    stream: NonBlock<TcpStream>,
+    token: Token,
+    interest: Interest,
+    current_read: Option<MutByteBuf>,
+    current_write: Option<ByteBuf>,
+    next_write: Option<ByteBuf>,
+}
+
+impl RaftConnection {
+    fn new(sock: NonBlock<TcpStream>) -> RaftConnection {
+        RaftConnection {
+            stream: sock,
+            token: Token(-1),
+            interest: Interest::hup(),
+            current_read: None,
+            current_write: None, // TODO: Size??
+            next_write: None,
+        }
+    }
+
+    fn writable<S, M>(&mut self, event_loop: &mut EventLoop<RaftNode<S, M>>, replica: &mut Replica<S,M>)
+                      -> Result<(), RaftError>
+    where S: Store, M: StateMachine {
+        unimplemented!();
+    }
+
+    fn readable<S, M>(&mut self, event_loop: &mut EventLoop<RaftNode<S, M>>, replica: &mut Replica<S,M>)
+                      -> Result<(), RaftError>
+    where S: Store, M: StateMachine {
+        let mut message = MallocMessageBuilder::new_default();
+        let from = self.stream.peer_addr().unwrap();
+        let message_reader = serialize_packed::new_reader_unbuffered(&mut self.stream.deref(), ReaderOptions::new())
+            .unwrap();
+        if let Ok(request) = message_reader.get_root::<rpc_request::Reader>() {
+            // We will be responding.
+            match request.which().unwrap() {
+                // TODO: Move these into replica?
+                rpc_request::Which::AppendEntries(Ok(call)) => {
+                    let res = message.init_root::<append_entries_response::Builder>();
+                    replica.append_entries_request(from, call, res);
+                },
+                rpc_request::Which::RequestVote(Ok(call)) => {
+                    let res = message.init_root::<request_vote_response::Builder>();
+                    replica.request_vote_request(from, call, res);
+                },
+                _ => unimplemented!(),
+            }
+            serialize_packed::write_packed_message_unbuffered(&mut self.stream.deref(), &mut message).unwrap();
+            Ok(())
+        } else if let Ok(response) = message_reader.get_root::<rpc_response::Reader>() {
+            // We won't be responding. This is already a response.
+            match response.which().unwrap() {
+                rpc_response::Which::AppendEntries(Ok(call)) => {
+                    replica.append_entries_response(from, call);
+                    Ok(())
+                },
+                rpc_response::Which::RequestVote(Ok(call)) => {
+                    let res = message.init_root::<append_entries_request::Builder>();
+                    replica.request_vote_response(from, call, res);
+                    // TODO: send the AppendEntries requests if necessary
+                    // TODO: Can we just reset the timer?
+                    unimplemented!();
+                },
+                _ => unimplemented!(),
+            }
+        } else if let Ok(client_req) = message_reader.get_root::<client_request::Reader>() {
+            let mut should_die = false;
+            // We will be responding.
+            match client_req.which().unwrap() {
+                client_request::Which::Append(Ok(call)) => {
+                    let mut res = message.init_root::<client_response::Builder>();
+                    replica.client_append(from, call, res)
+                },
+                client_request::Which::Die(Ok(call)) => {
+                    should_die = true;
+                    let mut res = message.init_root::<client_response::Builder>();
+                    res.set_success(());
+                    debug!("Got a Die request from Client({}). Reason: {}", from, call);
+                },
+                client_request::Which::LeaderRefresh(()) => {
+                    let mut res = message.init_root::<client_response::Builder>();
+                    replica.client_leader_refresh(from, res)
+                },
+                _ => unimplemented!(),
+            }
+            serialize_packed::write_packed_message_unbuffered(&mut self.stream.deref(), &mut message);
+            // Do this here so that we can send the response.
+            if should_die {
+                panic!("Got a Die request.");
+            }
+            Ok(())
+        } else {
+            // It's something we don't understand.
+            unimplemented!();
+        }
+    }
+}
+
+// Old
+// let mut message = MallocMessageBuilder::new_default();
+// // TODO: Determine the stream we got a message on?
+// if token == SOCKET && hint == ReadHint::data() {
+//
+// } else {
+//     // TODO Log this?
+//     unimplemented!();
+// }
