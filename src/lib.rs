@@ -25,11 +25,13 @@ mod messages_capnp {
 }
 
 use std::{io, ops};
+use std::result::Result;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::str::FromStr;
+use std::error::FromError;
 
 use rustc_serialize::{Encodable, Decodable};
 // Data structures.
@@ -79,7 +81,7 @@ impl Raft {
 
     /// Appends an entry to the replicated log. This will only return once it's properly replicated
     /// to a majority of nodes.
-    pub fn append(&mut self, entry: &[u8]) -> io::Result<()> {
+    pub fn append(&mut self, entry: &[u8]) -> Result<(), RaftError> {
         let mut message = MallocMessageBuilder::new_default();
         if self.current_leader.is_none() { try!(self.refresh_leader()); }
         {
@@ -91,27 +93,29 @@ impl Raft {
         serialize_packed::write_packed_message_unbuffered(&mut socket, &mut message);
 
         // Wait for a response.
-        let mut response = serialize_packed::new_reader_unbuffered(socket, ReaderOptions::new()).unwrap();
-        let client_res = response.get_root::<client_response::Reader>().unwrap();
+        let mut response = try!(serialize_packed::new_reader_unbuffered(socket, ReaderOptions::new()));
+        let client_res = try!(response.get_root::<client_response::Reader>());
         // Set the current leader.
-        match client_res.which().unwrap() {
+        match try!(client_res.which()) {
             client_response::Which::Success(()) => {
                 // It worked!
                 Ok(())
             },
             client_response::Which::NotLeader(Ok(leader_bytes)) => {
-                let socket = SocketAddr::from_str(leader_bytes).unwrap();
-                self.current_leader = Some(socket);
+                let current_leader = match SocketAddr::from_str(leader_bytes) {
+                    Ok(socket) => Some(socket),
+                    Err(_) => return Err(RaftError::Raft(RaftErrorKind::BadResponse))
+                };
                 // Try again.
                 self.append(entry)
-            }
+            },
             _ => unimplemented!(),
         }
     }
 
     /// This function will force the `Raft` interface to refresh it's knowledge of the leader from
     /// The cooresponding `RaftNode` running alongside it.
-    pub fn refresh_leader(&mut self) -> io::Result<()> {
+    pub fn refresh_leader(&mut self) -> Result<(), RaftError> {
         let mut message = MallocMessageBuilder::new_default();
         {
             let mut client_req = message.init_root::<client_request::Builder>();
@@ -122,16 +126,62 @@ impl Raft {
 
         // Wait for a response.
         let mut response = serialize_packed::new_reader_unbuffered(socket, ReaderOptions::new()).unwrap();
-        let client_res = response.get_root::<client_response::Reader>().unwrap();
+        let client_res = try!(response.get_root::<client_response::Reader>());
         // Set the current leader.
-        self.current_leader = match client_res.which().unwrap() {
+        self.current_leader = match try!(client_res.which()) {
             client_response::Which::NotLeader(Ok(leader_bytes)) => {
-                let socket = SocketAddr::from_str(leader_bytes).unwrap();
-                Some(socket)
+                match SocketAddr::from_str(leader_bytes) {
+                    Ok(socket) => Some(socket),
+                    Err(_) => return Err(RaftError::Raft(RaftErrorKind::BadResponse))
+                }
             },
             _ => unimplemented!(),
         };
         Ok(())
+    }
+}
+
+/// RaftErrors are the composed variety of errors that can originate from the various libraries.
+/// With the exception of the `Raft` variant these are generated from `try!()` macros invoking
+/// on `io::Error` or `capnp::Error` by using
+/// [`FromError`](https://doc.rust-lang.org/std/error/#the-fromerror-trait).
+#[derive(Debug)]
+pub enum RaftError {
+    CapnProto(capnp::Error),
+    SchemaError(capnp::NotInSchema),
+    Io(io::Error),
+    Raft(RaftErrorKind),
+}
+
+/// Currently, this can only be:
+///
+/// * `RelatedNodeDown` - When the related RaftNode is known to be down.
+/// * `CannotProceed` - When the related RaftNode cannot proceed due to more than a majority of
+///                     nodes being unavailable.
+/// TODO: Hook these up.
+#[derive(Debug)]
+pub enum RaftErrorKind {
+    RelatedNodeDown,
+    CannotProceed,
+    NotInCluster,
+    BadResponse,
+}
+
+impl FromError<io::Error> for RaftError {
+    fn from_error(err: io::Error) -> RaftError {
+        RaftError::Io(err)
+    }
+}
+
+impl FromError<capnp::Error> for RaftError {
+    fn from_error(err: capnp::Error) -> RaftError {
+        RaftError::CapnProto(err)
+    }
+}
+
+impl FromError<capnp::NotInSchema> for RaftError {
+    fn from_error(err: capnp::NotInSchema) -> RaftError {
+        RaftError::SchemaError(err)
     }
 }
 
