@@ -338,40 +338,29 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Returns `true` if the replica is in the Leader state.
-    ///
-    /// public for testing.
     fn is_leader(&self) -> bool {
-        if let ReplicaState::Leader(..) = self.state { true } else { false }
+        self.state == ReplicaState::Leader
     }
 
     /// Returns `true` if the replica is in the Follower state.
-    ///
-    /// public for testing.
-    pub fn is_follower(&self) -> bool {
-        if let ReplicaState::Follower = self.state { true } else { false }
+    fn is_follower(&self) -> bool {
+        self.state == ReplicaState::Follower
     }
 
     /// Returns `true` if the replica is in the Candidate state.
-    ///
-    /// public for testing.
-    pub fn is_candidate(&self) -> bool {
-        if let ReplicaState::Candidate(..) = self.state { true } else { false }
+    fn is_candidate(&self) -> bool {
+        self.state == ReplicaState::Candidate
     }
 
     /// Returns the address of the replica.
-    ///
-    /// public for testing.
-    pub fn addr(&self) -> &SocketAddr {
+    fn addr(&self) -> &SocketAddr {
         &self.addr
     }
 
     /// Returns the current term of the replica.
-    ///
-    /// public for testing.
-    pub fn current_term(&self) -> Term {
+    fn current_term(&self) -> Term {
         self.store.current_term().unwrap()
     }
-
 
     /// Get the cluster quorum majority size.
     fn majority(&self) -> usize {
