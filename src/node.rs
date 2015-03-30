@@ -181,7 +181,8 @@ impl RaftConnection {
     fn writable<S, M>(&mut self, event_loop: &mut EventLoop<RaftNode<S, M>>, replica: &mut Replica<S,M>)
                       -> Result<(), RaftError>
     where S: Store, M: StateMachine {
-        unimplemented!();
+        // TODO
+        Ok(())
     }
 
     fn readable<S, M>(&mut self, event_loop: &mut EventLoop<RaftNode<S, M>>, replica: &mut Replica<S,M>)

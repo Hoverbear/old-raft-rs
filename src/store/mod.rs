@@ -1,3 +1,11 @@
+//! The persistent storage of Raft state.
+//!
+//! In your consuming application you will want to implement this trait on one of your structures.
+//! This could adapt to a database, a file, or even just POD.
+//! 
+//! *Note:* Your consuming application should not necessarily interface with this data. It is meant
+//! for internal use by the library, we simply chose not to be opinionated about how data is stored.
+
 mod mem;
 
 use std::error;
