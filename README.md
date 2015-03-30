@@ -53,6 +53,13 @@ cargo build
 
 > Note this is a library, so building won't necessarily produce anything useful for you.
 
+If you have any issues building, you may need to install `capnp` from your distribution's
+repositories. For Homebrew:
+
+```bash
+brew install canpnp
+```
+
 ## Documentation ##
 
 * [Raft Crate Documentation](https://hoverbear.github.io/raft/raft/)
