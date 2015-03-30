@@ -100,11 +100,6 @@ impl Store for MemStore {
         self.entries.truncate(Into::<u64>::into(from) as usize - 1);
         Ok(self.entries.extend(entries.iter().map(|&(term, command)| (term, command.to_vec()))))
     }
-
-    fn truncate_entries(&mut self, index: LogIndex) -> result::Result<(), Error> {
-        assert!(self.latest_log_index().unwrap() >= index);
-        Ok(self.entries.truncate(Into::<u64>::into(index) as usize - 1))
-    }
 }
 
 #[cfg(test)]

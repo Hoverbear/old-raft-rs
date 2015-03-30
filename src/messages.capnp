@@ -30,7 +30,7 @@ struct AppendEntriesRequest {
   # efficiency).
 
   leaderCommit @4 :UInt64;
-  # leader’s commit index.
+  # The Leader’s commit log index.
 }
 
 struct AppendEntriesResponse {
@@ -39,8 +39,9 @@ struct AppendEntriesResponse {
   # The responder's current term.
 
   union {
-    success @1 :Void;
-    # The `AppendEntries` request was a success.
+    success @1 :UInt64;
+    # The `AppendEntries` request was a success. The responder's latest log
+    # index is returned.
 
     staleTerm @2 :Void;
     # The `AppendEntries` request failed because the follower has a greater term

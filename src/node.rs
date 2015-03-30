@@ -187,7 +187,9 @@ impl RaftConnection {
             // We won't be responding. This is already a response.
             match response.which().unwrap() {
                 rpc_response::Which::AppendEntries(Ok(call)) => {
-                    replica.append_entries_response(from, call);
+                    let res = message.init_root::<append_entries_request::Builder>();
+                    let send_message = replica.append_entries_response(from, call, res);
+                    // TODO: send the AppendEntries requests if necessary
                     Ok(())
                 },
                 rpc_response::Which::RequestVote(Ok(call)) => {

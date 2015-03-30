@@ -5,8 +5,6 @@ use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::result;
 
-use rustc_serialize::{json, Encodable, Decodable};
-
 use LogIndex;
 use Term;
 
@@ -48,30 +46,4 @@ pub trait Store: Clone + Debug + Send + 'static {
 
     /// Appends the provided entries to the log beginning at the given index.
     fn append_entries(&mut self, from: LogIndex, entries: &[(Term, &[u8])]) -> result::Result<(), Self::Error>;
-
-    /// Removes all log entries after the provided log index, inclusive.
-    fn truncate_entries(&mut self, index: LogIndex) -> result::Result<(), Self::Error>;
-
-    /// Helper function necessary until the client StateMachine abstraction is ready.
-    fn append_entries_encode<T>(&mut self, from: LogIndex, entries: &[(Term, T)]) -> result::Result<(), Self::Error>
-    where T: Encodable {
-        let encoded: Vec<(Term, String)> = entries.iter().map(|&(term, ref val)| {
-            (term, json::encode(val).unwrap())
-        }).collect();
-
-        let encoded_bytes: Vec<(Term, &[u8])> = encoded.iter().map(|&(term, ref string)| {
-            (term, string.as_bytes())
-        }).collect();
-
-        self.append_entries(from, &encoded_bytes[..])
-    }
-
-    /// Helper function necessary until the client StateMachine abstraction is ready.
-    fn entries_decode<T>(&self, from: LogIndex, to: LogIndex) -> result::Result<Vec<(Term, T)>, Self::Error>
-    where T: Decodable {
-        Ok((Into::<u64>::into(from)..Into::<u64>::into(to)).map(|i| {
-            let (term, bytes) = self.entry(LogIndex::from(i)).unwrap();
-            (term, json::decode::<T>(&String::from_utf8(Vec::from(bytes)).unwrap()[..]).unwrap())
-        }).collect())
-    }
 }

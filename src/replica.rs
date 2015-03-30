@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::fmt;
+use std::{cmp, fmt};
 use std::net::SocketAddr;
 
 use rand::{self, Rng};
@@ -90,25 +90,29 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             return;
         }
 
+        let leader_commit_index = LogIndex::from(request.get_leader_commit());
+        assert!(self.commit_index <= leader_commit_index);
+        self.commit_index = leader_commit_index;
+
         match self.state {
             ReplicaState::Follower => {
                 if current_term < leader_term {
                     self.store.set_current_term(leader_term).unwrap();
                     response.set_term(leader_term.into());
+                    self.follower_state.set_leader(from);
                 } else {
                     response.set_term(current_term.into());
                 }
 
-                let prev_log_index = LogIndex(request.get_prev_log_index());
-                let prev_log_term = Term(request.get_prev_log_term());
+                let leader_prev_log_index = LogIndex(request.get_prev_log_index());
+                let leader_prev_log_term = Term(request.get_prev_log_term());
 
-                let local_latest_index = self.store.latest_log_index().unwrap();
-                if local_latest_index < prev_log_index {
+                let latest_log_index = self.store.latest_log_index().unwrap();
+                if latest_log_index < leader_prev_log_index {
                     response.set_inconsistent_prev_entry(());
                 } else {
-                    let (existing_term, _) = self.store.entry(prev_log_index).unwrap();
-                    if existing_term != prev_log_term {
-                        self.store.truncate_entries(prev_log_index).unwrap();
+                    let (existing_term, _) = self.store.entry(leader_prev_log_index).unwrap();
+                    if existing_term != leader_prev_log_term {
                         response.set_inconsistent_prev_entry(());
                     } else {
                         let entries = request.get_entries().unwrap();
@@ -118,9 +122,12 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                             for i in 0..num_entries {
                                 entries_vec.push((leader_term, entries.get(i).unwrap()));
                             }
-                            self.store.append_entries(prev_log_index + 1, &entries_vec).unwrap();
+                            self.store.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
                         }
-                        response.set_success(());
+                        let latest_log_index = leader_prev_log_index + num_entries as u64;
+                        // We are matching the leaders log up to and including `latest_log_index`.
+                        self.apply_commits_until(latest_log_index);
+                        response.set_success(latest_log_index.into());
                     }
                 }
             },
@@ -146,19 +153,103 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
     /// Apply an append entries response to the Raft replica.
     ///
-    /// The provided message may be initialized with a message to send back to the original
-    /// responder.
+    /// The provided message may be initialized with a new AppendEntries request to send back to
+    /// the follower in the case that the follower's log is behind.
     ///
     /// # Returns
     ///
     /// Returns `true` if the passed in message should be sent to the responder.
-    pub fn append_entries_response(&mut self, from: SocketAddr,
-                                   response: append_entries_response::Reader) {
-        assert!(self.peers.contains(&from), "Received append entries response from unknown node {}.", from);
+    pub fn append_entries_response(&mut self,
+                                   from: SocketAddr,
+                                   response: append_entries_response::Reader,
+                                   mut message: append_entries_request::Builder) -> bool {
+        assert!(self.peers.contains(&from), "{:?} received AppendEntries response from unknown peer {}.", self, from);
         debug!("{:?}: AppendEntriesResponse from Replica({})", self, from);
 
-        // TODO
-        unimplemented!();
+        let local_term = self.store.current_term().unwrap();
+        let responder_term = Term::from(response.get_term());
+        let local_latest_log_index = self.store.latest_log_index().unwrap();
+
+        if local_term < responder_term {
+            // Responder has a higher term number. Relinquish leader position (if it is held), and
+            // return to follower status.
+
+            // The responder is not necessarily the leader, but it is somewhat likely, so we will
+            // use it as the leader hint.
+            self.transition_to_follower(responder_term, from);
+            return false;
+        } else if local_term > responder_term {
+            // Responder is responding to an AppendEntries request from a different term. Ignore
+            // the response.
+            return false;
+        }
+
+        let mut send_message = false;
+        if self.is_leader() {
+            match response.which() {
+                Ok(append_entries_response::Which::Success(follower_latest_log_index)) => {
+                    let follower_latest_log_index = LogIndex::from(follower_latest_log_index);
+                    assert!(follower_latest_log_index <= local_latest_log_index);
+                    self.leader_state.set_next_index(from.clone(), follower_latest_log_index + 1);
+                    self.leader_state.set_match_index(from.clone(), follower_latest_log_index);
+                    self.advance_commit_index();
+                    send_message = local_latest_log_index > follower_latest_log_index;
+                }
+                Ok(append_entries_response::Which::InconsistentPrevEntry(..)) => {
+                    let next_index = self.leader_state.next_index(&from) - 1;
+                    self.leader_state.set_next_index(from, next_index);
+                    send_message = true;
+                }
+                Ok(append_entries_response::Which::StaleTerm(..)) => {
+                    // This case is handled above by checking local_term against
+                    // responder_term.
+                    unreachable!("{:?}: AppendEntries.StaleTerm response from Replica({}). local term: {:?}, responder term: {:?}.",
+                    self, from, local_term, responder_term);
+                }
+                Ok(append_entries_response::Which::InternalError(error_result)) => {
+                    let error = error_result.unwrap_or("[unable to decode internal error]");
+                    warn!("{:?}: AppendEntries.InternalError response from Replica({}): {}",
+                           self, from, error);
+                    // TODO: should we retry?
+                }
+                Err(..) => {
+                    warn!("{:?}: ignoring unknown AppendEntries response from Replica({}): incompatible protocol version.",
+                           self, from);
+                }
+            }
+        } else {
+            // This is not allowed in the Raft protocol, since we only send AppendEntries
+            // requests while in the Leader state, so we should never receive AppendEntries
+            // responses from the current term while not the Leader (It's impossible to go
+            // from Leader to Candidate or Follower states without increasing the term, and
+            // we have already checked that local_term == responder_term).
+            unreachable!("{:?}: received AppendEntries response from Replica({}) while in state {:?}.",
+                          self.addr, from, self.state);
+        }
+
+        if send_message {
+            let next_index = self.leader_state.next_index(&from);
+
+            if next_index <= local_latest_log_index {
+                let prev_log_index = next_index - 1;
+                let (prev_log_term, _) = self.store.entry(prev_log_index).unwrap();
+
+                message.set_term(local_term.into());
+                message.set_prev_log_index(prev_log_index.into());
+                message.set_prev_log_term(prev_log_term.into());
+                message.set_leader_commit(self.commit_index.into());
+
+                let from_index = Into::<u64>::into(next_index);
+                let until_index = Into::<u64>::into(local_latest_log_index) + 1;
+                let mut entries = message.init_entries((until_index - from_index) as u32);
+                for (n, index) in (from_index..until_index).enumerate() {
+                    entries.set(n as u32, self.store.entry(LogIndex::from(index)).unwrap().1);
+                }
+            } else {
+                send_message = false;
+            }
+        }
+        send_message
     }
 
     /// Apply a request vote request to the Raft replica.
@@ -222,16 +313,16 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         let mut transition_to_leader = false;
 
         if local_term < voter_term {
-            // Respondent has a higher term number. The election is compromised; abandon it and
+            // Responder has a higher term number. The election is compromised; abandon it and
             // revert to follower state with the updated term number. Any further responses we
             // receive from this election term will be ignored because the term will be outdated.
 
-            // The responder is not necessarily a leader, but it is somewhat likely, so we will use
-            // it as the leader hint.
+            // The responder is not necessarily teh leader, but it is somewhat likely, so we will
+            // use it as the leader hint.
             self.transition_to_follower(voter_term, from);
         } else if local_term > voter_term {
             // Ignore this message; it came from a previous election cycle.
-        } else if self.state == ReplicaState::Candidate {
+        } else if self.is_candidate() {
             if let Ok(request_vote_response::Granted(_)) = response.which() {
                 self.candidate_state.record_vote(from);
                 if self.candidate_state.count_votes() >= majority {
@@ -333,6 +424,32 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         message.set_last_log_term(latest_term.into());
     }
 
+    /// Advance the commit index and apply committed entries to the state machine, if possible.
+    fn advance_commit_index(&mut self) {
+        assert!(self.is_leader());
+        let majority = self.majority();
+        while self.leader_state.count_match_indexes(self.commit_index + 1) >= majority {
+            self.commit_index = self.commit_index + 1;
+        }
+
+        // Apply all committed but unapplied entries
+        while self.last_applied < self.commit_index {
+            let (_, entry) = self.store.entry(self.last_applied + 1).unwrap();
+            self.state_machine.apply(entry).unwrap();
+            self.last_applied = self.last_applied + 1;
+        }
+    }
+
+    /// Apply all committed but unapplied log entries up to and including the provided index.
+    fn apply_commits_until(&mut self, until: LogIndex) {
+        let index = cmp::min(self.commit_index, until);
+        while self.last_applied <= index {
+            let (_, entry) = self.store.entry(self.last_applied + 1).unwrap();
+            self.state_machine.apply(entry).unwrap();
+            self.last_applied = self.last_applied + 1;
+        }
+    }
+
     /// Transition to follower state with the provided term. The `voted_for` field will be reset.
     /// The provided leader hint will replace the last known leader.
     fn transition_to_follower(&mut self, term: Term, leader: SocketAddr) {
@@ -415,6 +532,40 @@ mod test {
             let (state_machine, recv) = ChannelStateMachine::new();
             (Replica::new(addr.clone(), peers, store, state_machine), recv)
         }).collect()
+    }
+
+    /// Elect `leader` as the leader of a cluster with the provided followers.
+    /// The leader and the followers must be in the same term.
+    fn elect_leader(leader: &mut TestReplica,
+                    followers: &mut [TestReplica]) {
+        let mut request_vote_request = MallocMessageBuilder::new_default();
+        let mut append_entries_request = MallocMessageBuilder::new_default();
+        let mut response = MallocMessageBuilder::new_default();
+
+        let (_, send_request) = leader.timeout(request_vote_request.init_root::<request_vote_request::Builder>());
+        if !send_request {
+            // The leader could have had an AppendEntries request since the last timeout, so it may
+            // take two timeouts.
+            let (_, send_request) = leader.timeout(request_vote_request.init_root::<request_vote_request::Builder>());
+            assert!(send_request);
+        }
+
+        for follower in followers.iter_mut() {
+            follower.request_vote_request(leader.addr().clone(),
+                                          request_vote_request.get_root::<request_vote_request::Builder>().unwrap().as_reader(),
+                                          response.init_root::<request_vote_response::Builder>());
+
+            let resp = response.get_root::<request_vote_response::Builder>().unwrap().as_reader();
+            assert!(if let request_vote_response::Which::Granted(_) = resp.which().unwrap() { true } else { false });
+
+            // Return success vote to candidate, and make sure it transitions to leader
+            let send_message = leader.request_vote_response(follower.addr().clone(),
+                                                            resp,
+                                                            append_entries_request.init_root::<append_entries_request::Builder>());
+            assert!(send_message);
+            assert!(follower.is_follower());
+        }
+        assert!(leader.is_leader());
     }
 
     /// Tests that a single-replica cluster will behave appropriately.
