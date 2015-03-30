@@ -5,6 +5,38 @@
 
 #![feature(convert)]
 
+//! This is the Raft Distributed Consensus Protocol implemented for Rust.
+//! [Raft](http://raftconsensus.github.io/) is described as:
+//!
+//! > Raft is a consensus algorithm that is designed to be easy to understand. It's equivalent to
+//! > Paxos in fault-tolerance and performance. The difference is that it's decomposed into
+//! > relatively independent subproblems, and it cleanly addresses all major pieces needed for
+//! > practical systems.
+//!
+//! This implementation utilizes [Cap'n Proto](https://kentonv.github.io/capnproto/) for its RPC,
+//! [`mio`](https://github.com/carllerche/mio) for it's async event loop.
+//!
+//! If this package fails to build for you it is possibly because you do not have the
+//! [`capnp`](https://capnproto.org/capnp-tool.html) utility installed. You should be able to find
+//! appropriate packages for most popular distributions.
+//!
+//! # Consuming this library
+//!
+//!     // TODO
+//!
+//! ## State
+//!
+//!     // TODO
+//!
+//! ## StateMachine
+//!
+//!     // TODO
+//!
+//! ## Client Requests
+//!
+//!     // TODO
+//!
+
 extern crate capnp;
 extern crate mio;
 extern crate rand;
