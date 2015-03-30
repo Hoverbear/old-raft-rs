@@ -233,13 +233,3 @@ impl RaftConnection {
         }
     }
 }
-
-// Old
-// let mut message = MallocMessageBuilder::new_default();
-// // TODO: Determine the stream we got a message on?
-// if token == SOCKET && hint == ReadHint::data() {
-//
-// } else {
-//     // TODO Log this?
-//     unimplemented!();
-// }
