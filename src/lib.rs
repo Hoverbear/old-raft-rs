@@ -22,7 +22,16 @@
 //!
 //! # Consuming this library
 //!
-//!     // TODO
+//! Consuming this library works in a few parts:
+//!
+//! 1. Implement `Store` and `StateMachine` such that they will hook into your application.
+//! 2. Create a `Raft` with those impls which will spawn it's own `RaftNode` and join with a cluster.
+//! 3. Interact with the cluster by issuing `append()` calls.
+//! 4. React to calls to `apply()` from the implemented `StateMachine`
+//!
+//! It's important to note that issuing an `append()` call to `Raft` does not (at this time)
+//! necessarily gaurantee that the entry has been applied to the `StateMachine`, since it must be
+//! successfully replicated across a majority of nodes before it is applied.
 //!
 //! ## State
 //!
