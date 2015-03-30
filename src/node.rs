@@ -2,12 +2,15 @@ use std::thread;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::ops::Deref;
+
 // MIO
 use mio::tcp::{listen, TcpListener, TcpStream};
 use mio::util::Slab;
 use mio::Socket;
 use mio::buf::{ByteBuf, MutByteBuf, SliceBuf};
 use mio::{Interest, PollOpt, NonBlock, Token, EventLoop, Handler, ReadHint};
+
+use rand::{self, Rng};
 
 // Data structures.
 use store::Store;
@@ -29,8 +32,13 @@ use messages_capnp::{
 use super::RaftError;
 
 // MIO Tokens
-const TIMEOUT: Token = Token(0);
-const LISTENER:  Token = Token(1);
+const ELECTION_TIMEOUT: Token = Token(0);
+const HEARTBEAT_TIMEOUT: Token = Token(1);
+const LISTENER:  Token = Token(2);
+
+const ELECTION_MIN: u64 = 150;
+const ELECTION_MAX: u64 = 300;
+const HEARTBEAT_DURATION: u64 = 50;
 
 /// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
 ///
@@ -72,7 +80,9 @@ impl<S, M> RaftNode<S, M> where S: Store, M: StateMachine {
         let listener = listen(&addr).unwrap();
         listener.set_reuseaddr(true);
         event_loop.register(&listener, LISTENER).unwrap();
-        event_loop.timeout_ms(TIMEOUT, 250).unwrap();
+        let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
+        event_loop.timeout_ms(ELECTION_TIMEOUT, timeout).unwrap();
+        event_loop.timeout_ms(HEARTBEAT_TIMEOUT, HEARTBEAT_DURATION);
         let replica = Replica::new(addr, peers, store, state_machine);
         // Fire up the thread.
         thread::Builder::new().name(format!("RaftNode {}", addr)).spawn(move || {
@@ -94,7 +104,8 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
     /// A registered IoHandle has available writing space.
     fn writable(&mut self, reactor: &mut EventLoop<RaftNode<S, M>>, token: Token) {
         match token {
-            TIMEOUT => unreachable!(),
+            ELECTION_TIMEOUT => unreachable!(),
+            HEARTBEAT_TIMEOUT => unreachable!(),
             LISTENER => unreachable!(),
             tok => {
                 self.connections[tok].writable(reactor, &mut self.replica);
@@ -105,7 +116,8 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
     /// A registered IoHandle has available data to read
     fn readable(&mut self, reactor: &mut EventLoop<RaftNode<S, M>>, token: Token, hint: ReadHint) {
         match token {
-            TIMEOUT => unreachable!(),
+            ELECTION_TIMEOUT => unreachable!(),
+            HEARTBEAT_TIMEOUT => unreachable!(),
             LISTENER => {
                 let stream = self.listener.accept().unwrap().unwrap(); // Result<Option<_>,_>
                 let conn = RaftConnection::new(stream);
@@ -127,9 +139,21 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
     fn timeout(&mut self, reactor: &mut EventLoop<RaftNode<S, M>>, token: Token) {
         let mut message = MallocMessageBuilder::new_default();
         let request = message.init_root::<rpc_request::Builder>();
-        let (timeout, _send_message) = self.replica.timeout(request.init_request_vote());
-        reactor.timeout_ms(TIMEOUT, timeout).unwrap();
-        // TODO: send messages if necessary
+
+        match token {
+            ELECTION_TIMEOUT => {
+                let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
+                let _send_message = self.replica.election_timeout(request.init_request_vote());
+                reactor.timeout_ms(ELECTION_TIMEOUT, timeout).unwrap();
+                // TODO: send messages if necessary
+            },
+            HEARTBEAT_TIMEOUT => {
+                let _send_message = self.replica.heartbeat_timeout(request.init_append_entries());
+                reactor.timeout_ms(HEARTBEAT_TIMEOUT, HEARTBEAT_DURATION).unwrap();
+                // TODO: send messages if necessary
+            },
+            _ => unreachable!(),
+        }
     }
 }
 

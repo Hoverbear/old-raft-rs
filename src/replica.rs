@@ -2,8 +2,6 @@ use std::collections::HashSet;
 use std::{cmp, fmt};
 use std::net::SocketAddr;
 
-use rand::{self, Rng};
-
 use {LogIndex, Term};
 use messages_capnp::{
     append_entries_request,
@@ -16,9 +14,6 @@ use messages_capnp::{
 use state::{ReplicaState, LeaderState, CandidateState, FollowerState};
 use state_machine::StateMachine;
 use store::Store;
-
-const ELECTION_MIN: u64 = 150;
-const ELECTION_MAX: u64 = 300;
 
 /// A replica of a Raft distributed state machine. A Raft replica controls a client state machine,
 /// to which it applies commands in a globally consistent order.
@@ -111,7 +106,13 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 if latest_log_index < leader_prev_log_index {
                     response.set_inconsistent_prev_entry(());
                 } else {
-                    let (existing_term, _) = self.store.entry(leader_prev_log_index).unwrap();
+                    println!("{:?}", leader_prev_log_index);
+                    let existing_term = if leader_prev_log_index == LogIndex::from(0) {
+                        Term::from(0)
+                    } else {
+                        self.store.entry(leader_prev_log_index).unwrap().0
+                    };
+
                     if existing_term != leader_prev_log_term {
                         response.set_inconsistent_prev_entry(());
                     } else {
@@ -351,17 +352,37 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         unimplemented!();
     }
 
-    /// Trigger a timeout on the Raft replica.
+    /// Trigger a heartbeat timeout on the Raft replica.
+    ///
+    /// The provided AppendEntriesRequest builder may be initialized with a message to send to each
+    /// cluster peer.
+    ///
+    /// # Return
+    ///
+    /// Whether the AppendEntries message should be sent to each cluster peer.
+    pub fn heartbeat_timeout(&mut self, mut message: append_entries_request::Builder) -> bool {
+        debug!("{:?}: HeartbeatTimeout", self);
+        if self.is_leader() {
+            // Send a heartbeat
+            message.set_term(self.store.current_term().unwrap().into());
+            message.set_prev_log_index(self.store.latest_log_index().unwrap().into());
+            message.set_prev_log_term(self.store.latest_log_term().unwrap().into());
+            message.set_leader_commit(self.commit_index.into());
+            message.init_entries(0);
+            true
+        } else { false }
+    }
+
+    /// Trigger an election timeout on the Raft replica.
     ///
     /// The provided RequestVoteRequest builder may be initialized with a message to send to each
     /// cluster peer.
     ///
     /// # Return
     ///
-    /// A new timeout period, and whether the RequestVote message should be sent to each cluster
-    /// peer.
-    pub fn timeout(&mut self, message: request_vote_request::Builder) -> (u64, bool) {
-        debug!("{:?}: Timeout", self);
+    /// Whether the RequestVote message should be sent to each cluster peer.
+    pub fn election_timeout(&mut self, message: request_vote_request::Builder) -> bool {
+        debug!("{:?}: ElectionTimeout", self);
         let send_message = if self.should_campaign && !self.is_leader() {
             if self.peers.is_empty() {
                 // Solitary replica special case; jump straight to leader status
@@ -380,9 +401,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         } else { false };
 
         self.should_campaign = true;
-        let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
 
-        (timeout, send_message)
+        send_message
     }
 
     /// Transition this Replica to Leader state.
@@ -443,6 +463,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// Apply all committed but unapplied log entries up to and including the provided index.
     fn apply_commits_until(&mut self, until: LogIndex) {
         let index = cmp::min(self.commit_index, until);
+        if index == LogIndex::from(0) { return };
         while self.last_applied <= index {
             let (_, entry) = self.store.entry(self.last_applied + 1).unwrap();
             self.state_machine.apply(entry).unwrap();
@@ -510,6 +531,7 @@ mod test {
 
     use messages_capnp::{
         append_entries_request,
+        append_entries_response,
         request_vote_request,
         request_vote_response,
     };
@@ -537,20 +559,20 @@ mod test {
     /// Elect `leader` as the leader of a cluster with the provided followers.
     /// The leader and the followers must be in the same term.
     fn elect_leader(leader: &mut TestReplica,
-                    followers: &mut [TestReplica]) {
+                    followers: &mut [(TestReplica, mpsc::Receiver<Vec<u8>>)]) {
         let mut request_vote_request = MallocMessageBuilder::new_default();
         let mut append_entries_request = MallocMessageBuilder::new_default();
         let mut response = MallocMessageBuilder::new_default();
 
-        let (_, send_request) = leader.timeout(request_vote_request.init_root::<request_vote_request::Builder>());
+        let send_request = leader.election_timeout(request_vote_request.init_root::<request_vote_request::Builder>());
         if !send_request {
             // The leader could have had an AppendEntries request since the last timeout, so it may
             // take two timeouts.
-            let (_, send_request) = leader.timeout(request_vote_request.init_root::<request_vote_request::Builder>());
+            let send_request = leader.election_timeout(request_vote_request.init_root::<request_vote_request::Builder>());
             assert!(send_request);
         }
 
-        for follower in followers.iter_mut() {
+        for &mut (ref mut follower, _) in followers.iter_mut() {
             follower.request_vote_request(leader.addr().clone(),
                                           request_vote_request.get_root::<request_vote_request::Builder>().unwrap().as_reader(),
                                           response.init_root::<request_vote_response::Builder>());
@@ -579,7 +601,7 @@ mod test {
         let mut message = MallocMessageBuilder::new_default();
         let request = message.init_root::<request_vote_request::Builder>();
 
-        let (_, send_message) = replica.timeout(request);
+        let send_message = replica.election_timeout(request);
         assert!(!send_message);
         assert!(replica.is_leader());
     }
@@ -596,8 +618,7 @@ mod test {
 
         // Trigger replica1's timeout, and make sure it transitions to candidate
 
-        let (_, send_message) =
-            replica1.timeout(request.init_root::<request_vote_request::Builder>());
+        let send_message = replica1.election_timeout(request.init_root::<request_vote_request::Builder>());
         assert!(send_message);
         assert!(replica1.is_candidate());
 
@@ -612,8 +633,7 @@ mod test {
 
         // Trigger replica2's timeout, and make sure it does *not* transitition to candidate, since
         // it has already voted in an election during this timeout period.
-        let (_, send_message) =
-            replica2.timeout(request.init_root::<request_vote_request::Builder>());
+        let send_message = replica2.election_timeout(request.init_root::<request_vote_request::Builder>());
         assert!(!send_message);
 
         // Return success vote to candidate, and make sure it transitions to leader
@@ -623,5 +643,38 @@ mod test {
         assert!(send_message);
         assert!(replica1.is_leader());
         assert!(replica1.current_term() == Term::from(1));
+    }
+
+    /// Tests a two node cluster with leader and follower.  The leader sends a heartbeat to the
+    /// follower, who then has an election_timeout, but does not transition to candidate because
+    /// the heartbeat was observed.  A second election_timeout will transition the follower to
+    /// candidate state.
+    #[test]
+    fn test_heartbeat() {
+        let mut request = MallocMessageBuilder::new_default();
+        let mut response = MallocMessageBuilder::new_default();
+        let mut replicas = new_cluster(2);
+        let (mut leader, _) = replicas.pop().unwrap();
+
+        elect_leader(&mut leader, &mut replicas[..]);
+        let (mut follower, _) = replicas.pop().unwrap();
+
+        let send_message =
+            leader.heartbeat_timeout(request.init_root::<append_entries_request::Builder>());
+        assert!(send_message);
+
+        follower.append_entries_request(leader.addr().clone(),
+                                        request.get_root::<append_entries_request::Builder>().unwrap().as_reader(),
+                                        response.init_root::<append_entries_response::Builder>());
+
+        let resp = response.get_root::<append_entries_response::Builder>().unwrap().as_reader();
+        assert!(if let append_entries_response::Which::Success(0) = resp.which().unwrap() { true } else { false });
+
+        let send_message = follower.election_timeout(request.init_root::<request_vote_request::Builder>());
+        assert!(!send_message);
+        assert!(follower.is_follower());
+        let send_message = follower.election_timeout(request.init_root::<request_vote_request::Builder>());
+        assert!(send_message);
+        assert!(follower.is_candidate());
     }
 }
