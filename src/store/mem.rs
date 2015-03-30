@@ -6,6 +6,8 @@ use store::Store;
 use LogIndex;
 use Term;
 
+/// This is a `Store` implementation that stores entries in a simple in-memory vector. Other data
+/// is stored in a struct. It is chiefly intended for testing.
 #[derive(Clone, Debug)]
 pub struct MemStore {
     current_term: Term,
