@@ -15,6 +15,12 @@ use state::{ReplicaState, LeaderState, CandidateState, FollowerState};
 use state_machine::StateMachine;
 use store::Store;
 
+/// Should issue requests to all nodes.
+pub struct Broadcast;
+
+/// Should respond to the sender.
+pub struct Emit;
+
 /// A replica of a Raft distributed state machine. A Raft replica controls a client state machine,
 /// to which it applies commands in a globally consistent order.
 pub struct Replica<S, M> {
@@ -72,7 +78,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     pub fn append_entries_request(&mut self,
                                   from: SocketAddr,
                                   request: append_entries_request::Reader,
-                                  mut response: append_entries_response::Builder) {
+                                  mut response: append_entries_response::Builder) -> Option<Emit> {
         assert!(self.peers.contains(&from), "Received append entries request from unknown node {}.", from);
         debug!("{:?}: AppendEntriesRequest from Replica({})", self, from);
 
@@ -82,7 +88,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         if leader_term < current_term {
             response.set_term(current_term.into());
             response.set_stale_term(());
-            return;
+            return None;
         }
 
         let leader_commit_index = LogIndex::from(request.get_leader_commit());
@@ -131,6 +137,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                         response.set_success(latest_log_index.into());
                     }
                 }
+                return Some(Emit) // Need to respond to the leader.
             },
             ReplicaState::Candidate => {
                 // recognize the new leader, return to follower state, and apply the entries
@@ -156,14 +163,11 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     ///
     /// The provided message may be initialized with a new AppendEntries request to send back to
     /// the follower in the case that the follower's log is behind.
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if the passed in message should be sent to the responder.
+    #[must_use]
     pub fn append_entries_response(&mut self,
                                    from: SocketAddr,
                                    response: append_entries_response::Reader,
-                                   mut message: append_entries_request::Builder) -> bool {
+                                   mut message: append_entries_request::Builder) -> Option<Emit> {
         assert!(self.peers.contains(&from), "{:?} received AppendEntries response from unknown peer {}.", self, from);
         debug!("{:?}: AppendEntriesResponse from Replica({})", self, from);
 
@@ -178,11 +182,11 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             // The responder is not necessarily the leader, but it is somewhat likely, so we will
             // use it as the leader hint.
             self.transition_to_follower(responder_term, from);
-            return false;
+            return None
         } else if local_term > responder_term {
             // Responder is responding to an AppendEntries request from a different term. Ignore
             // the response.
-            return false;
+            return None
         }
 
         let mut send_message = false;
@@ -246,18 +250,20 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 for (n, index) in (from_index..until_index).enumerate() {
                     entries.set(n as u32, self.store.entry(LogIndex::from(index)).unwrap().1);
                 }
+                Some(Emit)
             } else {
-                send_message = false;
+                None
             }
+        } else {
+            None
         }
-        send_message
     }
 
     /// Apply a request vote request to the Raft replica.
     pub fn request_vote_request(&mut self,
                                 candidate: SocketAddr,
                                 request: request_vote_request::Reader,
-                                mut response: request_vote_response::Builder) {
+                                mut response: request_vote_response::Builder) -> Option<Emit> {
         assert!(self.peers.contains(&candidate), "Received request vote request from unknown node {}.", candidate);
         debug!("{:?}: RequestVoteRequest from Replica({})", self, candidate);
 
@@ -293,17 +299,18 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 },
             }
         }
+        Some(Emit) // Always need to send.
     }
 
     /// Apply a request vote response to the Raft replica.
     ///
     /// # Return
     ///
-    /// Returns `true` if the provided AppendEntriesRequest should be sent to every peer cluster
+    /// Returns `Some(())` if the provided AppendEntriesRequest should be sent to every peer cluster
     /// member.
     pub fn request_vote_response(&mut self, from: SocketAddr,
                                  response: request_vote_response::Reader,
-                                 message: append_entries_request::Builder) -> bool {
+                                 message: append_entries_request::Builder) -> Option<Broadcast> {
         assert!(self.peers.contains(&from), "Received request vote response from unknown node {}.", from);
         debug!("{:?}: RequestVoteResponse from Replica({})", self, from);
 
@@ -324,43 +331,46 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         } else if local_term > voter_term {
             // Ignore this message; it came from a previous election cycle.
         } else if self.is_candidate() {
+            // A vote was recieved!
             if let Ok(request_vote_response::Granted(_)) = response.which() {
                 self.candidate_state.record_vote(from);
                 if self.candidate_state.count_votes() >= majority {
+                    // The election was won!
                     transition_to_leader = true;
                 }
             }
         }
 
         if transition_to_leader {
+            // Need to transition and broadcast the first heartbeat.
             self.transition_to_leader(message);
+            Some(Broadcast)
+        } else {
+            None
         }
-        transition_to_leader
     }
 
     /// Apply a client append request to the Raft replica.
     pub fn client_append(&mut self, from: SocketAddr, entry: &[u8],
-                         message: client_response::Builder) {
+                         message: client_response::Builder) -> Option<Broadcast> {
         debug!("{:?}: Append from Client({})", self, from);
         unimplemented!();
+        Some(Broadcast)
     }
 
     /// Refreshes the client with the leader address.
     pub fn client_leader_refresh(&mut self, from: SocketAddr,
-                                 message: client_response::Builder) {
+                                 message: client_response::Builder) -> Option<Emit> {
         debug!("{:?}: LeaderRefresh from Client({})", self, from);
         unimplemented!();
+        Some(Emit)
     }
 
     /// Trigger a heartbeat timeout on the Raft replica.
     ///
     /// The provided AppendEntriesRequest builder may be initialized with a message to send to each
     /// cluster peer.
-    ///
-    /// # Return
-    ///
-    /// Whether the AppendEntries message should be sent to each cluster peer.
-    pub fn heartbeat_timeout(&mut self, mut message: append_entries_request::Builder) -> bool {
+    pub fn heartbeat_timeout(&mut self, mut message: append_entries_request::Builder) -> Option<Broadcast> {
         debug!("{:?}: HeartbeatTimeout", self);
         if self.is_leader() {
             // Send a heartbeat
@@ -369,21 +379,17 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             message.set_prev_log_term(self.store.latest_log_term().unwrap().into());
             message.set_leader_commit(self.commit_index.into());
             message.init_entries(0);
-            true
-        } else { false }
+            Some(Broadcast)
+        } else { None }
     }
 
     /// Trigger an election timeout on the Raft replica.
     ///
     /// The provided RequestVoteRequest builder may be initialized with a message to send to each
     /// cluster peer.
-    ///
-    /// # Return
-    ///
-    /// Whether the RequestVote message should be sent to each cluster peer.
-    pub fn election_timeout(&mut self, message: request_vote_request::Builder) -> bool {
+    pub fn election_timeout(&mut self, message: request_vote_request::Builder) -> Option<Broadcast> {
         debug!("{:?}: ElectionTimeout", self);
-        let send_message = if self.should_campaign && !self.is_leader() {
+        if self.should_campaign && !self.is_leader() {
             if self.peers.is_empty() {
                 // Solitary replica special case; jump straight to leader status
                 assert!(self.is_follower());
@@ -393,23 +399,22 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 let latest_log_index = self.store.latest_log_index().unwrap();
                 self.state = ReplicaState::Leader;
                 self.leader_state.reinitialize(latest_log_index);
-                false
+                None
             } else {
                 self.transition_to_candidate(message);
-                true
+                Some(Broadcast)
             }
-        } else { false };
-
-        self.should_campaign = true;
-
-        send_message
+        } else {
+            self.should_campaign = true;
+            None
+        }
     }
 
     /// Transition this Replica to Leader state.
     ///
     /// The provided AppendEntriesRequest builder will be initialized with a message to send to each
     /// cluster peer.
-    fn transition_to_leader(&mut self, mut message: append_entries_request::Builder) {
+    fn transition_to_leader(&mut self, mut message: append_entries_request::Builder) -> Option<Broadcast> {
         info!("{:?}: Transition to Leader", self);
         let current_term = self.store.current_term().unwrap();
         let latest_log_index = self.store.latest_log_index().unwrap();
@@ -421,13 +426,14 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         message.set_prev_log_index(latest_log_index.into());
         message.set_prev_log_term(latest_log_term.into());
         message.set_leader_commit(self.commit_index.into());
+        Some(Broadcast)
     }
 
     /// Transition this Replica to Candidate state.
     ///
     /// The provided RequestVoteRequest message will be initialized with a message to send to each
     /// cluster peer.
-    fn transition_to_candidate(&mut self, mut message: request_vote_request::Builder) {
+    fn transition_to_candidate(&mut self, mut message: request_vote_request::Builder) -> Option<Broadcast> {
         info!("{:?}: Transition to Candidate", self);
         self.store.inc_current_term().unwrap();
         self.store.set_voted_for(self.addr).unwrap();
@@ -442,6 +448,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         message.set_term(current_term.into());
         message.set_last_log_index(latest_index.into());
         message.set_last_log_term(latest_term.into());
+        Some(Broadcast)
     }
 
     /// Advance the commit index and apply committed entries to the state machine, if possible.
