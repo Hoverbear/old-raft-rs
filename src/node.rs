@@ -57,21 +57,21 @@ const HEARTBEAT_DURATION: u64 = 50;
 ///     interface for requests.
 ///   * `request_vote` which is used by candidates during campaigns to obtain a vote.
 ///
-/// A `RaftNode` acts as a replicated state machine. The server's role in the cluster depends on it's
+/// A `RaftServer` acts as a replicated state machine. The server's role in the cluster depends on it's
 /// own status. It will maintain both volatile state (which can be safely lost) and persistent
 /// state (which must be carefully stored and kept safe).
 ///
-/// Currently, the `RaftNode` API is not well defined. **We are looking for feedback and suggestions.**
-pub struct RaftNode<S, M> where S: Store, M: StateMachine {
+/// Currently, the `RaftServer` API is not well defined. **We are looking for feedback and suggestions.**
+pub struct RaftServer<S, M> where S: Store, M: StateMachine {
     replica: Replica<S, M>,
     // Channels and Sockets
     listener: NonBlock<TcpListener>,
     connections: Slab<RaftConnection>,
 }
 
-/// The implementation of the RaftNode. In most use cases, creating a `RaftNode` should just be
+/// The implementation of the RaftServer. In most use cases, creating a `RaftServer` should just be
 /// done via `::new()`.
-impl<S, M> RaftNode<S, M> where S: Store, M: StateMachine {
+impl<S, M> RaftServer<S, M> where S: Store, M: StateMachine {
 
     /// Creates a new Raft node with the cluster members specified.
     ///
@@ -86,7 +86,7 @@ impl<S, M> RaftNode<S, M> where S: Store, M: StateMachine {
                  store: S,
                  state_machine: M) {
         // Create an event loop
-        let mut event_loop = EventLoop::<RaftNode<S, M>>::new().unwrap();
+        let mut event_loop = EventLoop::<RaftServer<S, M>>::new().unwrap();
         // Setup the socket, make it not block.
         let listener = listen(&addr).unwrap();
         listener.set_reuseaddr(true);
@@ -96,8 +96,8 @@ impl<S, M> RaftNode<S, M> where S: Store, M: StateMachine {
         event_loop.timeout_ms(HEARTBEAT_TIMEOUT, HEARTBEAT_DURATION);
         let replica = Replica::new(addr, peers, store, state_machine);
         // Fire up the thread.
-        thread::Builder::new().name(format!("RaftNode {}", addr)).spawn(move || {
-            let mut raft_node = RaftNode {
+        thread::Builder::new().name(format!("RaftServer {}", addr)).spawn(move || {
+            let mut raft_node = RaftServer {
                 listener: listener,
                 replica: replica,
                 connections: Slab::new_starting_at(Token(2), 128),
@@ -107,13 +107,13 @@ impl<S, M> RaftNode<S, M> where S: Store, M: StateMachine {
     }
 }
 
-impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
+impl<S, M> Handler for RaftServer<S, M> where S: Store, M: StateMachine {
 
     type Message = ();
     type Timeout = Token;
 
     /// A registered IoHandle has available writing space.
-    fn writable(&mut self, reactor: &mut EventLoop<RaftNode<S, M>>, token: Token) {
+    fn writable(&mut self, reactor: &mut EventLoop<RaftServer<S, M>>, token: Token) {
         match token {
             ELECTION_TIMEOUT => unreachable!(),
             HEARTBEAT_TIMEOUT => unreachable!(),
@@ -125,7 +125,7 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
     }
 
     /// A registered IoHandle has available data to read
-    fn readable(&mut self, reactor: &mut EventLoop<RaftNode<S, M>>, token: Token, hint: ReadHint) {
+    fn readable(&mut self, reactor: &mut EventLoop<RaftServer<S, M>>, token: Token, hint: ReadHint) {
         match token {
             ELECTION_TIMEOUT => unreachable!(),
             HEARTBEAT_TIMEOUT => unreachable!(),
@@ -147,7 +147,7 @@ impl<S, M> Handler for RaftNode<S, M> where S: Store, M: StateMachine {
     }
 
     /// A registered timer has expired
-    fn timeout(&mut self, reactor: &mut EventLoop<RaftNode<S, M>>, token: Token) {
+    fn timeout(&mut self, reactor: &mut EventLoop<RaftServer<S, M>>, token: Token) {
         let mut message = MallocMessageBuilder::new_default();
         let request = message.init_root::<rpc_request::Builder>();
 
@@ -189,7 +189,7 @@ impl RaftConnection {
         }
     }
 
-    fn writable<S, M>(&mut self, event_loop: &mut EventLoop<RaftNode<S, M>>, replica: &mut Replica<S,M>)
+    fn writable<S, M>(&mut self, event_loop: &mut EventLoop<RaftServer<S, M>>, replica: &mut Replica<S,M>)
                       -> Result<(), RaftError>
     where S: Store, M: StateMachine {
         // Attempt to write data.
@@ -224,7 +224,7 @@ impl RaftConnection {
         }
     }
 
-    fn readable<S, M>(&mut self, event_loop: &mut EventLoop<RaftNode<S, M>>, replica: &mut Replica<S,M>)
+    fn readable<S, M>(&mut self, event_loop: &mut EventLoop<RaftServer<S, M>>, replica: &mut Replica<S,M>)
                       -> Result<(), RaftError>
     where S: Store, M: StateMachine {
         let mut read = 0;
@@ -254,7 +254,7 @@ impl RaftConnection {
     }
 
     fn handle_reader<S, M>(&mut self, from: SocketAddr, reader: OwnedSpaceMessageReader,
-                           event_loop: &mut EventLoop<RaftNode<S, M>>, replica: &mut Replica<S,M>)
+                           event_loop: &mut EventLoop<RaftServer<S, M>>, replica: &mut Replica<S,M>)
     where S: Store, M: StateMachine {
         let mut builder_message = MallocMessageBuilder::new_default();
         let from = self.stream.peer_addr().unwrap();
