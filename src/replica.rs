@@ -571,12 +571,12 @@ mod test {
         let mut append_entries_request = MallocMessageBuilder::new_default();
         let mut response = MallocMessageBuilder::new_default();
 
-        let send_request = leader.election_timeout(request_vote_request.init_root::<request_vote_request::Builder>());
-        if !send_request {
+        let respond = leader.election_timeout(request_vote_request.init_root::<request_vote_request::Builder>());
+        if respond.is_none() {
             // The leader could have had an AppendEntries request since the last timeout, so it may
             // take two timeouts.
-            let send_request = leader.election_timeout(request_vote_request.init_root::<request_vote_request::Builder>());
-            assert!(send_request);
+            let respond = leader.election_timeout(request_vote_request.init_root::<request_vote_request::Builder>());
+            assert!(respond.is_some());
         }
 
         for &mut (ref mut follower, _) in followers.iter_mut() {
@@ -588,10 +588,10 @@ mod test {
             assert!(if let request_vote_response::Which::Granted(_) = resp.which().unwrap() { true } else { false });
 
             // Return success vote to candidate, and make sure it transitions to leader
-            let send_message = leader.request_vote_response(follower.addr().clone(),
+            let respond = leader.request_vote_response(follower.addr().clone(),
                                                             resp,
                                                             append_entries_request.init_root::<append_entries_request::Builder>());
-            assert!(send_message);
+            assert!(respond.is_some());
             assert!(follower.is_follower());
         }
         assert!(leader.is_leader());
@@ -608,8 +608,8 @@ mod test {
         let mut message = MallocMessageBuilder::new_default();
         let request = message.init_root::<request_vote_request::Builder>();
 
-        let send_message = replica.election_timeout(request);
-        assert!(!send_message);
+        let respond = replica.election_timeout(request);
+        assert!(respond.is_none());
         assert!(replica.is_leader());
     }
 
@@ -625,8 +625,8 @@ mod test {
 
         // Trigger replica1's timeout, and make sure it transitions to candidate
 
-        let send_message = replica1.election_timeout(request.init_root::<request_vote_request::Builder>());
-        assert!(send_message);
+        let respond = replica1.election_timeout(request.init_root::<request_vote_request::Builder>());
+        assert!(respond.is_some());
         assert!(replica1.is_candidate());
 
         // Send replica1's RequestVoteRequest to replica2
@@ -640,14 +640,14 @@ mod test {
 
         // Trigger replica2's timeout, and make sure it does *not* transitition to candidate, since
         // it has already voted in an election during this timeout period.
-        let send_message = replica2.election_timeout(request.init_root::<request_vote_request::Builder>());
-        assert!(!send_message);
+        let respond = replica2.election_timeout(request.init_root::<request_vote_request::Builder>());
+        assert!(respond.is_none());
 
         // Return success vote to candidate, and make sure it transitions to leader
-        let send_message = replica1.request_vote_response(replica2.addr().clone(),
+        let respond = replica1.request_vote_response(replica2.addr().clone(),
                                                           resp,
                                                           request.init_root::<append_entries_request::Builder>());
-        assert!(send_message);
+        assert!(respond.is_some());
         assert!(replica1.is_leader());
         assert!(replica1.current_term() == Term::from(1));
     }
@@ -666,9 +666,9 @@ mod test {
         elect_leader(&mut leader, &mut replicas[..]);
         let (mut follower, _) = replicas.pop().unwrap();
 
-        let send_message =
+        let respond =
             leader.heartbeat_timeout(request.init_root::<append_entries_request::Builder>());
-        assert!(send_message);
+        assert!(respond.is_some());
 
         follower.append_entries_request(leader.addr().clone(),
                                         request.get_root::<append_entries_request::Builder>().unwrap().as_reader(),
@@ -677,11 +677,11 @@ mod test {
         let resp = response.get_root::<append_entries_response::Builder>().unwrap().as_reader();
         assert!(if let append_entries_response::Which::Success(0) = resp.which().unwrap() { true } else { false });
 
-        let send_message = follower.election_timeout(request.init_root::<request_vote_request::Builder>());
-        assert!(!send_message);
+        let respond = follower.election_timeout(request.init_root::<request_vote_request::Builder>());
+        assert!(respond.is_none());
         assert!(follower.is_follower());
-        let send_message = follower.election_timeout(request.init_root::<request_vote_request::Builder>());
-        assert!(send_message);
+        let respond = follower.election_timeout(request.init_root::<request_vote_request::Builder>());
+        assert!(respond.is_some());
         assert!(follower.is_candidate());
     }
 }
