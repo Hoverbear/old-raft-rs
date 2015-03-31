@@ -1,5 +1,7 @@
 # Raft #
 
+[![Join the chat at https://gitter.im/Hoverbear/raft](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/Hoverbear/raft?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+
 > Note: This project is **incomplete** and the code is of **pre-alpha** quality. **Only some specific, basic functionality is available, and I need your help defining an API!**
 
 [![Build Status](https://travis-ci.org/Hoverbear/raft.svg)](https://travis-ci.org/Hoverbear/raft)
