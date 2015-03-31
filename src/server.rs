@@ -1,8 +1,6 @@
 use std::thread;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::ops::Deref;
-use std::io;
 use std::error::FromError;
 
 // MIO
@@ -28,7 +26,6 @@ use capnp::{
     MessageReader,
     ReaderOptions,
     MallocMessageBuilder,
-    Word,
     OwnedSpaceMessageReader,
 };
 use messages_capnp::{
@@ -89,11 +86,11 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         let mut event_loop = EventLoop::<Server<S, M>>::new().unwrap();
         // Setup the socket, make it not block.
         let listener = listen(&addr).unwrap();
-        listener.set_reuseaddr(true);
+        listener.set_reuseaddr(true).unwrap();
         event_loop.register(&listener, LISTENER).unwrap();
         let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
         event_loop.timeout_ms(ELECTION_TIMEOUT, timeout).unwrap();
-        event_loop.timeout_ms(HEARTBEAT_TIMEOUT, HEARTBEAT_DURATION);
+        event_loop.timeout_ms(HEARTBEAT_TIMEOUT, HEARTBEAT_DURATION).unwrap();
         let replica = Replica::new(addr, peers, store, state_machine);
         // Fire up the thread.
         thread::Builder::new().name(format!("Server {}", addr)).spawn(move || {
@@ -119,13 +116,13 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
             HEARTBEAT_TIMEOUT => unreachable!(),
             LISTENER => unreachable!(),
             tok => {
-                self.connections[tok].writable(reactor, &mut self.replica);
+                self.connections[tok].writable(reactor, &mut self.replica).unwrap();
             }
         }
     }
 
     /// A registered IoHandle has available data to read
-    fn readable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, hint: ReadHint) {
+    fn readable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, _hint: ReadHint) {
         match token {
             ELECTION_TIMEOUT => unreachable!(),
             HEARTBEAT_TIMEOUT => unreachable!(),
@@ -141,7 +138,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     .ok().expect("Could not register socket with event loop.");
             },
             tok => {
-                self.connections[tok].readable(reactor, &mut self.replica);
+                self.connections[tok].readable(reactor, &mut self.replica).unwrap();
             }
         }
     }
@@ -219,7 +216,7 @@ impl Connection {
 
                 }
             },
-            Err(e) => panic!("Couldn't write!"),
+            Err(e) => return Err(Error::from_error(e)),
         }
 
         match event_loop.reregister(&self.stream, self.token, self.interest, PollOpt::edge() | PollOpt::oneshot()) {
@@ -232,20 +229,19 @@ impl Connection {
                       -> Result<()>
     where S: Store, M: StateMachine {
         let mut read = 0;
-        let from = self.stream.peer_addr().unwrap();
         match self.stream.read(&mut self.current_read) {
             Ok(Some(r)) => {
                 // Just read `r` bytes.
                 read = r;
             },
             Ok(None) => panic!("We just got readable, but were unable to read from the socket?"),
-            Err(e) => panic!("Error on reading."),
+            Err(e) => return Err(Error::from_error(e)),
         };
         if read > 0 {
             match serialize_packed::new_reader_unbuffered(&mut self.current_read, ReaderOptions::new()) {
                 // We have something reasonably interesting in the buffer!
                 Ok(reader) => {
-                    self.handle_reader(from, reader, event_loop, replica);
+                    self.handle_reader(reader, event_loop, replica);
                 },
                 // It's not read entirely yet.
                 // Should roll back, pending changes to bytes upstream.
@@ -258,7 +254,7 @@ impl Connection {
         }
     }
 
-    fn handle_reader<S, M>(&mut self, from: SocketAddr, reader: OwnedSpaceMessageReader,
+    fn handle_reader<S, M>(&mut self, reader: OwnedSpaceMessageReader,
                            event_loop: &mut EventLoop<Server<S, M>>, replica: &mut Replica<S,M>)
     where S: Store, M: StateMachine {
         let mut builder_message = MallocMessageBuilder::new_default();
@@ -329,7 +325,7 @@ impl Connection {
             match client_req.which().unwrap() {
                 client_request::Which::Append(Ok(call)) => {
                     let respond = {
-                        let mut builder = builder_message.init_root::<client_response::Builder>();
+                        let builder = builder_message.init_root::<client_response::Builder>();
                         replica.client_append(from, call, builder)
                     };
                     match respond {
@@ -342,18 +338,18 @@ impl Connection {
                 },
                 client_request::Which::Die(Ok(call)) => {
                     should_die = true;
-                    let mut res = builder_message.init_root::<client_response::Builder>();
-                    res.set_success(());
+                    let mut builder = builder_message.init_root::<client_response::Builder>();
+                    builder.set_success(());
                     self.interest.insert(Interest::writable());
                     debug!("Got a Die request from Client({}). Reason: {}", from, call);
                 },
                 client_request::Which::LeaderRefresh(()) => {
                     let respond = {
-                        let mut builder = builder_message.init_root::<client_response::Builder>();
+                        let builder = builder_message.init_root::<client_response::Builder>();
                         replica.client_leader_refresh(from, builder)
                     };
                     match respond {
-                        Some(emit) => {
+                        Some(Emit) => {
                             self.emit(builder_message);
                         },
                         None => (),

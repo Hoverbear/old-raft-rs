@@ -8,9 +8,8 @@
 mod channel;
 mod null;
 
-use std::{error, io, result};
-use std::fmt::{self, Debug};
-use std::sync::mpsc;
+use std::{error, result};
+use std::fmt::Debug;
 
 pub use state_machine::channel::ChannelStateMachine;
 pub use state_machine::null::NullStateMachine;

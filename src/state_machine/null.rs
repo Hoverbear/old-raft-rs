@@ -1,6 +1,4 @@
-use std::{error, io, result};
-use std::fmt::{self, Debug};
-use std::sync::mpsc;
+use std::{io, result};
 
 use state_machine::StateMachine;
 

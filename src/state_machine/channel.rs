@@ -1,4 +1,4 @@
-use std::{error, io, result};
+use std::result;
 use std::fmt::{self, Debug};
 use std::sync::mpsc;
 
