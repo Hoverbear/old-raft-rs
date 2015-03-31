@@ -244,7 +244,8 @@ impl Connection {
                     self.handle_reader(from, reader, event_loop, replica);
                 },
                 // It's not read entirely yet.
-                Err(_) => (),
+                // Should roll back, pending changes to bytes upstream.
+                Err(_) => unimplemented!(),
             }
         }
         match event_loop.reregister(&self.stream, self.token, self.interest, PollOpt::edge()) {
