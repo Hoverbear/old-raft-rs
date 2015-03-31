@@ -66,7 +66,6 @@ mod messages_capnp {
 }
 
 use std::{io, ops};
-use std::result::Result;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::net::SocketAddr;
@@ -123,7 +122,7 @@ impl Raft {
 
     /// Appends an entry to the replicated log. This will only return once it's properly replicated
     /// to a majority of nodes.
-    pub fn append(&mut self, entry: &[u8]) -> Result<(), RaftError> {
+    pub fn append(&mut self, entry: &[u8]) -> Result<()> {
         let mut message = MallocMessageBuilder::new_default();
         if self.current_leader.is_none() { try!(self.refresh_leader()); }
         {
@@ -146,7 +145,7 @@ impl Raft {
             client_response::Which::NotLeader(Ok(leader_bytes)) => {
                 let current_leader = match SocketAddr::from_str(leader_bytes) {
                     Ok(socket) => Some(socket),
-                    Err(_) => return Err(RaftError::Raft(RaftErrorKind::BadResponse))
+                    Err(_) => return Err(Error::Raft(ErrorKind::BadResponse))
                 };
                 // Try again.
                 self.append(entry)
@@ -158,9 +157,9 @@ impl Raft {
     /// Kills the node. Should only really be used for testing purposes.
     /// Accepts a `SocketAddr` because if you're going to kill a node you should be able to pick
     /// your victim.
-    pub fn die(&mut self, target: SocketAddr, reason: String) -> Result<(), RaftError> {
+    pub fn die(&mut self, target: SocketAddr, reason: String) -> Result<()> {
         if !self.cluster_members.contains(&target) {
-            return Err(RaftError::Raft(RaftErrorKind::NotInCluster))
+            return Err(Error::Raft(ErrorKind::NotInCluster))
         }
         let mut message = MallocMessageBuilder::new_default();
         {
@@ -183,7 +182,7 @@ impl Raft {
 
     /// This function will force the `Raft` interface to refresh it's knowledge of the leader from
     /// The cooresponding `RaftServer` running alongside it.
-    pub fn refresh_leader(&mut self) -> Result<(), RaftError> {
+    pub fn refresh_leader(&mut self) -> Result<()> {
         let mut message = MallocMessageBuilder::new_default();
         {
             let mut client_req = message.init_root::<client_request::Builder>();
@@ -200,7 +199,7 @@ impl Raft {
             client_response::Which::NotLeader(Ok(leader_bytes)) => {
                 match SocketAddr::from_str(leader_bytes) {
                     Ok(socket) => Some(socket),
-                    Err(_) => return Err(RaftError::Raft(RaftErrorKind::BadResponse))
+                    Err(_) => return Err(Error::Raft(ErrorKind::BadResponse))
                 }
             },
             _ => unimplemented!(),
@@ -209,16 +208,18 @@ impl Raft {
     }
 }
 
-/// RaftErrors are the composed variety of errors that can originate from the various libraries.
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// raft::Errors are the composed variety of errors that can originate from the various libraries.
 /// With the exception of the `Raft` variant these are generated from `try!()` macros invoking
 /// on `io::Error` or `capnp::Error` by using
 /// [`FromError`](https://doc.rust-lang.org/std/error/#the-fromerror-trait).
 #[derive(Debug)]
-pub enum RaftError {
+pub enum Error {
     CapnProto(capnp::Error),
     SchemaError(capnp::NotInSchema),
     Io(io::Error),
-    Raft(RaftErrorKind),
+    Raft(ErrorKind),
 }
 
 /// Currently, this can only be:
@@ -228,28 +229,28 @@ pub enum RaftError {
 ///                     nodes being unavailable.
 /// TODO: Hook these up.
 #[derive(Debug)]
-pub enum RaftErrorKind {
+pub enum ErrorKind {
     RelatedNodeDown,
     CannotProceed,
     NotInCluster,
     BadResponse,
 }
 
-impl FromError<io::Error> for RaftError {
-    fn from_error(err: io::Error) -> RaftError {
-        RaftError::Io(err)
+impl FromError<io::Error> for Error {
+    fn from_error(err: io::Error) -> Error {
+        Error::Io(err)
     }
 }
 
-impl FromError<capnp::Error> for RaftError {
-    fn from_error(err: capnp::Error) -> RaftError {
-        RaftError::CapnProto(err)
+impl FromError<capnp::Error> for Error {
+    fn from_error(err: capnp::Error) -> Error {
+        Error::CapnProto(err)
     }
 }
 
-impl FromError<capnp::NotInSchema> for RaftError {
-    fn from_error(err: capnp::NotInSchema) -> RaftError {
-        RaftError::SchemaError(err)
+impl FromError<capnp::NotInSchema> for Error {
+    fn from_error(err: capnp::NotInSchema) -> Error {
+        Error::SchemaError(err)
     }
 }
 

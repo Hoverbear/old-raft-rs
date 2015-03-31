@@ -40,7 +40,7 @@ use messages_capnp::{
     append_entries_response,
     append_entries_request,
 };
-use super::RaftError;
+use super::{Error, Result};
 
 // MIO Tokens
 const ELECTION_TIMEOUT: Token = Token(0);
@@ -190,7 +190,7 @@ impl Connection {
     }
 
     fn writable<S, M>(&mut self, event_loop: &mut EventLoop<RaftServer<S, M>>, replica: &mut Replica<S,M>)
-                      -> Result<(), RaftError>
+                      -> Result<()>
     where S: Store, M: StateMachine {
         // Attempt to write data.
         // The `current_write` buffer will be advanced based on how much we wrote.
@@ -220,12 +220,12 @@ impl Connection {
 
         match event_loop.reregister(&self.stream, self.token, self.interest, PollOpt::edge() | PollOpt::oneshot()) {
             Ok(()) => Ok(()),
-            Err(e) => Err(RaftError::from_error(e)),
+            Err(e) => Err(Error::from_error(e)),
         }
     }
 
     fn readable<S, M>(&mut self, event_loop: &mut EventLoop<RaftServer<S, M>>, replica: &mut Replica<S,M>)
-                      -> Result<(), RaftError>
+                      -> Result<()>
     where S: Store, M: StateMachine {
         let mut read = 0;
         let from = self.stream.peer_addr().unwrap();
@@ -249,7 +249,7 @@ impl Connection {
         }
         match event_loop.reregister(&self.stream, self.token, self.interest, PollOpt::edge()) {
             Ok(()) => Ok(()),
-            Err(e) => Err(RaftError::from_error(e)),
+            Err(e) => Err(Error::from_error(e)),
         }
     }
 
