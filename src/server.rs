@@ -264,12 +264,6 @@ impl Connection {
         let mut builder_message = MallocMessageBuilder::new_default();
         let from = self.stream.peer_addr().unwrap();
         if let Ok(request) = reader.get_root::<rpc_request::Reader>() {
-            // Because messages are passed asyncronously between Server instances, a Server could
-            // get into a situation where multiple events are ready to be dispatched to a single
-            // remote Server. In this situation, the Server will replace the existing event with
-            // the new event, except in one special circumstance: if the new and existing messages
-            // are both AppendEntryRequests with the same term, then the new message will be
-            // dropped.
             match request.which().unwrap() {
                 // TODO: Move these into replica?
                 rpc_request::Which::AppendEntries(Ok(call)) => {
@@ -290,7 +284,7 @@ impl Connection {
                     match respond {
                         Some(Emit) => {
                             // TODO
-                            self.emit(&mut builder_message);
+                            self.emit(builder_message);
                         },
                         None            => (),
                     }
@@ -308,7 +302,7 @@ impl Connection {
                     match respond {
                         Some(Emit) => {
                             // TODO
-                            self.emit(&mut builder_message);
+                            self.emit(builder_message);
                         },
                         None => (),
                     }
@@ -321,7 +315,7 @@ impl Connection {
                     match respond {
                         Some(Broadcast) => {
                             // Won an election!
-                            self.broadcast(&mut builder_message);
+                            self.broadcast(builder_message);
                         },
                         None => (),
                     }
@@ -340,7 +334,7 @@ impl Connection {
                     };
                     match respond {
                         Some(emit) => {
-                            self.emit(&mut builder_message);
+                            self.emit(builder_message);
                         },
                         None => (),
                     }
@@ -360,7 +354,7 @@ impl Connection {
                     };
                     match respond {
                         Some(emit) => {
-                            self.emit(&mut builder_message);
+                            self.emit(builder_message);
                         },
                         None => (),
                     }
@@ -379,11 +373,38 @@ impl Connection {
         }
     }
 
-    fn broadcast(&self, builder: &mut MallocMessageBuilder) {
+    fn broadcast(&mut self, builder: MallocMessageBuilder) {
         unimplemented!();
     }
 
-    fn emit(&self, builder: &mut MallocMessageBuilder) {
-        unimplemented!();
+    /// If applicable, push the new message into `self.next_write`.
+    ///
+    // Because messages are passed asyncronously between Server instances, a Server could
+    // get into a situation where multiple events are ready to be dispatched to a single
+    // remote Server. In this situation, the Server will replace the existing event with
+    // the new event, except in one special circumstance: if the new and existing messages
+    // are both AppendEntryRequests with the same term, then the new message will be
+    // dropped.
+    fn emit(&mut self, mut builder: MallocMessageBuilder) {
+        let overwrite = match self.next_write {
+            Some(ref mut next) => {
+                let opt_incoming = builder.get_root::<append_entries_request::Builder>();
+                let opt_next = next.get_root::<append_entries_request::Builder>();
+                match (opt_incoming, opt_next) {
+                    (Ok(incoming), Ok(next)) => {
+                        if incoming.get_term() == next.get_term() {
+                            false
+                        } else {
+                            true
+                        }
+                    },
+                    _ => true,
+                }
+            },
+            None => true,
+        };
+        if overwrite {
+            self.next_write = Some(builder);
+        }
     }
 }
