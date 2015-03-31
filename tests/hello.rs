@@ -1,17 +1,9 @@
 extern crate raft;
 mod new;
 
-use std::collections::HashSet;
-use std::net::SocketAddr;
-use std::str::FromStr;
-use std::sync::mpsc;
-
-use raft::Raft;
-use raft::store::MemStore;
-use raft::state_machine::ChannelStateMachine;
-
 use new::new_cluster;
 
+#[test]
 fn hello() {
     let mut nodes = new_cluster(3);
     let sent_command = b"Hello";
