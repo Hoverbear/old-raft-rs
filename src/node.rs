@@ -66,7 +66,7 @@ pub struct RaftServer<S, M> where S: Store, M: StateMachine {
     replica: Replica<S, M>,
     // Channels and Sockets
     listener: NonBlock<TcpListener>,
-    connections: Slab<RaftConnection>,
+    connections: Slab<Connection>,
 }
 
 /// The implementation of the RaftServer. In most use cases, creating a `RaftServer` should just be
@@ -131,7 +131,7 @@ impl<S, M> Handler for RaftServer<S, M> where S: Store, M: StateMachine {
             HEARTBEAT_TIMEOUT => unreachable!(),
             LISTENER => {
                 let stream = self.listener.accept().unwrap().unwrap(); // Result<Option<_>,_>
-                let conn = RaftConnection::new(stream);
+                let conn = Connection::new(stream);
                 let tok = self.connections.insert(conn)
                     .ok().expect("Could not add connection to slab.");
 
@@ -168,7 +168,7 @@ impl<S, M> Handler for RaftServer<S, M> where S: Store, M: StateMachine {
     }
 }
 
-struct RaftConnection {
+struct Connection {
     stream: NonBlock<TcpStream>,
     token: Token,
     interest: Interest,
@@ -177,9 +177,9 @@ struct RaftConnection {
     next_write: Option<MallocMessageBuilder>,
 }
 
-impl RaftConnection {
-    fn new(sock: NonBlock<TcpStream>) -> RaftConnection {
-        RaftConnection {
+impl Connection {
+    fn new(sock: NonBlock<TcpStream>) -> Connection {
+        Connection {
             stream: sock,
             token: Token(-1),
             interest: Interest::hup(),
