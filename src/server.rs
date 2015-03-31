@@ -157,11 +157,15 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                 let _send_message = self.replica.election_timeout(request.init_request_vote());
                 reactor.timeout_ms(ELECTION_TIMEOUT, timeout).unwrap();
                 // TODO: send messages if necessary
+                unimplemented!();
+                // self.broadcast(&mut builder_message);
             },
             HEARTBEAT_TIMEOUT => {
                 let _send_message = self.replica.heartbeat_timeout(request.init_append_entries());
                 reactor.timeout_ms(HEARTBEAT_TIMEOUT, HEARTBEAT_DURATION).unwrap();
                 // TODO: send messages if necessary
+                unimplemented!();
+                // self.broadcast(&mut builder_message);
             },
             _ => unreachable!(),
         }
@@ -185,7 +189,7 @@ impl Connection {
             interest: Interest::hup(),
             current_read: RingBuf::new(4096),
             current_write: RingBuf::new(4096),
-            next_write: Some(MallocMessageBuilder::new_default()),
+            next_write: None,
         }
     }
 
@@ -260,48 +264,64 @@ impl Connection {
         let mut builder_message = MallocMessageBuilder::new_default();
         let from = self.stream.peer_addr().unwrap();
         if let Ok(request) = reader.get_root::<rpc_request::Reader>() {
-            // We will be responding.
-            let response = match request.which().unwrap() {
+            // Because messages are passed asyncronously between Server instances, a Server could
+            // get into a situation where multiple events are ready to be dispatched to a single
+            // remote Server. In this situation, the Server will replace the existing event with
+            // the new event, except in one special circumstance: if the new and existing messages
+            // are both AppendEntryRequests with the same term, then the new message will be
+            // dropped.
+            match request.which().unwrap() {
                 // TODO: Move these into replica?
                 rpc_request::Which::AppendEntries(Ok(call)) => {
                     let builder = builder_message.init_root::<append_entries_response::Builder>();
-                    replica.append_entries_request(from, call, builder)
+                    match replica.append_entries_request(from, call, builder) {
+                        Some(Emit) => {
+                            // Special Cirsumstance Detection
+                            unimplemented!();
+                        },
+                        None => (),
+                    }
                 },
                 rpc_request::Which::RequestVote(Ok(call)) => {
-                    let builder = builder_message.init_root::<request_vote_response::Builder>();
-                    replica.request_vote_request(from, call, builder)
+                    let respond = {
+                        let builder = builder_message.init_root::<request_vote_response::Builder>();
+                        replica.request_vote_request(from, call, builder)
+                    };
+                    match respond {
+                        Some(Emit) => {
+                            // TODO
+                            self.emit(&mut builder_message);
+                        },
+                        None            => (),
+                    }
                 },
                 _ => unimplemented!(),
             };
-            match response {
-                Some(Emit) => {
-                    // TODO
-                    unimplemented!();
-                    self.interest.insert(Interest::writable());
-                },
-                None            => (),
-            }
         } else if let Ok(response) = reader.get_root::<rpc_response::Reader>() {
             // We won't be responding. This is already a response.
             match response.which().unwrap() {
                 rpc_response::Which::AppendEntries(Ok(call)) => {
-                    let res = builder_message.init_root::<append_entries_request::Builder>();
-                    match replica.append_entries_response(from, call, res) {
+                    let respond = {
+                        let builder = builder_message.init_root::<append_entries_request::Builder>();
+                        replica.append_entries_response(from, call, builder)
+                    };
+                    match respond {
                         Some(Emit) => {
                             // TODO
-                            unimplemented!();
-                            self.interest.insert(Interest::writable());
+                            self.emit(&mut builder_message);
                         },
                         None => (),
                     }
                 },
                 rpc_response::Which::RequestVote(Ok(call)) => {
-                    let res = builder_message.init_root::<append_entries_request::Builder>();
-                    match replica.request_vote_response(from, call, res) {
+                    let respond = {
+                        let builder = builder_message.init_root::<append_entries_request::Builder>();
+                        replica.request_vote_response(from, call, builder)
+                    };
+                    match respond {
                         Some(Broadcast) => {
                             // Won an election!
-                            unimplemented!();
-                            self.interest.insert(Interest::writable());
+                            self.broadcast(&mut builder_message);
                         },
                         None => (),
                     }
@@ -314,11 +334,13 @@ impl Connection {
             // We will be responding.
             match client_req.which().unwrap() {
                 client_request::Which::Append(Ok(call)) => {
-                    let mut res = builder_message.init_root::<client_response::Builder>();
-                    match replica.client_append(from, call, res) {
+                    let respond = {
+                        let mut builder = builder_message.init_root::<client_response::Builder>();
+                        replica.client_append(from, call, builder)
+                    };
+                    match respond {
                         Some(emit) => {
-                            unimplemented!();
-                            self.interest.insert(Interest::writable());
+                            self.emit(&mut builder_message);
                         },
                         None => (),
                     }
@@ -332,11 +354,13 @@ impl Connection {
                     debug!("Got a Die request from Client({}). Reason: {}", from, call);
                 },
                 client_request::Which::LeaderRefresh(()) => {
-                    let mut res = builder_message.init_root::<client_response::Builder>();
-                    match replica.client_leader_refresh(from, res) {
+                    let respond = {
+                        let mut builder = builder_message.init_root::<client_response::Builder>();
+                        replica.client_leader_refresh(from, builder)
+                    };
+                    match respond {
                         Some(emit) => {
-                            unimplemented!();
-                            self.interest.insert(Interest::writable())
+                            self.emit(&mut builder_message);
                         },
                         None => (),
                     }
@@ -353,5 +377,13 @@ impl Connection {
             // It's something we don't understand.
             unimplemented!();
         }
+    }
+
+    fn broadcast(&self, builder: &mut MallocMessageBuilder) {
+        unimplemented!();
+    }
+
+    fn emit(&self, builder: &mut MallocMessageBuilder) {
+        unimplemented!();
     }
 }
