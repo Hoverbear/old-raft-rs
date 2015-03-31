@@ -25,7 +25,7 @@
 //! Consuming this library works in a few parts:
 //!
 //! 1. Implement `Store` and `StateMachine` such that they will hook into your application.
-//! 2. Create a `Raft` with those impls which will spawn it's own `RaftServer` and join with a cluster.
+//! 2. Create a `Raft` with those impls which will spawn it's own `Server` and join with a cluster.
 //! 3. Interact with the cluster by issuing `append()` calls.
 //! 4. React to calls to `apply()` from the implemented `StateMachine`
 //!
@@ -56,7 +56,7 @@ extern crate uuid;
 pub mod state_machine;
 pub mod store;
 
-mod node;
+mod server;
 mod replica;
 mod state;
 
@@ -76,7 +76,7 @@ use std::error::FromError;
 use rustc_serialize::{Encodable, Decodable};
 // Data structures.
 use store::Store;
-use node::RaftServer;
+use server::Server;
 use state_machine::StateMachine;
 
 // Cap'n Proto
@@ -87,20 +87,20 @@ use messages_capnp::{
     client_response,
 };
 
-/// This is the primary interface with a `RaftServer` in the cluster.
+/// This is the primary interface with a `Server` in the cluster.
 ///
-/// Note: Creating a new `Raft` client will, for now, automatically spawn a `RaftServer` with the
+/// Note: Creating a new `Raft` client will, for now, automatically spawn a `Server` with the
 /// relevant parameters. This may be changed in the future. This is based on the assumption that
 /// any consuming application interacting with a Raft cluster will also be a participant.
 pub struct Raft {
     current_leader: Option<SocketAddr>,
-    related_RaftServer: SocketAddr, // Not RaftServer because we move that to another thread.
+    related_Server: SocketAddr, // Not Server because we move that to another thread.
     cluster_members: HashSet<SocketAddr>,
 }
 
 impl Raft {
-    /// Create a new `Raft` client that has a cooresponding `RaftServer` attached. Note that this
-    /// `Raft` may not necessarily interact with the cooreponding `RaftServer`, it will interact with
+    /// Create a new `Raft` client that has a cooresponding `Server` attached. Note that this
+    /// `Raft` may not necessarily interact with the cooreponding `Server`, it will interact with
     /// the `Leader` of a cluster in almost all cases.
     /// *Note:* All requests are blocking, by design from the Raft paper.
     pub fn new<S, M>(addr: SocketAddr,
@@ -111,11 +111,11 @@ impl Raft {
     where S: Store, M: StateMachine {
         let mut peers = cluster_members.clone();
         peers.remove(&addr);
-        RaftServer::<S, M>::spawn(addr, peers, store, state_machine);
+        Server::<S, M>::spawn(addr, peers, store, state_machine);
         // Store relevant information.
         Raft {
             current_leader: None,
-            related_RaftServer: addr,
+            related_Server: addr,
             cluster_members: cluster_members,
         }
     }
@@ -181,14 +181,14 @@ impl Raft {
     }
 
     /// This function will force the `Raft` interface to refresh it's knowledge of the leader from
-    /// The cooresponding `RaftServer` running alongside it.
+    /// The cooresponding `Server` running alongside it.
     pub fn refresh_leader(&mut self) -> Result<()> {
         let mut message = MallocMessageBuilder::new_default();
         {
             let mut client_req = message.init_root::<client_request::Builder>();
             client_req.set_leader_refresh(());
         }
-        let mut socket = try!(TcpStream::connect(self.related_RaftServer));
+        let mut socket = try!(TcpStream::connect(self.related_Server));
         try!(serialize_packed::write_packed_message_unbuffered(&mut socket, &mut message));
 
         // Wait for a response.
@@ -224,8 +224,8 @@ pub enum Error {
 
 /// Currently, this can only be:
 ///
-/// * `RelatedNodeDown` - When the related RaftServer is known to be down.
-/// * `CannotProceed` - When the related RaftServer cannot proceed due to more than a majority of
+/// * `RelatedNodeDown` - When the related Server is known to be down.
+/// * `CannotProceed` - When the related Server cannot proceed due to more than a majority of
 ///                     nodes being unavailable.
 /// TODO: Hook these up.
 #[derive(Debug)]
