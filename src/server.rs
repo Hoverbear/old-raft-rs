@@ -2,6 +2,7 @@ use std::thread;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::error::FromError;
+use std::collections::VecDeque;
 
 // MIO
 use mio::tcp::{listen, TcpListener, TcpStream};
@@ -47,6 +48,7 @@ const LISTENER:  Token = Token(2);
 const ELECTION_MIN: u64 = 150;
 const ELECTION_MAX: u64 = 300;
 const HEARTBEAT_DURATION: u64 = 50;
+const RINGBUF_SIZE: usize = 4096;
 
 /// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
 ///
@@ -102,15 +104,11 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             event_loop.run(&mut raft_node).unwrap();
         }).unwrap();
     }
-
-    fn broadcast(&mut self, builder: MallocMessageBuilder) {
-        unimplemented!();
-    }
 }
 
 impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
-    type Message = ();
+    type Message = RingBuf;
     type Timeout = Token;
 
     /// A registered IoHandle has available writing space.
@@ -173,7 +171,16 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
         }
         // Send if necessary.
         match send_message {
-            Some(Broadcast) => self.broadcast(message),
+            Some(Broadcast) => {
+                let mut buf = RingBuf::new(RINGBUF_SIZE);
+                serialize_packed::write_packed_message_unbuffered(
+                    &mut buf,
+                    &mut message
+                ).unwrap();
+                for connection in self.connections.iter_mut() {
+                    connection.add_write(buf.clone());
+                }
+            },
             None => (),
         }
     }
@@ -185,7 +192,7 @@ struct Connection {
     interest: Interest,
     current_read: RingBuf,
     current_write: RingBuf,
-    next_write: Option<MallocMessageBuilder>,
+    next_write: VecDeque<RingBuf>,
 }
 
 impl Connection {
@@ -196,7 +203,7 @@ impl Connection {
             interest: Interest::hup(),
             current_read: RingBuf::new(4096),
             current_write: RingBuf::new(4096),
-            next_write: None,
+            next_write: VecDeque::with_capacity(10),
         }
     }
 
@@ -212,17 +219,13 @@ impl Connection {
             },
             Ok(Some(r)) => {
                 // We managed to write data!
-                // TODO: We're *probably* not ready to shoot data again?
-                match (self.current_write.has_remaining(), self.next_write.is_some()) {
+                match (self.current_write.has_remaining(), self.next_write.is_empty()) {
                     // Need to write more of what we have.
                     (true, _) => (),
                     // Need to roll over.
-                    (false, true) => try!(
-                        serialize_packed::write_packed_message_unbuffered(&mut self.current_write,
-                                                                          self.next_write.as_mut().unwrap())
-                    ),
+                    (false, false) => self.current_write = self.next_write.pop_front().unwrap(),
                     // We're done writing for now.
-                    (false, false) => self.interest.remove(Interest::writable()),
+                    (false, true) => self.interest.remove(Interest::writable()),
 
                 }
             },
@@ -383,34 +386,17 @@ impl Connection {
         unimplemented!();
     }
 
-    /// If applicable, push the new message into `self.next_write`.
-    ///
-    // Because messages are passed asyncronously between Server instances, a Server could
-    // get into a situation where multiple events are ready to be dispatched to a single
-    // remote Server. In this situation, the Server will replace the existing event with
-    // the new event, except in one special circumstance: if the new and existing messages
-    // are both AppendEntryRequests with the same term, then the new message will be
-    // dropped.
-    fn emit(&mut self, mut builder: MallocMessageBuilder) {
-        let overwrite = match self.next_write {
-            Some(ref mut next) => {
-                let opt_incoming = builder.get_root::<append_entries_request::Builder>();
-                let opt_next = next.get_root::<append_entries_request::Builder>();
-                match (opt_incoming, opt_next) {
-                    (Ok(incoming), Ok(next)) => {
-                        if incoming.get_term() == next.get_term() {
-                            false
-                        } else {
-                            true
-                        }
-                    },
-                    _ => true,
-                }
-            },
-            None => true,
-        };
-        if overwrite {
-            self.next_write = Some(builder);
-        }
+    /// Push the new message into `self.next_write`.
+    pub fn emit(&mut self, mut builder: MallocMessageBuilder) {
+        let mut buf = RingBuf::new(RINGBUF_SIZE);
+        serialize_packed::write_packed_message_unbuffered(
+            &mut buf,
+            &mut builder
+        ).unwrap();
+        self.add_write(buf);
+    }
+
+    pub fn add_write(&mut self, buf: RingBuf) {
+        self.next_write.push_back(buf);
     }
 }
