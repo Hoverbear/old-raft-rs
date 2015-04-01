@@ -102,6 +102,10 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             event_loop.run(&mut raft_node).unwrap();
         }).unwrap();
     }
+
+    fn broadcast(&mut self, builder: MallocMessageBuilder) {
+        unimplemented!();
+    }
 }
 
 impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
@@ -149,25 +153,28 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
     /// A registered timer has expired
     fn timeout(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
         let mut message = MallocMessageBuilder::new_default();
-        let request = message.init_root::<rpc_request::Builder>();
-
+        let mut send_message = None;
         match token {
             ELECTION_TIMEOUT => {
+                let request = message.init_root::<rpc_request::Builder>();
+                send_message = self.replica.election_timeout(request.init_request_vote());
+                // Set timeout.
                 let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
-                let _send_message = self.replica.election_timeout(request.init_request_vote());
                 reactor.timeout_ms(ELECTION_TIMEOUT, timeout).unwrap();
-                // TODO: send messages if necessary
-                unimplemented!();
-                // self.broadcast(&mut builder_message);
+
             },
             HEARTBEAT_TIMEOUT => {
-                let _send_message = self.replica.heartbeat_timeout(request.init_append_entries());
+                let request = message.init_root::<rpc_request::Builder>();
+                send_message = self.replica.heartbeat_timeout(request.init_append_entries());
+                // Set Timeout
                 reactor.timeout_ms(HEARTBEAT_TIMEOUT, HEARTBEAT_DURATION).unwrap();
-                // TODO: send messages if necessary
-                unimplemented!();
-                // self.broadcast(&mut builder_message);
             },
             _ => unreachable!(),
+        }
+        // Send if necessary.
+        match send_message {
+            Some(Broadcast) => self.broadcast(message),
+            None => (),
         }
     }
 }
