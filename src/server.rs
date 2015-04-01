@@ -3,12 +3,13 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::error::FromError;
 use std::collections::VecDeque;
+use std::io::{Write, Read};
 
 // MIO
 use mio::tcp::{listen, TcpListener, TcpStream};
 use mio::util::Slab;
 use mio::Socket;
-use mio::buf::{RingBuf};
+use mio::buf::{ByteBuf, MutByteBuf, MutBuf};
 use mio::{Interest, PollOpt, NonBlock, Token, EventLoop, Handler, ReadHint};
 use mio::buf::Buf;
 use mio::{TryRead, TryWrite};
@@ -48,7 +49,7 @@ const LISTENER:  Token = Token(2);
 const ELECTION_MIN: u64 = 150;
 const ELECTION_MAX: u64 = 300;
 const HEARTBEAT_DURATION: u64 = 50;
-const RINGBUF_SIZE: usize = 4096;
+const BUF_SIZE: usize = 4096;
 
 /// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
 ///
@@ -108,11 +109,12 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
 
 impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
-    type Message = RingBuf;
+    type Message = MutByteBuf;
     type Timeout = Token;
 
     /// A registered IoHandle has available writing space.
     fn writable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
+        debug!("Writable");
         match token {
             ELECTION_TIMEOUT => unreachable!(),
             HEARTBEAT_TIMEOUT => unreachable!(),
@@ -125,6 +127,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
     /// A registered IoHandle has available data to read
     fn readable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, _hint: ReadHint) {
+        debug!("Readable");
         match token {
             ELECTION_TIMEOUT => unreachable!(),
             HEARTBEAT_TIMEOUT => unreachable!(),
@@ -172,13 +175,15 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
         // Send if necessary.
         match send_message {
             Some(Broadcast) => {
-                let mut buf = RingBuf::new(RINGBUF_SIZE);
+                let mut buf = ByteBuf::mut_with_capacity(BUF_SIZE);
                 serialize_packed::write_packed_message_unbuffered(
                     &mut buf,
                     &mut message
                 ).unwrap();
+                let byte_buf = buf.flip();
+                let bytes = Buf::bytes(&byte_buf);
                 for connection in self.connections.iter_mut() {
-                    connection.add_write(buf.clone());
+                    connection.add_write(ByteBuf::from_slice(bytes));
                 }
             },
             None => (),
@@ -190,9 +195,9 @@ struct Connection {
     stream: NonBlock<TcpStream>,
     token: Token,
     interest: Interest,
-    current_read: RingBuf,
-    current_write: RingBuf,
-    next_write: VecDeque<RingBuf>,
+    current_read: Option<MutByteBuf>,
+    current_write: Option<ByteBuf>,
+    next_write: VecDeque<ByteBuf>,
 }
 
 impl Connection {
@@ -201,8 +206,8 @@ impl Connection {
             stream: sock,
             token: Token(-1),
             interest: Interest::hup(),
-            current_read: RingBuf::new(4096),
-            current_write: RingBuf::new(4096),
+            current_read: None,
+            current_write: None,
             next_write: VecDeque::with_capacity(10),
         }
     }
@@ -210,39 +215,52 @@ impl Connection {
     fn writable<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, replica: &mut Replica<S,M>)
                       -> Result<()>
     where S: Store, M: StateMachine {
+        debug!("Writable");
         // Attempt to write data.
         // The `current_write` buffer will be advanced based on how much we wrote.
-        match self.stream.write(&mut self.current_write) {
-            Ok(None) => {
-                // This is a buffer flush. WOULDBLOCK
-                self.interest.insert(Interest::writable());
-            },
-            Ok(Some(r)) => {
-                // We managed to write data!
-                match (self.current_write.has_remaining(), self.next_write.is_empty()) {
-                    // Need to write more of what we have.
-                    (true, _) => (),
-                    // Need to roll over.
-                    (false, false) => self.current_write = self.next_write.pop_front().unwrap(),
-                    // We're done writing for now.
-                    (false, true) => self.interest.remove(Interest::writable()),
+        match self.current_write {
+            Some(ref mut current_write) => {
+                match self.stream.write(current_write) {
+                    Ok(None) => {
+                        // This is a buffer flush. WOULDBLOCK
+                        self.interest.insert(Interest::writable());
+                    },
+                    Ok(Some(r)) => {
+                        // We managed to write data!
+                        match (current_write.has_remaining(), self.next_write.is_empty()) {
+                            // Need to write more of what we have.
+                            (true, _) => (),
+                            // Need to roll over.
+                            (false, false) => *current_write = self.next_write.pop_front().unwrap(),
+                            // We're done writing for now.
+                            (false, true) => self.interest.remove(Interest::writable()),
 
+                        }
+                    },
+                    Err(e) => return Err(Error::from_error(e)),
+                }
+
+                match event_loop.reregister(&self.stream, self.token, self.interest, PollOpt::edge() | PollOpt::oneshot()) {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(Error::from_error(e)),
                 }
             },
-            Err(e) => return Err(Error::from_error(e)),
+            None => panic!("Got a writable without a current_write!"),
         }
 
-        match event_loop.reregister(&self.stream, self.token, self.interest, PollOpt::edge() | PollOpt::oneshot()) {
-            Ok(()) => Ok(()),
-            Err(e) => Err(Error::from_error(e)),
-        }
     }
 
     fn readable<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, replica: &mut Replica<S,M>)
                       -> Result<()>
     where S: Store, M: StateMachine {
+        debug!("Readable");
+        if self.current_read.is_none() {
+            self.current_read = Some(ByteBuf::mut_with_capacity(BUF_SIZE));
+        }
+        // We **know** we have it.
+        let mut current_read = self.current_read.take().unwrap();
         let mut read = 0;
-        match self.stream.read(&mut self.current_read) {
+        match self.stream.read(&mut current_read) {
             Ok(Some(r)) => {
                 // Just read `r` bytes.
                 read = r;
@@ -251,10 +269,12 @@ impl Connection {
             Err(e) => return Err(Error::from_error(e)),
         };
         if read > 0 {
-            match serialize_packed::new_reader_unbuffered(&mut self.current_read, ReaderOptions::new()) {
+            let mut byte_buf = current_read.flip();
+            match serialize_packed::new_reader_unbuffered(&mut byte_buf, ReaderOptions::new()) {
                 // We have something reasonably interesting in the buffer!
                 Ok(reader) => {
                     self.handle_reader(reader, event_loop, replica);
+                    self.current_read = None;
                 },
                 // It's not read entirely yet.
                 // Should roll back, pending changes to bytes upstream.
@@ -388,15 +408,15 @@ impl Connection {
 
     /// Push the new message into `self.next_write`.
     pub fn emit(&mut self, mut builder: MallocMessageBuilder) {
-        let mut buf = RingBuf::new(RINGBUF_SIZE);
+        let mut buf = ByteBuf::mut_with_capacity(BUF_SIZE);
         serialize_packed::write_packed_message_unbuffered(
             &mut buf,
             &mut builder
         ).unwrap();
-        self.add_write(buf);
+        self.add_write(buf.flip());
     }
 
-    pub fn add_write(&mut self, buf: RingBuf) {
+    pub fn add_write(&mut self, buf: ByteBuf) {
         self.next_write.push_back(buf);
     }
 }
