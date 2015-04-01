@@ -191,7 +191,7 @@ impl Raft {
         try!(serialize_packed::write_packed_message_unbuffered(&mut socket, &mut message));
 
         // Wait for a response.
-        let response = serialize_packed::new_reader_unbuffered(socket, ReaderOptions::new()).unwrap();
+        let response = try!(serialize_packed::new_reader_unbuffered(socket, ReaderOptions::new()));
         let client_res = try!(response.get_root::<client_response::Reader>());
         // Set the current leader.
         self.current_leader = match try!(client_res.which()) {

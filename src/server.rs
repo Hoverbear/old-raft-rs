@@ -127,7 +127,10 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
             ELECTION_TIMEOUT => unreachable!(),
             HEARTBEAT_TIMEOUT => unreachable!(),
             LISTENER => {
-                let stream = self.listener.accept().unwrap().unwrap(); // Result<Option<_>,_>
+                let stream = match self.listener.accept().unwrap() {
+                    Some(s) => s,
+                    None => return, // Socket isn't quite ready.
+                }; // Result<Option<_>,_>
                 let conn = Connection::new(stream);
                 let tok = self.connections.insert(conn)
                     .ok().expect("Could not add connection to slab.");
