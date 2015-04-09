@@ -43,7 +43,20 @@ You will need the [Rust](http://rust-lang.org/) compiler:
 curl -L https://static.rust-lang.org/rustup.sh | sudo sh
 ```
 
-This should install `cargo` and `rustc`. Clone the repository and build it:
+This should install `cargo` and `rustc`. Next, you'll need `capnp` to build the
+`messages.canpnp` file . It is suggested to use the [git method](https://capnproto.org/install.html#installation-unix)
+
+```bash
+git clone https://github.com/sandstorm-io/capnproto.git
+cd capnproto/c++
+./setup-autotools.sh
+autoreconf -i
+./configure
+make -j6 check
+sudo make install
+```
+
+Finally, clone the repository and build it:
 
 ```bash
 git clone git@github.com:Hoverbear/raft.git && \
@@ -52,13 +65,6 @@ cargo build
 ```
 
 > Note this is a library, so building won't necessarily produce anything useful for you.
-
-If you have any issues building, you may need to install `capnp` from your distribution's
-repositories. For Homebrew:
-
-```bash
-brew install canpnp
-```
 
 ## Documentation ##
 
