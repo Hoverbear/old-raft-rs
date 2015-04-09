@@ -70,7 +70,6 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::str::FromStr;
-use std::error::FromError;
 
 use rustc_serialize::Encodable;
 // Data structures.
@@ -235,20 +234,20 @@ pub enum ErrorKind {
     BadResponse,
 }
 
-impl FromError<io::Error> for Error {
-    fn from_error(err: io::Error) -> Error {
+impl From<io::Error> for Error {
+    fn from(err: io::Error) -> Error {
         Error::Io(err)
     }
 }
 
-impl FromError<capnp::Error> for Error {
-    fn from_error(err: capnp::Error) -> Error {
+impl From<capnp::Error> for Error {
+    fn from(err: capnp::Error) -> Error {
         Error::CapnProto(err)
     }
 }
 
-impl FromError<capnp::NotInSchema> for Error {
-    fn from_error(err: capnp::NotInSchema) -> Error {
+impl From<capnp::NotInSchema> for Error {
+    fn from(err: capnp::NotInSchema) -> Error {
         Error::SchemaError(err)
     }
 }

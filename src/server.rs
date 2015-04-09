@@ -1,7 +1,6 @@
 use std::thread;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::error::FromError;
 use std::collections::VecDeque;
 
 // MIO
@@ -196,10 +195,11 @@ struct Connection {
 }
 
 impl Connection {
+    /// Note: The caller must manually assign `token` to what is desired.
     fn new(sock: NonBlock<TcpStream>) -> Connection {
         Connection {
             stream: sock,
-            token: Token(-1),
+            token: Token(0), // Effectively a `null`. This needs to be assigned by the caller.
             interest: Interest::hup(),
             current_read: RingBuf::new(4096),
             current_write: RingBuf::new(4096),
@@ -229,12 +229,12 @@ impl Connection {
 
                 }
             },
-            Err(e) => return Err(Error::from_error(e)),
+            Err(e) => return Err(Error::from(e)),
         }
 
         match event_loop.reregister(&self.stream, self.token, self.interest, PollOpt::edge() | PollOpt::oneshot()) {
             Ok(()) => Ok(()),
-            Err(e) => Err(Error::from_error(e)),
+            Err(e) => Err(Error::from(e)),
         }
     }
 
@@ -248,7 +248,7 @@ impl Connection {
                 read = r;
             },
             Ok(None) => panic!("We just got readable, but were unable to read from the socket?"),
-            Err(e) => return Err(Error::from_error(e)),
+            Err(e) => return Err(Error::from(e)),
         };
         if read > 0 {
             match serialize_packed::new_reader_unbuffered(&mut self.current_read, ReaderOptions::new()) {
@@ -263,7 +263,7 @@ impl Connection {
         }
         match event_loop.reregister(&self.stream, self.token, self.interest, PollOpt::edge()) {
             Ok(()) => Ok(()),
-            Err(e) => Err(Error::from_error(e)),
+            Err(e) => Err(Error::from(e)),
         }
     }
 
