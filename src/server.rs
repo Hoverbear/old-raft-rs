@@ -147,7 +147,12 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
         }
     }
 
-    /// A registered timer has expired
+    /// A registered timer has expired. This is either:
+    ///
+    /// * An election timeout, when a `Follower` node has waited too long for a heartbeat and doing
+    /// to become a `Candidate`.
+    /// * A heartbeat timeout, when the `Leader` node needs to refresh it's authority over the
+    /// followers. Initializes and sends an `AppendEntries` request to all followers.
     fn timeout(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
         let mut message = MallocMessageBuilder::new_default();
         let mut send_message = None;
@@ -207,6 +212,7 @@ impl Connection {
         }
     }
 
+    /// A registered IoHandle has available writing space.
     fn writable<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, replica: &mut Replica<S,M>)
                       -> Result<()>
     where S: Store, M: StateMachine {
@@ -238,6 +244,9 @@ impl Connection {
         }
     }
 
+    /// A registered IoHandle has available data to read.
+    /// This does not necessarily mean that there is an entire packed item on the stream. We could
+    /// get some, all of it, or none. We'll use the buffer to read in until we can find one.
     fn readable<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, replica: &mut Replica<S,M>)
                       -> Result<()>
     where S: Store, M: StateMachine {
@@ -258,6 +267,7 @@ impl Connection {
                 },
                 // It's not read entirely yet.
                 // Should roll back, pending changes to bytes upstream.
+                // TODO: This was fixed.
                 Err(_) => unimplemented!(),
             }
         }
@@ -266,7 +276,9 @@ impl Connection {
             Err(e) => Err(Error::from(e)),
         }
     }
-
+    
+    /// This is called when there is a full reader available in the buffer.
+    /// It handles what to do with the data.
     fn handle_reader<S, M>(&mut self, reader: OwnedSpaceMessageReader,
                            event_loop: &mut EventLoop<Server<S, M>>, replica: &mut Replica<S,M>)
     where S: Store, M: StateMachine {
@@ -386,7 +398,8 @@ impl Connection {
         unimplemented!();
     }
 
-    /// Push the new message into `self.next_write`.
+    /// Push the new message into `self.next_write`. This does not actually send the message, it
+    /// just queues it up.
     pub fn emit(&mut self, mut builder: MallocMessageBuilder) {
         let mut buf = RingBuf::new(RINGBUF_SIZE);
         serialize_packed::write_packed_message_unbuffered(
@@ -396,6 +409,8 @@ impl Connection {
         self.add_write(buf);
     }
 
+    /// This queues a byte buffer into the write queue. This is used primarily when message has
+    /// already been packed.
     pub fn add_write(&mut self, buf: RingBuf) {
         self.next_write.push_back(buf);
     }
