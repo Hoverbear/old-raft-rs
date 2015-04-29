@@ -13,5 +13,5 @@ fn hello() {
     // Retrieve.
     let recieved_command = nodes[0].1.recv()
         .ok().expect("Couldn't recv.");
-    assert_eq!(sent_command, recieved_command);
+    assert_eq!(recieved_command, sent_command);
 }
