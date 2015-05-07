@@ -1,10 +1,13 @@
 extern crate raft;
+extern crate env_logger;
 mod new;
 
 use new::new_cluster;
 
+
 #[test]
 fn hello() {
+    env_logger::init().unwrap();
     let mut nodes = new_cluster(3);
     let sent_command = b"Hello";
     // Push

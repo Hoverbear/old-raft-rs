@@ -2,6 +2,7 @@ use std::thread;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::collections::VecDeque;
+use std::io::BufReader;
 
 // MIO
 use mio::tcp::{listen, TcpListener, TcpStream};
@@ -83,6 +84,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                  peers: HashSet<SocketAddr>,
                  store: S,
                  state_machine: M) {
+        debug!("Spawning Server");
         // Create an event loop
         let mut event_loop = EventLoop::<Server<S, M>>::new().unwrap();
         // Setup the socket, make it not block.
@@ -112,6 +114,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
     /// A registered IoHandle has available writing space.
     fn writable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
+        debug!("Writeable");
         match token {
             ELECTION_TIMEOUT => unreachable!(),
             HEARTBEAT_TIMEOUT => unreachable!(),
@@ -124,6 +127,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
     /// A registered IoHandle has available data to read
     fn readable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, _hint: ReadHint) {
+        debug!("Readable");
         match token {
             ELECTION_TIMEOUT => unreachable!(),
             HEARTBEAT_TIMEOUT => unreachable!(),
@@ -154,6 +158,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
     /// * A heartbeat timeout, when the `Leader` node needs to refresh it's authority over the
     /// followers. Initializes and sends an `AppendEntries` request to all followers.
     fn timeout(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
+        debug!("Timeout");
         let mut message = MallocMessageBuilder::new_default();
         let mut send_message = None;
         match token {
@@ -177,7 +182,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
         match send_message {
             Some(Broadcast) => {
                 let mut buf = RingBuf::new(RINGBUF_SIZE);
-                serialize_packed::write_packed_message_unbuffered(
+                serialize_packed::write_message(
                     &mut buf,
                     &mut message
                 ).unwrap();
@@ -194,8 +199,8 @@ struct Connection {
     stream: NonBlock<TcpStream>,
     token: Token,
     interest: Interest,
-    current_read: RingBuf,
-    current_write: RingBuf,
+    current_read: BufReader<RingBuf>,
+    current_write: BufReader<RingBuf>,
     next_write: VecDeque<RingBuf>,
 }
 
@@ -206,8 +211,8 @@ impl Connection {
             stream: sock,
             token: Token(0), // Effectively a `null`. This needs to be assigned by the caller.
             interest: Interest::hup(),
-            current_read: RingBuf::new(4096),
-            current_write: RingBuf::new(4096),
+            current_read: BufReader::new(RingBuf::new(4096)),
+            current_write: BufReader::new(RingBuf::new(4096)),
             next_write: VecDeque::with_capacity(10),
         }
     }
@@ -218,18 +223,18 @@ impl Connection {
     where S: Store, M: StateMachine {
         // Attempt to write data.
         // The `current_write` buffer will be advanced based on how much we wrote.
-        match self.stream.write(&mut self.current_write) {
+        match self.stream.write(self.current_write.get_mut()) {
             Ok(None) => {
                 // This is a buffer flush. WOULDBLOCK
                 self.interest.insert(Interest::writable());
             },
             Ok(Some(r)) => {
                 // We managed to write data!
-                match (self.current_write.has_remaining(), self.next_write.is_empty()) {
+                match (self.current_write.get_ref().has_remaining(), self.next_write.is_empty()) {
                     // Need to write more of what we have.
                     (true, _) => (),
                     // Need to roll over.
-                    (false, false) => self.current_write = self.next_write.pop_front().unwrap(),
+                    (false, false) => self.current_write = BufReader::new(self.next_write.pop_front().unwrap()),
                     // We're done writing for now.
                     (false, true) => self.interest.remove(Interest::writable()),
 
@@ -251,7 +256,7 @@ impl Connection {
                       -> Result<()>
     where S: Store, M: StateMachine {
         let mut read = 0;
-        match self.stream.read(&mut self.current_read) {
+        match self.stream.read(self.current_read.get_mut()) {
             Ok(Some(r)) => {
                 // Just read `r` bytes.
                 read = r;
@@ -260,7 +265,7 @@ impl Connection {
             Err(e) => return Err(Error::from(e)),
         };
         if read > 0 {
-            match serialize_packed::new_reader_unbuffered(&mut self.current_read, ReaderOptions::new()) {
+            match serialize_packed::read_message(&mut self.current_read, ReaderOptions::new()) {
                 // We have something reasonably interesting in the buffer!
                 Ok(reader) => {
                     self.handle_reader(reader, event_loop, replica);
@@ -402,7 +407,7 @@ impl Connection {
     /// just queues it up.
     pub fn emit(&mut self, mut builder: MallocMessageBuilder) {
         let mut buf = RingBuf::new(RINGBUF_SIZE);
-        serialize_packed::write_packed_message_unbuffered(
+        serialize_packed::write_message(
             &mut buf,
             &mut builder
         ).unwrap();

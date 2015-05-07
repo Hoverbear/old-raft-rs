@@ -43,6 +43,7 @@
 //!
 //!     // TODO
 //!
+#![feature(buf_stream)]
 
 extern crate capnp;
 extern crate mio;
@@ -68,6 +69,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::str::FromStr;
+use std::io::BufStream;
 
 use rustc_serialize::Encodable;
 // Data structures.
@@ -105,6 +107,7 @@ impl Raft {
                      state_machine: M)
                      -> Raft
     where S: Store, M: StateMachine {
+        debug!("Starting Raft on {}", addr);
         let mut peers = cluster_members.clone();
         peers.remove(&addr);
         Server::<S, M>::spawn(addr, peers, store, state_machine);
@@ -126,11 +129,13 @@ impl Raft {
             client_req.set_append(entry)
         }
         // We know current leader `is_some()` because `refresh_leader()` didn't fail.
-        let mut socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
-        try!(serialize_packed::write_packed_message_unbuffered(&mut socket, &mut message));
+        let mut unbuffered_socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
+        let mut socket = BufStream::new(unbuffered_socket);
+        try!(serialize_packed::write_message(&mut socket, &mut message));
 
         // Wait for a response.
-        let response = try!(serialize_packed::new_reader_unbuffered(socket, ReaderOptions::new()));
+
+        let response = try!(serialize_packed::read_message(&mut socket, ReaderOptions::new()));
         let client_res = try!(response.get_root::<client_response::Reader>());
         // Set the current leader.
         match try!(client_res.which()) {
@@ -163,11 +168,12 @@ impl Raft {
             client_req.set_die(&reason)
         }
         // We know current leader `is_some()` because `refresh_leader()` didn't fail.
-        let mut socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
-        try!(serialize_packed::write_packed_message_unbuffered(&mut socket, &mut message));
+        let mut unbuffered_socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
+        let mut socket = BufStream::new(unbuffered_socket);
+        try!(serialize_packed::write_message(&mut socket, &mut message));
 
         // Wait for a response.
-        let response = try!(serialize_packed::new_reader_unbuffered(socket, ReaderOptions::new()));
+        let response = try!(serialize_packed::read_message(&mut socket, ReaderOptions::new()));
         let client_res = try!(response.get_root::<client_response::Reader>());
         // Set the current leader.
         match try!(client_res.which()) {
@@ -184,11 +190,12 @@ impl Raft {
             let mut client_req = message.init_root::<client_request::Builder>();
             client_req.set_leader_refresh(());
         }
-        let mut socket = try!(TcpStream::connect(self.related_server));
-        try!(serialize_packed::write_packed_message_unbuffered(&mut socket, &mut message));
+        let mut unbuffered_socket = try!(TcpStream::connect(self.related_server));
+        let mut socket = BufStream::new(unbuffered_socket);
+        try!(serialize_packed::write_message(&mut socket, &mut message));
 
         // Wait for a response.
-        let response = try!(serialize_packed::new_reader_unbuffered(socket, ReaderOptions::new()));
+        let response = try!(serialize_packed::read_message(&mut socket, ReaderOptions::new()));
         let client_res = try!(response.get_root::<client_response::Reader>());
         // Set the current leader.
         self.current_leader = match try!(client_res.which()) {
