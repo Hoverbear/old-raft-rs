@@ -5,11 +5,11 @@ use std::collections::VecDeque;
 use std::io::BufReader;
 
 // MIO
-use mio::tcp::{listen, TcpListener, TcpStream};
+use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 use mio::Socket;
 use mio::buf::{RingBuf};
-use mio::{Interest, PollOpt, NonBlock, Token, EventLoop, Handler, ReadHint};
+use mio::{Interest, PollOpt, Token, EventLoop, Handler, ReadHint};
 use mio::buf::Buf;
 use mio::{TryRead, TryWrite};
 
@@ -64,7 +64,7 @@ const RINGBUF_SIZE: usize = 4096;
 pub struct Server<S, M> where S: Store, M: StateMachine {
     replica: Replica<S, M>,
     // Channels and Sockets
-    listener: NonBlock<TcpListener>,
+    listener: TcpListener,
     connections: Slab<Connection>,
 }
 
@@ -88,7 +88,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         // Create an event loop
         let mut event_loop = EventLoop::<Server<S, M>>::new().unwrap();
         // Setup the socket, make it not block.
-        let listener = listen(&addr).unwrap();
+        let listener = TcpListener::bind(&addr).unwrap();
         listener.set_reuseaddr(true).unwrap();
         event_loop.register(&listener, LISTENER).unwrap();
         let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
@@ -196,7 +196,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 }
 
 struct Connection {
-    stream: NonBlock<TcpStream>,
+    stream: TcpStream,
     token: Token,
     interest: Interest,
     current_read: BufReader<RingBuf>,
@@ -206,7 +206,7 @@ struct Connection {
 
 impl Connection {
     /// Note: The caller must manually assign `token` to what is desired.
-    fn new(sock: NonBlock<TcpStream>) -> Connection {
+    fn new(sock: TcpStream) -> Connection {
         Connection {
             stream: sock,
             token: Token(0), // Effectively a `null`. This needs to be assigned by the caller.
