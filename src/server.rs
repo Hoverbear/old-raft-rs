@@ -101,7 +101,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             let mut raft_node = Server {
                 listener: listener,
                 replica: replica,
-                connections: Slab::new_starting_at(Token(2), 128),
+                connections: Slab::new_starting_at(Token(3), 128),
             };
             event_loop.run(&mut raft_node).unwrap();
         }).unwrap();
@@ -115,7 +115,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
     /// A registered IoHandle has available writing space.
     fn writable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
-        debug!("{:?}: Writeable", self);
+        debug!("{:?}: Writeable {:?}", self, token);
         match token {
             ELECTION_TIMEOUT => unreachable!(),
             HEARTBEAT_TIMEOUT => unreachable!(),
@@ -128,7 +128,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
     /// A registered IoHandle has available data to read
     fn readable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, _hint: ReadHint) {
-        debug!("{:?}: Readable", self);
+        debug!("{:?}: Readable {:?}", self, token);
         match token {
             ELECTION_TIMEOUT => unreachable!(),
             HEARTBEAT_TIMEOUT => unreachable!(),
@@ -189,7 +189,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     &mut message
                 ).unwrap();
                 for connection in self.connections.iter_mut() {
-                    connection.add_write(buf.clone());
+                    connection.add_write(reactor, buf.clone());
                 }
             },
             None => (),
@@ -320,7 +320,7 @@ impl Connection {
                     match respond {
                         Some(Emit) => {
                             // TODO
-                            self.emit(builder_message);
+                            self.emit(event_loop, builder_message);
                         },
                         None            => (),
                     }
@@ -338,7 +338,7 @@ impl Connection {
                     match respond {
                         Some(Emit) => {
                             // TODO
-                            self.emit(builder_message);
+                            self.emit(event_loop, builder_message);
                         },
                         None => (),
                     }
@@ -351,7 +351,7 @@ impl Connection {
                     match respond {
                         Some(Broadcast) => {
                             // Won an election!
-                            self.broadcast(builder_message);
+                            self.broadcast(event_loop, builder_message);
                         },
                         None => (),
                     }
@@ -370,7 +370,7 @@ impl Connection {
                     };
                     match respond {
                         Some(emit) => {
-                            self.emit(builder_message);
+                            self.emit(event_loop, builder_message);
                         },
                         None => (),
                     }
@@ -390,7 +390,7 @@ impl Connection {
                     };
                     match respond {
                         Some(Emit) => {
-                            self.emit(builder_message);
+                            self.emit(event_loop, builder_message);
                         },
                         None => (),
                     }
@@ -412,27 +412,39 @@ impl Connection {
     /// Push a new message into `self.next_write` for **all** connections. First serialize the
     /// message, then distribute it to avoid any extra work.
     /// // TODO: A broadcast can be done through mio's notify functionality.
-    fn broadcast(&mut self, builder: MallocMessageBuilder) {
+    fn broadcast<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>,
+         builder: MallocMessageBuilder) -> Result<()>
+    where S: Store, M: StateMachine {
         debug!("{:?}: broadcast", self);
         unimplemented!();
     }
 
     /// Push the new message into `self.next_write`. This does not actually send the message, it
     /// just queues it up.
-    pub fn emit(&mut self, mut builder: MallocMessageBuilder) {
+    pub fn emit<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>,
+         mut builder: MallocMessageBuilder) -> Result<()>
+    where S: Store, M: StateMachine  {
         debug!("{:?}: emit", self);
         let mut buf = RingBuf::new(RINGBUF_SIZE);
         serialize_packed::write_message(
             &mut buf,
             &mut builder
         ).unwrap();
-        self.add_write(buf);
+        self.add_write(event_loop, buf)
     }
 
     /// This queues a byte buffer into the write queue. This is used primarily when message has
     /// already been packed.
-    pub fn add_write(&mut self, buf: RingBuf) {
+    pub fn add_write<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>,
+         buf: RingBuf) -> Result<()>
+    where S: Store, M: StateMachine {
+        debug!("{:?}: add_write", self);
         self.next_write.push_back(buf);
+        self.interest.insert(Interest::writable());
+        match event_loop.reregister(&self.stream, self.token, self.interest, PollOpt::edge() | PollOpt::oneshot()) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(Error::from(e)),
+        }
     }
 }
 
