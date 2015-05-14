@@ -14,25 +14,6 @@ Distributed Consensus Algorithms often take the form of a replicated state machi
 
 Two well known Distributed Consensus Algorithms are Paxos and Raft. Paxos is used in systems like [Chubby](http://research.google.com/archive/chubby.html) by Google, and Raft is used in things like [`etcd`](https://github.com/coreos/etcd/tree/master/raft). Raft is generally seen as a more understandable and simpler to implement than Paxos, and was chosen for this project for this reason.
 
-This project is appropriate for this class as it involves a number of peers distributed over a network with no consistent leader attempting to reliably replicate a log (and accompanying state machine). The vast majority of the code will be related to Remote Procedure Calls and the handling of network connections, particularly UDP based connections. There are a number of interesting failure modes to explore, including network partitions, failed hosts, and a variety of I/O errors.
-
-## What's Been Done ##
-
-There are numerous Raft implementations in a variety of languages, the most popular are in Go. Given this algorithm's foundational role in building distributed systems and  networks, it would be useful to have this algorithm easily available to users of the Rust programming language as well.
-
-## Approach ##
-
-I propose a simple implementation of Raft with Leader Election and Log Replication. If time permits, Membership Changes and Log Compaction will be included, however they are not required. The implementation language will be [Rust](http://rust-lang.org/) for a number of reasons: personal interest, strong typing, data safety, lack of garbage collector, and acceptable FFI interfaces.
-
-My deliverables will be a functioning MIT licensed library with simple bindings, adequate test coverage, and example code.
-
-## Schedule ##
-
-* Jan 21-Feb 4: Basic structure and scaffold implementation.
-* Feb 4-18: Refinement and materialization of protocol.
-* Feb 18-Mar 4: Testing and example building.
-* Mar 4-Onward: Release to community and improve based on feedback.
-
 ## Compiling ##
 
 > For Linux or Mac, with root! Windows users are, unfortunately, on their own.
