@@ -16,9 +16,11 @@ use state_machine::StateMachine;
 use store::Store;
 
 /// Should issue requests to all nodes.
+#[derive(Debug)]
 pub struct Broadcast;
 
 /// Should respond to the sender.
+#[derive(Debug)]
 pub struct Emit;
 
 /// A replica of a Raft distributed state machine. A Raft replica controls a client state machine,
