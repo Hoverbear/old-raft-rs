@@ -116,7 +116,7 @@ impl CandidateState {
 pub struct FollowerState {
     /// The most recent leader of the follower. The leader is not guaranteed to be active, so this
     /// should only be used as a hint.
-    leader: Option<SocketAddr>,
+    pub leader: Option<SocketAddr>,
 }
 
 impl FollowerState {

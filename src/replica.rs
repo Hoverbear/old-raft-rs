@@ -354,7 +354,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
     /// Apply a client append request to the Raft replica.
     pub fn client_append(&mut self, from: SocketAddr, entry: &[u8],
-                         message: client_response::Builder) -> Option<Broadcast> {
+                         mut message: client_response::Builder) -> Option<Broadcast> {
         debug!("{:?}: Append from Client({})", self, from);
         unimplemented!();
         Some(Broadcast)
@@ -362,9 +362,15 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
     /// Refreshes the client with the leader address.
     pub fn client_leader_refresh(&mut self, from: SocketAddr,
-                                 message: client_response::Builder) -> Option<Emit> {
+                                 mut message: client_response::Builder) -> Option<Emit> {
         debug!("{:?}: LeaderRefresh from Client({})", self, from);
-        unimplemented!();
+        let leader = match self.state {
+            ReplicaState::Follower if self.follower_state.leader.is_some() => {
+                self.follower_state.leader.unwrap()
+            },
+            _ => self.addr, // Fallback, we'll redirect them when we find out anyways.
+        };
+        message.set_not_leader("Test");
         Some(Emit)
     }
 

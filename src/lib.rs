@@ -206,7 +206,7 @@ impl Raft {
                     Err(_) => return Err(Error::Raft(ErrorKind::BadResponse))
                 }
             },
-            _ => panic!("Got an errored response. Dying."),
+            client_response::Which::NotLeader(e) => panic!("Error reading response. {:?}", e),
         };
         Ok(())
     }
