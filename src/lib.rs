@@ -199,13 +199,14 @@ impl Raft {
         let client_res = try!(response.get_root::<client_response::Reader>());
         // Set the current leader.
         self.current_leader = match try!(client_res.which()) {
+            client_response::Which::Success(()) => unimplemented!(),
             client_response::Which::NotLeader(Ok(leader_bytes)) => {
                 match SocketAddr::from_str(leader_bytes) {
                     Ok(socket) => Some(socket),
                     Err(_) => return Err(Error::Raft(ErrorKind::BadResponse))
                 }
             },
-            _ => unimplemented!(),
+            _ => panic!("Got an errored response. Dying."),
         };
         Ok(())
     }

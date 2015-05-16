@@ -24,6 +24,7 @@ use state_machine::StateMachine;
 // Cap'n Proto
 use capnp::serialize_packed;
 use capnp::{
+    NotInSchema,
     MessageBuilder,
     MessageReader,
     ReaderOptions,
@@ -283,7 +284,9 @@ impl Connection {
                 // It's not read entirely yet.
                 // Should roll back, pending changes to bytes upstream.
                 // TODO: This was fixed.
-                Err(_) => unimplemented!(),
+                Err(_) => {
+                    unimplemented!()
+                },
             }
         }
         match event_loop.reregister(&self.stream, self.token, self.interest, PollOpt::edge()) {
@@ -299,8 +302,8 @@ impl Connection {
     where S: Store, M: StateMachine {
         let mut builder_message = MallocMessageBuilder::new_default();
         let from = self.stream.peer_addr().unwrap();
-        if let Ok(request) = reader.get_root::<rpc_request::Reader>() {
-            match request.which().unwrap() {
+        if let Ok(request) = reader.get_root::<rpc_request::Reader>().unwrap().which() {
+            match request {
                 // TODO: Move these into replica?
                 rpc_request::Which::AppendEntries(Ok(call)) => {
                     let builder = builder_message.init_root::<append_entries_response::Builder>();
@@ -327,9 +330,9 @@ impl Connection {
                 },
                 _ => unimplemented!(),
             };
-        } else if let Ok(response) = reader.get_root::<rpc_response::Reader>() {
+        } else if let Ok(response) = reader.get_root::<rpc_response::Reader>().unwrap().which() {
             // We won't be responding. This is already a response.
-            match response.which().unwrap() {
+            match response {
                 rpc_response::Which::AppendEntries(Ok(call)) => {
                     let respond = {
                         let builder = builder_message.init_root::<append_entries_request::Builder>();
@@ -359,10 +362,10 @@ impl Connection {
                 },
                 _ => unimplemented!(),
             }
-        } else if let Ok(client_req) = reader.get_root::<client_request::Reader>() {
+        } else if let Ok(client_req) = reader.get_root::<client_request::Reader>().unwrap().which() {
             let mut should_die = false;
             // We will be responding.
-            match client_req.which().unwrap() {
+            match client_req {
                 client_request::Which::Append(Ok(call)) => {
                     let respond = {
                         let builder = builder_message.init_root::<client_response::Builder>();
