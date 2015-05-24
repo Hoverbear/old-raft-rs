@@ -14,7 +14,7 @@ fn hello() {
     nodes[0].0.append(sent_command)
         .ok().expect("Couldn't append.");
     // Retrieve.
-    let recieved_command = nodes[0].1.recv()
+    let received_command = nodes[0].1.recv()
         .ok().expect("Couldn't recv.");
-    assert_eq!(recieved_command, sent_command);
+    assert_eq!(received_command, sent_command);
 }
