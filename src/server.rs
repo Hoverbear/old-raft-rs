@@ -8,10 +8,8 @@ use std::fmt;
 // MIO
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
-use mio::Socket;
-use mio::buf::{RingBuf};
 use mio::{Interest, PollOpt, Token, EventLoop, Handler, ReadHint};
-use mio::buf::Buf;
+use mio::buf::{Buf, RingBuf};
 use mio::{TryRead, TryWrite};
 
 use rand::{self, Rng};
@@ -91,7 +89,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         let mut event_loop = EventLoop::<Server<S, M>>::new().unwrap();
         // Setup the socket, make it not block.
         let listener = TcpListener::bind(&addr).unwrap();
-        listener.set_reuseaddr(true).unwrap();
+        //listener.set_reuseaddr(true).unwrap();
         event_loop.register(&listener, LISTENER).unwrap();
         let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
         event_loop.timeout_ms(ELECTION_TIMEOUT, timeout).unwrap();
