@@ -6,7 +6,6 @@ use {LogIndex, Term};
 use messages_capnp::{
     append_entries_request,
     append_entries_response,
-    client_request,
     client_response,
     request_vote_request,
     request_vote_response,

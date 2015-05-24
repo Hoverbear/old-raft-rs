@@ -22,7 +22,6 @@ use state_machine::StateMachine;
 // Cap'n Proto
 use capnp::serialize_packed;
 use capnp::{
-    NotInSchema,
     MessageBuilder,
     MessageReader,
     ReaderOptions,
