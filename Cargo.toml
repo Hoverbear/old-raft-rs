@@ -4,15 +4,17 @@ version = "0.0.1"
 authors = ["Andrew Hobden <andrew@hoverbear.org>"]
 build = "build.rs"
 
-[build-dependencies]
-capnpc = "*"
+[build-dependencies.capnpc]
+git = "https://github.com/dwrensha/capnpc-rust"
 
 [dependencies]
-capnp = "*"
 rustc-serialize = "*"
 uuid = "*"
 rand = "*"
 log = "*"
+
+[dependencies.capnp]
+git = "https://github.com/dwrensha/capnproto-rust"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio"
