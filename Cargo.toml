@@ -8,10 +8,10 @@ build = "build.rs"
 git = "https://github.com/dwrensha/capnpc-rust"
 
 [dependencies]
+log = "*"
+rand = "*"
 rustc-serialize = "*"
 uuid = "*"
-rand = "*"
-log = "*"
 
 [dependencies.capnp]
 git = "https://github.com/dwrensha/capnproto-rust"

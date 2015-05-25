@@ -1,42 +1,35 @@
-use std::thread;
-use std::collections::HashSet;
-use std::net::SocketAddr;
-use std::collections::VecDeque;
+use std::{fmt, thread};
+use std::collections::{HashSet, VecDeque};
 use std::io::BufReader;
-use std::fmt;
+use std::net::SocketAddr;
 
-// MIO
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
-use mio::{Interest, PollOpt, Token, EventLoop, Handler, ReadHint};
+use mio::{
+    EventLoop,
+    Handler,
+    Interest,
+    PollOpt,
+    ReadHint,
+    Token,
+    TryRead,
+    TryWrite,
+};
 use mio::buf::{Buf, RingBuf};
-use mio::{TryRead, TryWrite};
-
 use rand::{self, Rng};
-
-// Data structures.
-use store::Store;
-use replica::{Replica, Emit, Broadcast};
-use state_machine::StateMachine;
-
-// Cap'n Proto
-use capnp::serialize_packed;
 use capnp::{
+    serialize_packed,
+    MallocMessageBuilder,
     MessageBuilder,
     MessageReader,
-    ReaderOptions,
-    MallocMessageBuilder,
     OwnedSpaceMessageReader,
+    ReaderOptions,
 };
-use messages_capnp::{
-    rpc_request,
-    rpc_response,
-    client_request,
-    client_response,
-    request_vote_response,
-    append_entries_response,
-    append_entries_request,
-};
+
+use messages_capnp::message;
+use replica::{Replica, EmitType};
+use state_machine::StateMachine;
+use store::Store;
 use super::{Error, Result};
 
 // MIO Tokens
@@ -44,9 +37,9 @@ const ELECTION_TIMEOUT: Token = Token(0);
 const HEARTBEAT_TIMEOUT: Token = Token(1);
 const LISTENER:  Token = Token(2);
 
-const ELECTION_MIN: u64 = 150;
-const ELECTION_MAX: u64 = 300;
-const HEARTBEAT_DURATION: u64 = 50;
+const ELECTION_MIN: u64 = 1500;
+const ELECTION_MAX: u64 = 3000;
+const HEARTBEAT_DURATION: u64 = 500;
 const RINGBUF_SIZE: usize = 4096;
 
 /// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
@@ -119,7 +112,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
             HEARTBEAT_TIMEOUT => unreachable!(),
             LISTENER => unreachable!(),
             tok => {
-                self.connections[tok].writable(reactor, &mut self.replica).unwrap();
+                self.connections[tok].writable(reactor).unwrap();
             }
         }
     }
@@ -158,39 +151,41 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
     /// followers. Initializes and sends an `AppendEntries` request to all followers.
     fn timeout(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
         debug!("{:?}: Timeout", self);
-        let mut message = MallocMessageBuilder::new_default();
-        let mut send_message = None;
-        match token {
-            ELECTION_TIMEOUT => {
-                let request = message.init_root::<rpc_request::Builder>();
-                send_message = self.replica.election_timeout(request.init_request_vote());
-                // Set timeout.
-                let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
-                reactor.timeout_ms(ELECTION_TIMEOUT, timeout).unwrap();
+        let mut message_builder = MallocMessageBuilder::new_default();
+        let emit_type = {
+            let message = message_builder.init_root::<message::Builder>();
+            match token {
+                ELECTION_TIMEOUT => {
+                    // Set timeout.
+                    let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
+                    reactor.timeout_ms(ELECTION_TIMEOUT, timeout).unwrap();
 
-            },
-            HEARTBEAT_TIMEOUT => {
-                let request = message.init_root::<rpc_request::Builder>();
-                send_message = self.replica.heartbeat_timeout(request.init_append_entries());
-                // Set Timeout
-                reactor.timeout_ms(HEARTBEAT_TIMEOUT, HEARTBEAT_DURATION).unwrap();
-            },
-            _ => unreachable!(),
-        }
-        debug!("{:?}: Send_message: {:?}", self, send_message);
+                    self.replica.election_timeout(message.init_request_vote_request())
+                },
+                HEARTBEAT_TIMEOUT => {
+                    // Set Timeout
+                    reactor.timeout_ms(HEARTBEAT_TIMEOUT, HEARTBEAT_DURATION).unwrap();
+
+                    self.replica.heartbeat_timeout(message.init_append_entries_request())
+                },
+                _ => unreachable!(),
+            }
+        };
+        debug!("{:?}: emit_type: {:?}", self, emit_type);
         // Send if necessary.
-        match send_message {
-            Some(Broadcast) => {
+        match emit_type {
+            EmitType::None => (),
+            EmitType::Broadcast => {
                 let mut buf = RingBuf::new(RINGBUF_SIZE);
                 serialize_packed::write_message(
                     &mut buf,
-                    &mut message
+                    &mut message_builder
                 ).unwrap();
                 for connection in self.connections.iter_mut() {
-                    connection.add_write(reactor, buf.clone());
+                    connection.add_write(reactor, buf.clone()).unwrap();
                 }
             },
-            None => (),
+            _ => unreachable!(),
         }
     }
 }
@@ -224,7 +219,8 @@ impl Connection {
     }
 
     /// A registered IoHandle has available writing space.
-    fn writable<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, replica: &mut Replica<S,M>)
+    fn writable<S, M>(&mut self,
+                      event_loop: &mut EventLoop<Server<S, M>>)
                       -> Result<()>
     where S: Store, M: StateMachine {
         debug!("{:?}: writable", self);
@@ -235,7 +231,7 @@ impl Connection {
                 // This is a buffer flush. WOULDBLOCK
                 self.interest.insert(Interest::writable());
             },
-            Ok(Some(r)) => {
+            Ok(Some(_)) => {
                 // We managed to write data!
                 match (self.current_write.get_ref().has_remaining(), self.next_write.is_empty()) {
                     // Need to write more of what we have.
@@ -276,7 +272,7 @@ impl Connection {
             match serialize_packed::read_message(&mut self.current_read, ReaderOptions::new()) {
                 // We have something reasonably interesting in the buffer!
                 Ok(reader) => {
-                    self.handle_reader(reader, event_loop, replica);
+                    self.handle_message(reader, event_loop, replica);
                 },
                 // It's not read entirely yet.
                 // Should roll back, pending changes to bytes upstream.
@@ -294,126 +290,58 @@ impl Connection {
 
     /// This is called when there is a full reader available in the buffer.
     /// It handles what to do with the data.
-    fn handle_reader<S, M>(&mut self, reader: OwnedSpaceMessageReader,
-                           event_loop: &mut EventLoop<Server<S, M>>, replica: &mut Replica<S,M>)
+    fn handle_message<S, M>(&mut self,
+                            incoming_message: OwnedSpaceMessageReader,
+                            event_loop: &mut EventLoop<Server<S, M>>,
+                            replica: &mut Replica<S,M>)
     where S: Store, M: StateMachine {
-        let mut builder_message = MallocMessageBuilder::new_default();
         let from = self.stream.peer_addr().unwrap();
-        if let Ok(request) = reader.get_root::<rpc_request::Reader>().unwrap().which() {
-            match request {
-                // TODO: Move these into replica?
-                rpc_request::Which::AppendEntries(Ok(call)) => {
-                    let builder = builder_message.init_root::<append_entries_response::Builder>();
-                    match replica.append_entries_request(from, call, builder) {
-                        Some(Emit) => {
-                            // Special Cirsumstance Detection
-                            unimplemented!();
-                        },
-                        None => (),
-                    }
+        let mut outgoing_message_builder = MallocMessageBuilder::new_default();
+        let emit_type = {
+            let outgoing_message = outgoing_message_builder.init_root::<message::Builder>();
+            match incoming_message.get_root::<message::Reader>().unwrap().which().unwrap() {
+                message::Which::AppendEntriesRequest(Ok(request)) => {
+                    let response = outgoing_message.init_append_entries_response();
+                    replica.append_entries_request(from, request, response)
                 },
-                rpc_request::Which::RequestVote(Ok(call)) => {
-                    let respond = {
-                        let builder = builder_message.init_root::<request_vote_response::Builder>();
-                        replica.request_vote_request(from, call, builder)
-                    };
-                    match respond {
-                        Some(Emit) => {
-                            // TODO
-                            self.emit(event_loop, builder_message);
-                        },
-                        None            => (),
-                    }
+                message::Which::AppendEntriesResponse(Ok(response)) => {
+                    let request = outgoing_message.init_append_entries_request();
+                    replica.append_entries_response(from, response, request)
                 },
-                _ => unimplemented!(),
-            };
-        } else if let Ok(response) = reader.get_root::<rpc_response::Reader>().unwrap().which() {
-            // We won't be responding. This is already a response.
-            match response {
-                rpc_response::Which::AppendEntries(Ok(call)) => {
-                    let respond = {
-                        let builder = builder_message.init_root::<append_entries_request::Builder>();
-                        replica.append_entries_response(from, call, builder)
-                    };
-                    match respond {
-                        Some(Emit) => {
-                            // TODO
-                            self.emit(event_loop, builder_message);
-                        },
-                        None => (),
-                    }
+                message::Which::RequestVoteRequest(Ok(request)) => {
+                    let response = outgoing_message.init_request_vote_response();
+                    replica.request_vote_request(from, request, response)
                 },
-                rpc_response::Which::RequestVote(Ok(call)) => {
-                    let respond = {
-                        let builder = builder_message.init_root::<append_entries_request::Builder>();
-                        replica.request_vote_response(from, call, builder)
-                    };
-                    match respond {
-                        Some(Broadcast) => {
-                            // Won an election!
-                            self.broadcast(event_loop, builder_message);
-                        },
-                        None => (),
-                    }
-
+                message::Which::RequestVoteResponse(Ok(response)) => {
+                    let request = outgoing_message.init_append_entries_request();
+                    replica.request_vote_response(from, response, request)
                 },
-                _ => unimplemented!(),
+                message::Which::ClientAppendRequest(Ok(request)) => {
+                    let response = outgoing_message.init_client_append_response();
+                    replica.client_append_request(from, request, response)
+                },
+                _ => panic!("cannot handle message"),
             }
-        } else if let Ok(client_req) = reader.get_root::<client_request::Reader>().unwrap().which() {
-            let mut should_die = false;
-            // We will be responding.
-            match client_req {
-                client_request::Which::Append(Ok(call)) => {
-                    let respond = {
-                        let builder = builder_message.init_root::<client_response::Builder>();
-                        replica.client_append(from, call, builder)
-                    };
-                    match respond {
-                        Some(emit) => {
-                            self.emit(event_loop, builder_message);
-                        },
-                        None => (),
-                    }
+        };
 
-                },
-                client_request::Which::Die(Ok(call)) => {
-                    should_die = true;
-                    let mut builder = builder_message.init_root::<client_response::Builder>();
-                    builder.set_success(());
-                    self.interest.insert(Interest::writable());
-                    debug!("Got a Die request from Client({}). Reason: {}", from, call);
-                },
-                client_request::Which::LeaderRefresh(()) => {
-                    let respond = {
-                        let builder = builder_message.init_root::<client_response::Builder>();
-                        replica.client_leader_refresh(from, builder)
-                    };
-                    match respond {
-                        Some(Emit) => {
-                            self.emit(event_loop, builder_message);
-                        },
-                        None => (),
-                    }
-                },
-                _ => unimplemented!(),
-            };
-
-            // Do this here so that we can send the response.
-            if should_die {
-                panic!("Got a Die request.");
-            }
-
-        } else {
-            // It's something we don't understand.
-            unimplemented!();
+        match emit_type {
+            EmitType::None => (),
+            EmitType::Reply => {
+                self.emit(event_loop, outgoing_message_builder).unwrap()
+            },
+            EmitType::Broadcast => {
+                self.broadcast(event_loop, outgoing_message_builder).unwrap()
+            },
         }
     }
 
     /// Push a new message into `self.next_write` for **all** connections. First serialize the
     /// message, then distribute it to avoid any extra work.
     /// // TODO: A broadcast can be done through mio's notify functionality.
-    fn broadcast<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>,
-         builder: MallocMessageBuilder) -> Result<()>
+    fn broadcast<S, M>(&mut self,
+                       event_loop: &mut EventLoop<Server<S, M>>,
+                       builder: MallocMessageBuilder)
+                       -> Result<()>
     where S: Store, M: StateMachine {
         debug!("{:?}: broadcast", self);
         unimplemented!();
@@ -421,8 +349,10 @@ impl Connection {
 
     /// Push the new message into `self.next_write`. This does not actually send the message, it
     /// just queues it up.
-    pub fn emit<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>,
-         mut builder: MallocMessageBuilder) -> Result<()>
+    pub fn emit<S, M>(&mut self,
+                      event_loop: &mut EventLoop<Server<S, M>>,
+                      mut builder: MallocMessageBuilder)
+                      -> Result<()>
     where S: Store, M: StateMachine  {
         debug!("{:?}: emit", self);
         let mut buf = RingBuf::new(RINGBUF_SIZE);
@@ -435,8 +365,10 @@ impl Connection {
 
     /// This queues a byte buffer into the write queue. This is used primarily when message has
     /// already been packed.
-    pub fn add_write<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>,
-         buf: RingBuf) -> Result<()>
+    pub fn add_write<S, M>(&mut self,
+                           event_loop: &mut EventLoop<Server<S, M>>,
+                           buf: RingBuf)
+                           -> Result<()>
     where S: Store, M: StateMachine {
         debug!("{:?}: add_write", self);
         self.next_write.push_back(buf);

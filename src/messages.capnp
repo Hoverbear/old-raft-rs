@@ -1,16 +1,13 @@
 @0xbdca3d7c76dab735;
 
-struct RpcRequest {
+struct Message {
     union {
-        appendEntries @0 :AppendEntriesRequest;
-        requestVote @1 :RequestVoteRequest;
-    }
-}
-
-struct RpcResponse {
-    union {
-        appendEntries @0 :AppendEntriesResponse;
-        requestVote @1 :RequestVoteResponse;
+        appendEntriesRequest @0 :AppendEntriesRequest;
+        appendEntriesResponse @1 :AppendEntriesResponse;
+        requestVoteResponse @2 :RequestVoteResponse;
+        requestVoteRequest @3 :RequestVoteRequest;
+        clientAppendRequest @4 :ClientAppendRequest;
+        clientAppendResponse @5 :ClientAppendResponse;
     }
 }
 
@@ -90,30 +87,26 @@ struct RequestVoteResponse {
     # up-to-date with the voter's log.
 
     internalError @5 :Text;
-    # an internal error occured; a description is included.
+    # An internal error occured; a description is included.
   }
 }
 
-struct ClientRequest {
-    union {
-        append @0 :Data;
-        # An entry to append.
-
-        die @1 :Text;
-        # Die order, include a reason when killing. Mostly for testing.
-
-        leaderRefresh @2 :Void;
-        # Requests a current pointer to the leader. Expect a `notLeader` response.
-    }
+struct ClientAppendRequest {
+    entry @0 :Data;
+    # An entry to append.
 }
 
-struct ClientResponse {
+struct ClientAppendResponse {
     union {
         success @0 :Void;
         # The client request succeeded.
 
-        notLeader @1 :Text;
+        unknownLeader @1 :Void;
+        # The client request failed because the Raft node is not the leader,
+        # and does not know who the leader is.
+
+        notLeader @2 :Text;
         # The client request failed because the Raft node is not the leader.
-        # The value returned is the address of the leader.
+        # The value returned may be the address of the current leader.
     }
 }

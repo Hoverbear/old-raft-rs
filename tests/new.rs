@@ -15,11 +15,9 @@ pub fn new_cluster(size: u16) -> Vec<(Raft, mpsc::Receiver<Vec<u8>>)> {
         (0..size).map(|port| FromStr::from_str(&format!("127.0.0.1:200{}", port)).unwrap()).collect();
 
     addrs.iter().map(|addr| {
-        let mut peers = addrs.clone();
-        peers.remove(addr);
         let store = MemStore::new();
         let (state_machine, recv) = ChannelStateMachine::new();
         println!("Spawning new Raft on {}", addr);
-        (Raft::new(addr.clone(), peers, store, state_machine), recv)
+        (Raft::new(addr.clone(), addrs.clone(), store, state_machine), recv)
     }).collect()
 }
