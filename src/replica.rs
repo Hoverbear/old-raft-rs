@@ -6,7 +6,8 @@ use {LogIndex, Term};
 use messages_capnp::{
     append_entries_request,
     append_entries_response,
-    client_response,
+    client_append_request,
+    client_append_response,
     request_vote_request,
     request_vote_response,
 };
@@ -14,13 +15,18 @@ use state::{ReplicaState, LeaderState, CandidateState, FollowerState};
 use state_machine::StateMachine;
 use store::Store;
 
-/// Should issue requests to all nodes.
-#[derive(Debug)]
-pub struct Broadcast;
+#[derive(Debug, Eq, PartialEq)]
+pub enum EmitType {
 
-/// Should respond to the sender.
-#[derive(Debug)]
-pub struct Emit;
+    /// Do not emit the message.
+    None,
+
+    /// Emit the message to the sender.
+    Reply,
+
+    /// Emit the message to all peer nodes.
+    Broadcast,
+}
 
 /// A replica of a Raft distributed state machine. A Raft replica controls a client state machine,
 /// to which it applies commands in a globally consistent order.
@@ -79,7 +85,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     pub fn append_entries_request(&mut self,
                                   from: SocketAddr,
                                   request: append_entries_request::Reader,
-                                  mut response: append_entries_response::Builder) -> Option<Emit> {
+                                  mut response: append_entries_response::Builder) -> EmitType {
         assert!(self.peers.contains(&from), "Received append entries request from unknown node {}.", from);
         debug!("{:?}: AppendEntriesRequest from Replica({})", self, from);
 
@@ -89,7 +95,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         if leader_term < current_term {
             response.set_term(current_term.into());
             response.set_stale_term(());
-            return None;
+            return EmitType::None;
         }
 
         let leader_commit_index = LogIndex::from(request.get_leader_commit());
@@ -138,7 +144,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                         response.set_success(latest_log_index.into());
                     }
                 }
-                return Some(Emit) // Need to respond to the leader.
+                return EmitType::Reply; // Need to respond to the leader.
             },
             ReplicaState::Candidate => {
                 // recognize the new leader, return to follower state, and apply the entries
@@ -164,11 +170,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     ///
     /// The provided message may be initialized with a new AppendEntries request to send back to
     /// the follower in the case that the follower's log is behind.
-    #[must_use]
     pub fn append_entries_response(&mut self,
                                    from: SocketAddr,
                                    response: append_entries_response::Reader,
-                                   mut message: append_entries_request::Builder) -> Option<Emit> {
+                                   mut message: append_entries_request::Builder) -> EmitType {
         assert!(self.peers.contains(&from), "{:?} received AppendEntries response from unknown peer {}.", self, from);
         debug!("{:?}: AppendEntriesResponse from Replica({})", self, from);
 
@@ -183,11 +188,11 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             // The responder is not necessarily the leader, but it is somewhat likely, so we will
             // use it as the leader hint.
             self.transition_to_follower(responder_term, from);
-            return None
+            return EmitType::None
         } else if local_term > responder_term {
             // Responder is responding to an AppendEntries request from a different term. Ignore
             // the response.
-            return None
+            return EmitType::None
         }
 
         let mut send_message = false;
@@ -251,12 +256,12 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 for (n, index) in (from_index..until_index).enumerate() {
                     entries.set(n as u32, self.store.entry(LogIndex::from(index)).unwrap().1);
                 }
-                Some(Emit)
+                EmitType::Reply
             } else {
-                None
+                EmitType::None
             }
         } else {
-            None
+            EmitType::None
         }
     }
 
@@ -264,7 +269,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     pub fn request_vote_request(&mut self,
                                 candidate: SocketAddr,
                                 request: request_vote_request::Reader,
-                                mut response: request_vote_response::Builder) -> Option<Emit> {
+                                mut response: request_vote_response::Builder)
+                                -> EmitType {
         assert!(self.peers.contains(&candidate), "Received request vote request from unknown node {}.", candidate);
         debug!("{:?}: RequestVoteRequest from Replica({})", self, candidate);
 
@@ -300,18 +306,18 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 },
             }
         }
-        Some(Emit) // Always need to send.
+        EmitType::Reply // Always need to send.
     }
 
     /// Apply a request vote response to the Raft replica.
     ///
     /// # Return
     ///
-    /// Returns `Some(())` if the provided AppendEntriesRequest should be sent to every peer cluster
-    /// member.
+    /// Returns `EmitType::Broadcast` if the provided AppendEntriesRequest should
+    /// be sent to every peer cluster member, otherwise `EmitType::None`.
     pub fn request_vote_response(&mut self, from: SocketAddr,
                                  response: request_vote_response::Reader,
-                                 message: append_entries_request::Builder) -> Option<Broadcast> {
+                                 message: append_entries_request::Builder) -> EmitType {
         assert!(self.peers.contains(&from), "Received request vote response from unknown node {}.", from);
         debug!("{:?}: RequestVoteResponse from Replica({})", self, from);
 
@@ -345,39 +351,27 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         if transition_to_leader {
             // Need to transition and broadcast the first heartbeat.
             self.transition_to_leader(message);
-            Some(Broadcast)
+            EmitType::Broadcast
         } else {
-            None
+            EmitType::None
         }
     }
 
     /// Apply a client append request to the Raft replica.
-    pub fn client_append(&mut self, from: SocketAddr, entry: &[u8],
-                         mut message: client_response::Builder) -> Option<Broadcast> {
+    pub fn client_append_request(&mut self,
+                                 from: SocketAddr,
+                                 request: client_append_request::Reader,
+                                 mut response: client_append_response::Builder)
+                                 -> EmitType {
         debug!("{:?}: Append from Client({})", self, from);
-        unimplemented!();
-        Some(Broadcast)
-    }
-
-    /// Refreshes the client with the leader address.
-    pub fn client_leader_refresh(&mut self, from: SocketAddr,
-                                 mut message: client_response::Builder) -> Option<Emit> {
-        debug!("{:?}: LeaderRefresh from Client({})", self, from);
-        let leader = match self.state {
-            ReplicaState::Follower if self.follower_state.leader.is_some() => {
-                self.follower_state.leader.unwrap()
-            },
-            _ => self.addr, // Fallback, we'll redirect them when we find out anyways.
-        };
-        message.set_not_leader("Test");
-        Some(Emit)
+        unimplemented!()
     }
 
     /// Trigger a heartbeat timeout on the Raft replica.
     ///
     /// The provided AppendEntriesRequest builder may be initialized with a message to send to each
     /// cluster peer.
-    pub fn heartbeat_timeout(&mut self, mut message: append_entries_request::Builder) -> Option<Broadcast> {
+    pub fn heartbeat_timeout(&mut self, mut message: append_entries_request::Builder) -> EmitType {
         debug!("{:?}: HeartbeatTimeout", self);
         if self.is_leader() {
             // Send a heartbeat
@@ -386,19 +380,20 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             message.set_prev_log_term(self.store.latest_log_term().unwrap().into());
             message.set_leader_commit(self.commit_index.into());
             message.init_entries(0);
-            Some(Broadcast)
-        } else { None }
+            EmitType::Broadcast
+        } else { EmitType::None }
     }
 
     /// Trigger an election timeout on the Raft replica.
     ///
     /// The provided RequestVoteRequest builder may be initialized with a message to send to each
     /// cluster peer.
-    pub fn election_timeout(&mut self, message: request_vote_request::Builder) -> Option<Broadcast> {
+    pub fn election_timeout(&mut self, message: request_vote_request::Builder) -> EmitType {
         debug!("{:?}: ElectionTimeout", self);
         if self.should_campaign && !self.is_leader() {
             if self.peers.is_empty() {
                 // Solitary replica special case; jump straight to leader status
+                info!("{:?}: Transition to Leader", self);
                 assert!(self.is_follower());
                 assert!(self.store.voted_for().unwrap().is_none());
                 self.store.inc_current_term().unwrap();
@@ -406,14 +401,14 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 let latest_log_index = self.store.latest_log_index().unwrap();
                 self.state = ReplicaState::Leader;
                 self.leader_state.reinitialize(latest_log_index);
-                None
+                EmitType::None
             } else {
                 self.transition_to_candidate(message);
-                Some(Broadcast)
+                EmitType::Broadcast
             }
         } else {
             self.should_campaign = true;
-            None
+            EmitType::None
         }
     }
 
@@ -421,7 +416,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     ///
     /// The provided AppendEntriesRequest builder will be initialized with a message to send to each
     /// cluster peer.
-    fn transition_to_leader(&mut self, mut message: append_entries_request::Builder) -> Option<Broadcast> {
+    fn transition_to_leader(&mut self, mut message: append_entries_request::Builder) -> EmitType {
         info!("{:?}: Transition to Leader", self);
         let current_term = self.store.current_term().unwrap();
         let latest_log_index = self.store.latest_log_index().unwrap();
@@ -433,14 +428,14 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         message.set_prev_log_index(latest_log_index.into());
         message.set_prev_log_term(latest_log_term.into());
         message.set_leader_commit(self.commit_index.into());
-        Some(Broadcast)
+        EmitType::Broadcast
     }
 
     /// Transition this Replica to Candidate state.
     ///
     /// The provided RequestVoteRequest message will be initialized with a message to send to each
     /// cluster peer.
-    fn transition_to_candidate(&mut self, mut message: request_vote_request::Builder) -> Option<Broadcast> {
+    fn transition_to_candidate(&mut self, mut message: request_vote_request::Builder) -> EmitType {
         info!("{:?}: Transition to Candidate", self);
         self.store.inc_current_term().unwrap();
         self.store.set_voted_for(self.addr).unwrap();
@@ -455,7 +450,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         message.set_term(current_term.into());
         message.set_last_log_index(latest_index.into());
         message.set_last_log_term(latest_term.into());
-        Some(Broadcast)
+        EmitType::Broadcast
     }
 
     /// Advance the commit index and apply committed entries to the state machine, if possible.
@@ -549,7 +544,7 @@ mod test {
         request_vote_request,
         request_vote_response,
     };
-    use replica::Replica;
+    use replica::{EmitType, Replica};
     use state_machine::ChannelStateMachine;
     use store::MemStore;
     use Term;
@@ -579,11 +574,11 @@ mod test {
         let mut response = MallocMessageBuilder::new_default();
 
         let respond = leader.election_timeout(request_vote_request.init_root::<request_vote_request::Builder>());
-        if respond.is_none() {
+        if respond == EmitType::None {
             // The leader could have had an AppendEntries request since the last timeout, so it may
             // take two timeouts.
             let respond = leader.election_timeout(request_vote_request.init_root::<request_vote_request::Builder>());
-            assert!(respond.is_some());
+            assert_eq!(respond, EmitType::Broadcast);
         }
 
         for &mut (ref mut follower, _) in followers.iter_mut() {
@@ -598,7 +593,7 @@ mod test {
             let respond = leader.request_vote_response(follower.addr().clone(),
                                                             resp,
                                                             append_entries_request.init_root::<append_entries_request::Builder>());
-            assert!(respond.is_some());
+            assert_eq!(respond, EmitType::Broadcast);
             assert!(follower.is_follower());
         }
         assert!(leader.is_leader());
@@ -616,7 +611,7 @@ mod test {
         let request = message.init_root::<request_vote_request::Builder>();
 
         let respond = replica.election_timeout(request);
-        assert!(respond.is_none());
+        assert_eq!(respond, EmitType::None);
         assert!(replica.is_leader());
     }
 
@@ -633,7 +628,7 @@ mod test {
         // Trigger replica1's timeout, and make sure it transitions to candidate
 
         let respond = replica1.election_timeout(request.init_root::<request_vote_request::Builder>());
-        assert!(respond.is_some());
+        assert_eq!(respond, EmitType::Broadcast);
         assert!(replica1.is_candidate());
 
         // Send replica1's RequestVoteRequest to replica2
@@ -648,13 +643,13 @@ mod test {
         // Trigger replica2's timeout, and make sure it does *not* transitition to candidate, since
         // it has already voted in an election during this timeout period.
         let respond = replica2.election_timeout(request.init_root::<request_vote_request::Builder>());
-        assert!(respond.is_none());
+        assert_eq!(respond, EmitType::None);
 
         // Return success vote to candidate, and make sure it transitions to leader
         let respond = replica1.request_vote_response(replica2.addr().clone(),
                                                           resp,
                                                           request.init_root::<append_entries_request::Builder>());
-        assert!(respond.is_some());
+        assert_eq!(respond, EmitType::Broadcast);
         assert!(replica1.is_leader());
         assert!(replica1.current_term() == Term::from(1));
     }
@@ -673,9 +668,8 @@ mod test {
         elect_leader(&mut leader, &mut replicas[..]);
         let (mut follower, _) = replicas.pop().unwrap();
 
-        let respond =
-            leader.heartbeat_timeout(request.init_root::<append_entries_request::Builder>());
-        assert!(respond.is_some());
+        let respond = leader.heartbeat_timeout(request.init_root::<append_entries_request::Builder>());
+        assert_eq!(respond, EmitType::Broadcast);
 
         follower.append_entries_request(leader.addr().clone(),
                                         request.get_root::<append_entries_request::Builder>().unwrap().as_reader(),
@@ -685,10 +679,10 @@ mod test {
         assert!(if let append_entries_response::Which::Success(0) = resp.which().unwrap() { true } else { false });
 
         let respond = follower.election_timeout(request.init_root::<request_vote_request::Builder>());
-        assert!(respond.is_none());
+        assert_eq!(respond, EmitType::None);
         assert!(follower.is_follower());
         let respond = follower.election_timeout(request.init_root::<request_vote_request::Builder>());
-        assert!(respond.is_some());
+        assert_eq!(respond, EmitType::Broadcast);
         assert!(follower.is_candidate());
     }
 }

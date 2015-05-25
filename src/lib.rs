@@ -64,26 +64,20 @@ mod messages_capnp {
     include!(concat!(env!("OUT_DIR"), "/messages_capnp.rs"));
 }
 
-use std::{io, ops};
 use std::collections::HashSet;
+use std::io::{self, BufStream, Write};
 use std::net::SocketAddr;
 use std::net::TcpStream;
+use std::ops;
 use std::str::FromStr;
-use std::io::BufStream;
 
+use capnp::{serialize_packed, MallocMessageBuilder, MessageBuilder, MessageReader, ReaderOptions};
 use rustc_serialize::Encodable;
-// Data structures.
-use store::Store;
+
+use messages_capnp::{message, client_append_response};
 use server::Server;
 use state_machine::StateMachine;
-
-// Cap'n Proto
-use capnp::serialize_packed;
-use capnp::{MessageBuilder, MessageReader, ReaderOptions, MallocMessageBuilder};
-use messages_capnp::{
-    client_request,
-    client_response,
-};
+use store::Store;
 
 /// This is the primary interface with a `Server` in the cluster.
 ///
@@ -92,7 +86,6 @@ use messages_capnp::{
 /// any consuming application interacting with a Raft cluster will also be a participant.
 pub struct Raft {
     current_leader: Option<SocketAddr>,
-    related_server: SocketAddr, // Not Server because we move that to another thread.
     cluster_members: HashSet<SocketAddr>,
 }
 
@@ -108,13 +101,13 @@ impl Raft {
                      -> Raft
     where S: Store, M: StateMachine {
         debug!("Starting Raft on {}", addr);
+        assert!(cluster_members.contains(&addr));
         let mut peers = cluster_members.clone();
         peers.remove(&addr);
         Server::<S, M>::spawn(addr, peers, store, state_machine);
         // Store relevant information.
         Raft {
             current_leader: None,
-            related_server: addr,
             cluster_members: cluster_members,
         }
     }
@@ -123,92 +116,43 @@ impl Raft {
     /// to a majority of nodes.
     pub fn append(&mut self, entry: &[u8]) -> Result<()> {
         let mut message = MallocMessageBuilder::new_default();
-        if self.current_leader.is_none() { try!(self.refresh_leader()); }
         {
-            let mut client_req = message.init_root::<client_request::Builder>();
-            client_req.set_append(entry)
+            message.init_root::<message::Builder>()
+                   .init_client_append_request()
+                   .set_entry(entry);
         }
-        // We know current leader `is_some()` because `refresh_leader()` didn't fail.
-        let unbuffered_socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
-        let mut socket = BufStream::new(unbuffered_socket);
-        try!(serialize_packed::write_message(&mut socket, &mut message));
 
-        // Wait for a response.
+        let mut members = self.cluster_members.iter().cloned().cycle();
 
-        let response = try!(serialize_packed::read_message(&mut socket, ReaderOptions::new()));
-        let client_res = try!(response.get_root::<client_response::Reader>());
-        // Set the current leader.
-        match try!(client_res.which()) {
-            client_response::Which::Success(()) => {
-                // It worked!
-                Ok(())
-            },
-            client_response::Which::NotLeader(Ok(leader_bytes)) => {
-                self.current_leader = match SocketAddr::from_str(leader_bytes) {
-                    Ok(socket) => Some(socket),
-                    Err(_) => return Err(Error::Raft(ErrorKind::BadResponse))
-                };
-                // Try again.
-                self.append(entry)
-            },
-            _ => unimplemented!(),
+        loop {
+            let leader: SocketAddr = self.current_leader
+                                         .take()
+                                         .unwrap_or_else(|| members.next().unwrap());
+            debug!("connecting to potential leader {}", leader);
+
+            let mut socket = BufStream::new(try!(TcpStream::connect(leader)));
+            try!(serialize_packed::write_message(&mut socket, &mut message));
+            try!(socket.flush());
+            let response = try!(serialize_packed::read_message(&mut socket, ReaderOptions::new()));
+
+            match try!(response.get_root::<message::Reader>()).which().unwrap() {
+                message::Which::ClientAppendResponse(Ok(response)) => {
+                    match response.which().unwrap() {
+                        client_append_response::Which::Success(()) => {
+                            self.current_leader = Some(leader);
+                            return Ok(())
+                        },
+                        client_append_response::Which::UnknownLeader(()) => (),
+                        client_append_response::Which::NotLeader(leader) => {
+                            let leader_addr: SocketAddr = SocketAddr::from_str(try!(leader)).unwrap();
+                            assert!(self.cluster_members.contains(&leader_addr));
+                            self.current_leader = Some(leader_addr);
+                        }
+                    }
+                },
+                _ => panic!("Unexpected message type"), // TODO: return a proper error
+            }
         }
-    }
-
-    /// Kills the node. Should only really be used for testing purposes.
-    /// Accepts a `SocketAddr` because if you're going to kill a node you should be able to pick
-    /// your victim.
-    pub fn die(&mut self, target: SocketAddr, reason: String) -> Result<()> {
-        if !self.cluster_members.contains(&target) {
-            return Err(Error::Raft(ErrorKind::NotInCluster))
-        }
-        let mut message = MallocMessageBuilder::new_default();
-        {
-            let mut client_req = message.init_root::<client_request::Builder>();
-            client_req.set_die(&reason)
-        }
-        // We know current leader `is_some()` because `refresh_leader()` didn't fail.
-        let unbuffered_socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
-        let mut socket = BufStream::new(unbuffered_socket);
-        try!(serialize_packed::write_message(&mut socket, &mut message));
-
-        // Wait for a response.
-        let response = try!(serialize_packed::read_message(&mut socket, ReaderOptions::new()));
-        let client_res = try!(response.get_root::<client_response::Reader>());
-        // Set the current leader.
-        match try!(client_res.which()) {
-            client_response::Which::Success(()) => Ok(()),
-            _ => unimplemented!(),
-        }
-    }
-
-    /// This function will force the `Raft` interface to refresh it's knowledge of the leader from
-    /// The cooresponding `Server` running alongside it.
-    pub fn refresh_leader(&mut self) -> Result<()> {
-        let mut message = MallocMessageBuilder::new_default();
-        {
-            let mut client_req = message.init_root::<client_request::Builder>();
-            client_req.set_leader_refresh(());
-        }
-        let unbuffered_socket = try!(TcpStream::connect(self.related_server));
-        let mut socket = BufStream::new(unbuffered_socket);
-        try!(serialize_packed::write_message(&mut socket, &mut message));
-
-        // Wait for a response.
-        let response = try!(serialize_packed::read_message(&mut socket, ReaderOptions::new()));
-        let client_res = try!(response.get_root::<client_response::Reader>());
-        // Set the current leader.
-        self.current_leader = match try!(client_res.which()) {
-            client_response::Which::Success(()) => unimplemented!(),
-            client_response::Which::NotLeader(Ok(leader_bytes)) => {
-                match SocketAddr::from_str(leader_bytes) {
-                    Ok(socket) => Some(socket),
-                    Err(_) => return Err(Error::Raft(ErrorKind::BadResponse))
-                }
-            },
-            client_response::Which::NotLeader(e) => panic!("Error reading response. {:?}", e),
-        };
-        Ok(())
     }
 }
 
