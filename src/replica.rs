@@ -6,7 +6,6 @@ use {LogIndex, Term};
 use messages_capnp::{
     append_entries_request,
     append_entries_response,
-    client_request,
     client_response,
     request_vote_request,
     request_vote_response,
@@ -333,7 +332,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         } else if local_term > voter_term {
             // Ignore this message; it came from a previous election cycle.
         } else if self.is_candidate() {
-            // A vote was recieved!
+            // A vote was received!
             if let Ok(request_vote_response::Granted(_)) = response.which() {
                 self.candidate_state.record_vote(from);
                 if self.candidate_state.count_votes() >= majority {

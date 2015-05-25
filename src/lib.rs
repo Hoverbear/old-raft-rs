@@ -129,7 +129,7 @@ impl Raft {
             client_req.set_append(entry)
         }
         // We know current leader `is_some()` because `refresh_leader()` didn't fail.
-        let mut unbuffered_socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
+        let unbuffered_socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
         let mut socket = BufStream::new(unbuffered_socket);
         try!(serialize_packed::write_message(&mut socket, &mut message));
 
@@ -168,7 +168,7 @@ impl Raft {
             client_req.set_die(&reason)
         }
         // We know current leader `is_some()` because `refresh_leader()` didn't fail.
-        let mut unbuffered_socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
+        let unbuffered_socket = try!(TcpStream::connect(self.current_leader.unwrap())); // TODO: Handle Leader
         let mut socket = BufStream::new(unbuffered_socket);
         try!(serialize_packed::write_message(&mut socket, &mut message));
 
@@ -190,7 +190,7 @@ impl Raft {
             let mut client_req = message.init_root::<client_request::Builder>();
             client_req.set_leader_refresh(());
         }
-        let mut unbuffered_socket = try!(TcpStream::connect(self.related_server));
+        let unbuffered_socket = try!(TcpStream::connect(self.related_server));
         let mut socket = BufStream::new(unbuffered_socket);
         try!(serialize_packed::write_message(&mut socket, &mut message));
 
