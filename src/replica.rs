@@ -364,7 +364,28 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                  mut response: client_append_response::Builder)
                                  -> EmitType {
         debug!("{:?}: Append from Client({})", self, from);
-        unimplemented!()
+        match self.state {
+            ReplicaState::Candidate => {
+                response.set_unknown_leader(());
+                EmitType::Reply
+            },
+            ReplicaState::Follower => {
+                match self.follower_state.leader {
+                    Some(addr) => response.set_not_leader(&format!("{}", addr)),
+                    None => response.set_unknown_leader(()),
+                }
+                EmitType::Reply
+            },
+            ReplicaState::Leader => {
+                // Get necessary data for append to storage.
+                let entry = request.get_entry().unwrap(); // Just the value.
+                let latest_index = self.store.latest_log_index().unwrap();  // TODO: Handle?
+                let current_term = self.current_term();
+                self.store.append_entries(latest_index +1, &[(current_term, entry)]).unwrap(); // TODO: Handle?
+                response.set_success(());
+                EmitType::Reply
+            }
+        }
     }
 
     /// Trigger a heartbeat timeout on the Raft replica.
@@ -543,6 +564,8 @@ mod test {
         append_entries_response,
         request_vote_request,
         request_vote_response,
+        client_append_request,
+        client_append_response,
     };
     use replica::{EmitType, Replica};
     use state_machine::ChannelStateMachine;
@@ -593,8 +616,11 @@ mod test {
             let respond = leader.request_vote_response(follower.addr().clone(),
                                                             resp,
                                                             append_entries_request.init_root::<append_entries_request::Builder>());
+            // Set the leader to the determined value.
+            follower.follower_state.leader = Some(leader.addr);
             assert_eq!(respond, EmitType::Broadcast);
             assert!(follower.is_follower());
+            assert!(follower.follower_state.leader.is_some());
         }
         assert!(leader.is_leader());
     }
@@ -684,5 +710,63 @@ mod test {
         let respond = follower.election_timeout(request.init_root::<request_vote_request::Builder>());
         assert_eq!(respond, EmitType::Broadcast);
         assert!(follower.is_candidate());
+    }
+
+    /// Tests a two node cluster with leader and follower. The `Leader` and `Follower` both recieve a
+    /// client append request. The `Leader` should accept it.
+    #[test]
+    fn test_append_leader() {
+        let mut request = MallocMessageBuilder::new_default();
+        let mut response = MallocMessageBuilder::new_default();
+        let mut replicas = new_cluster(2);
+        let (mut leader, _) = replicas.pop().unwrap();
+        let leader_addr = leader.addr().clone();
+
+        elect_leader(&mut leader, &mut replicas[..]);
+        let (mut follower, _) = replicas.pop().unwrap();
+
+        // Create an append request.
+        let mut append_req = request.init_root::<client_append_request::Builder>();
+        append_req.set_entry(b"Bears");
+        let req_reader = append_req.as_reader();
+
+        // Test `Leader`.
+        let respond = leader.client_append_request(
+            leader_addr,
+            req_reader,
+            response.init_root::<client_append_response::Builder>()
+        );
+        assert_eq!(respond, EmitType::Reply);
+        let resp = response.get_root::<client_append_response::Builder>().unwrap().as_reader();
+        assert!(if let client_append_response::Which::Success(_) = resp.which().unwrap() { true } else { false });
+    }
+
+    /// Tests a two node cluster with leader and follower. The `Leader` and `Follower` both recieve a
+    /// client append request. The follower should reject it and offer the `Leader`'s address.
+    #[test]
+    fn test_append_follower() {
+        let mut request = MallocMessageBuilder::new_default();
+        let mut response = MallocMessageBuilder::new_default();
+        let mut replicas = new_cluster(2);
+        let (mut leader, _) = replicas.pop().unwrap();
+        let leader_addr = leader.addr().clone();
+
+        elect_leader(&mut leader, &mut replicas[..]);
+        let (mut follower, _) = replicas.pop().unwrap();
+
+        // Create an append request.
+        let mut append_req = request.init_root::<client_append_request::Builder>();
+        append_req.set_entry(b"Bears");
+        let req_reader = append_req.as_reader();
+
+        // Test `Follower`
+        let respond = follower.client_append_request(
+            leader_addr,
+            req_reader,
+            response.init_root::<client_append_response::Builder>()
+        );
+        assert_eq!(respond, EmitType::Reply);
+        let resp = response.get_root::<client_append_response::Builder>().unwrap().as_reader();
+        assert!(if let client_append_response::Which::NotLeader(_) = resp.which().unwrap() { true } else { false });
     }
 }
