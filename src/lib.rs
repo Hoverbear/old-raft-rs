@@ -55,7 +55,7 @@ extern crate uuid;
 pub mod state_machine;
 pub mod store;
 
-mod server;
+pub mod server;
 mod replica;
 mod state;
 
@@ -71,7 +71,7 @@ use std::net::TcpStream;
 use std::ops;
 use std::str::FromStr;
 
-use capnp::{serialize_packed, MallocMessageBuilder, MessageBuilder, MessageReader, ReaderOptions};
+use capnp::{serialize, MallocMessageBuilder, MessageBuilder, MessageReader, ReaderOptions};
 use rustc_serialize::Encodable;
 
 use messages_capnp::{message, client_append_response};
@@ -131,9 +131,9 @@ impl Raft {
             debug!("connecting to potential leader {}", leader);
 
             let mut socket = BufStream::new(try!(TcpStream::connect(leader)));
-            try!(serialize_packed::write_message(&mut socket, &mut message));
+            try!(serialize::write_message(&mut socket, &mut message));
             try!(socket.flush());
-            let response = try!(serialize_packed::read_message(&mut socket, ReaderOptions::new()));
+            let response = try!(serialize::read_message(&mut socket, ReaderOptions::new()));
 
             match try!(response.get_root::<message::Reader>()).which().unwrap() {
                 message::Which::ClientAppendResponse(Ok(response)) => {

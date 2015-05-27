@@ -81,6 +81,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
     }
 
+    pub fn peers(&self) -> &HashSet<SocketAddr> {
+        &self.peers
+    }
+
     /// Apply an append entries request to the Raft replica.
     pub fn append_entries_request(&mut self,
                                   from: SocketAddr,
