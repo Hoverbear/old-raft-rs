@@ -16,8 +16,6 @@ use mio::{
 use rand::{self, Rng};
 use capnp::{
     MallocMessageBuilder,
-    MessageBuilder,
-    MessageReader,
     OwnedSpaceMessageReader,
     ReaderOptions,
 };
@@ -29,19 +27,12 @@ use capnp::serialize::{
     WriteContinuation,
 };
 
-use messages_capnp::message;
-use replica::{Replica, EmitType};
+use replica::{Replica, Actions, Timeout};
 use state_machine::StateMachine;
 use store::Store;
 use super::Result;
 
 const LISTENER: Token = Token(0);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TimeoutType {
-    Election,
-    Heartbeat,
-}
 
 const ELECTION_MIN: u64 = 1500;
 const ELECTION_MAX: u64 = 3000;
@@ -61,7 +52,7 @@ const HEARTBEAT_DURATION: u64 = 500;
 pub struct Server<S, M> where S: Store, M: StateMachine {
     replica: Replica<S, M>,
     listener: TcpListener,
-    peer_tokens: HashMap<SocketAddr, Token>,
+    tokens: HashMap<SocketAddr, Token>,
     connections: Slab<Connection>,
 }
 
@@ -88,8 +79,8 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         let listener = TcpListener::bind(&addr).unwrap();
         event_loop.register(&listener, LISTENER).unwrap();
         let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
-        event_loop.timeout_ms(TimeoutType::Election, timeout).unwrap();
-        event_loop.timeout_ms(TimeoutType::Heartbeat, HEARTBEAT_DURATION).unwrap();
+        event_loop.timeout_ms(Timeout::Election, timeout).unwrap();
+        event_loop.timeout_ms(Timeout::Heartbeat, HEARTBEAT_DURATION).unwrap();
         let replica = Replica::new(addr, peers, store, state_machine);
 
         // Fire up the thread.
@@ -98,20 +89,21 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                 listener: listener,
                 replica: replica,
                 connections: Slab::new_starting_at(Token(3), 128),
-                peer_tokens: HashMap::new(),
+                tokens: HashMap::new(),
             };
             event_loop.run(&mut raft_node).unwrap();
         }).unwrap();
     }
 
-    fn peer_connection<'a>(&'a mut self,
-                           event_loop: &mut EventLoop<Server<S, M>>,
-                           peer: SocketAddr)
-                           -> Result<&'a mut Connection> {
-        let token: Token = match self.peer_tokens.entry(peer) {
+    /// Finds an existing connection, or opens a new one if necessary.
+    fn connection<'a>(&'a mut self,
+                      event_loop: &mut EventLoop<Server<S, M>>,
+                      addr: SocketAddr)
+                      -> Result<&'a mut Connection> {
+        let token: Token = match self.tokens.entry(addr) {
             hash_map::Entry::Occupied(entry) => *entry.get(),
             hash_map::Entry::Vacant(entry) => {
-                let socket: TcpStream = TcpStream::connect(&peer).unwrap();
+                let socket: TcpStream = TcpStream::connect(&addr).unwrap();
                 let token: Token = self.connections.insert(Connection::new(socket)).unwrap();
                 self.connections[token].token = token;
                 event_loop.register_opt(&self.connections[token].stream,
@@ -125,26 +117,17 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         Ok(&mut self.connections[token])
     }
 
-    fn broadcast(&mut self,
-                 event_loop: &mut EventLoop<Server<S, M>>,
-                 message: MallocMessageBuilder)
-                 -> Result<()> {
-        let rc = Rc::new(message);
-        let peers = self.replica.peers().clone();
-        for peer in peers {
-            let connection = try!(self.peer_connection(event_loop, peer));
-            try!(connection.send_message(event_loop, rc.clone()));
-        }
-        Ok(())
+    fn execute_actions(&mut self,
+                       event_loop: &mut EventLoop<Server<S, M>>,
+                       actions: Actions) {
     }
 }
 
 impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
     type Message = ();
-    type Timeout = TimeoutType;
+    type Timeout = Timeout;
 
-    /// A registered IoHandle has available writing space.
     fn writable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
         debug!("{:?}: Writeable {:?}", self, token);
         match token {
@@ -155,12 +138,12 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
         }
     }
 
-    /// A registered IoHandle has available data to read
     fn readable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, _hint: ReadHint) {
-        debug!("{:?}: Readable {:?}", self, token);
         match token {
             LISTENER => {
                 let stream = self.listener.accept().unwrap().unwrap();
+                let addr = stream.peer_addr().unwrap();
+                debug!("{:?}: new connection received from {}", self, &addr);
                 let conn = Connection::new(stream);
                 let token = match self.connections.insert(conn) {
                     Ok(token) => token,
@@ -173,87 +156,25 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
                 // Register the connection
                 self.connections[token].token = token;
+                self.tokens.insert(addr, token);
                 reactor.register_opt(&self.connections[token].stream, token, Interest::readable(), poll_opt())
                        .unwrap();
             },
             token => {
-                // Read messages from the socket until there are no more
-                while let Some(incoming_message) = self.connections[token].readable(reactor).unwrap() {
+                // Read messages from the socket until there are no more.
+                while let Some(message) = self.connections[token].readable(reactor).unwrap() {
                     let from = self.connections[token].stream.peer_addr().unwrap();
-                    let mut outgoing_message_builder = MallocMessageBuilder::new_default();
-                    let emit_type = {
-                        let outgoing_message = outgoing_message_builder.init_root::<message::Builder>();
-                        match incoming_message.get_root::<message::Reader>().unwrap().which().unwrap() {
-                            message::Which::AppendEntriesRequest(Ok(request)) => {
-                                let response = outgoing_message.init_append_entries_response();
-                                self.replica.append_entries_request(from, request, response)
-                            },
-                            message::Which::AppendEntriesResponse(Ok(response)) => {
-                                let request = outgoing_message.init_append_entries_request();
-                                self.replica.append_entries_response(from, response, request)
-                            },
-                            message::Which::RequestVoteRequest(Ok(request)) => {
-                                let response = outgoing_message.init_request_vote_response();
-                                self.replica.request_vote_request(from, request, response)
-                            },
-                            message::Which::RequestVoteResponse(Ok(response)) => {
-                                let request = outgoing_message.init_append_entries_request();
-                                self.replica.request_vote_response(from, response, request)
-                            },
-                            message::Which::ClientAppendRequest(Ok(request)) => {
-                                let response = outgoing_message.init_client_append_response();
-                                self.replica.client_append_request(from, request, response)
-                            },
-                            _ => panic!("cannot handle message"),
-                        }
-                    };
-
-                    match emit_type {
-                        EmitType::None => (),
-                        EmitType::Reply => {
-                            self.connections[token].send_message(reactor, Rc::new(outgoing_message_builder)).unwrap()
-                        },
-                        EmitType::Broadcast => {
-                            self.broadcast(reactor, outgoing_message_builder).unwrap()
-                        },
-                    }
+                    let actions = self.replica.apply_message(from, &message);
+                    self.execute_actions(reactor, actions);
                 }
             }
         }
     }
 
-    /// A registered timer has expired. This is either:
-    ///
-    /// * An election timeout, when a `Follower` node has waited too long for a heartbeat and doing
-    /// to become a `Candidate`.
-    /// * A heartbeat timeout, when the `Leader` node needs to refresh it's authority over the
-    /// followers. Initializes and sends an `AppendEntries` request to all followers.
-    fn timeout(&mut self, reactor: &mut EventLoop<Server<S, M>>, timeout: TimeoutType) {
+    fn timeout(&mut self, reactor: &mut EventLoop<Server<S, M>>, timeout: Timeout) {
         debug!("{:?}: Timeout", self);
-        let mut message_builder = MallocMessageBuilder::new_default();
-        let emit_type = {
-            let message = message_builder.init_root::<message::Builder>();
-            match timeout {
-                TimeoutType::Election => {
-                    let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
-                    reactor.timeout_ms(TimeoutType::Election, timeout).unwrap();
-                    self.replica.election_timeout(message.init_request_vote_request())
-                },
-                TimeoutType::Heartbeat => {
-                    reactor.timeout_ms(TimeoutType::Heartbeat, HEARTBEAT_DURATION).unwrap();
-                    self.replica.heartbeat_timeout(message.init_append_entries_request())
-                },
-            }
-        };
-        debug!("{:?}: emit_type: {:?}", self, emit_type);
-        // Send if necessary.
-        match emit_type {
-            EmitType::None => (),
-            EmitType::Broadcast => {
-                self.broadcast(reactor, message_builder).unwrap();
-            },
-            _ => unreachable!(),
-        }
+        let actions = self.replica.apply_timeout(timeout);
+        self.execute_actions(reactor, actions);
     }
 }
 

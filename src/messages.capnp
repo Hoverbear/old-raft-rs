@@ -6,8 +6,8 @@ struct Message {
         appendEntriesResponse @1 :AppendEntriesResponse;
         requestVoteResponse @2 :RequestVoteResponse;
         requestVoteRequest @3 :RequestVoteRequest;
-        clientAppendRequest @4 :ClientAppendRequest;
-        clientAppendResponse @5 :ClientAppendResponse;
+        proposeRequest @4 :ProposeRequest;
+        proposeResponse @5 :ProposeResponse;
     }
 }
 
@@ -91,12 +91,12 @@ struct RequestVoteResponse {
   }
 }
 
-struct ClientAppendRequest {
+struct ProposeRequest {
     entry @0 :Data;
     # An entry to append.
 }
 
-struct ClientAppendResponse {
+struct ProposeResponse {
     union {
         success @0 :Void;
         # The client request succeeded.

@@ -15,7 +15,7 @@ uuid = "*"
 
 [dependencies.capnp]
 git = "https://github.com/danburkert/capnproto-rust"
-branch = "async-const"
+branch = "async"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio"

@@ -58,6 +58,7 @@ pub mod store;
 pub mod server;
 mod replica;
 mod state;
+mod messages;
 
 mod messages_capnp {
     #![allow(dead_code)]
@@ -71,10 +72,10 @@ use std::net::TcpStream;
 use std::ops;
 use std::str::FromStr;
 
-use capnp::{serialize, MallocMessageBuilder, MessageBuilder, MessageReader, ReaderOptions};
+use capnp::{serialize, MessageReader, ReaderOptions};
 use rustc_serialize::Encodable;
 
-use messages_capnp::{message, client_append_response};
+use messages_capnp::{message, propose_response};
 use server::Server;
 use state_machine::StateMachine;
 use store::Store;
@@ -112,15 +113,10 @@ impl Raft {
         }
     }
 
-    /// Appends an entry to the replicated log. This will only return once it's properly replicated
-    /// to a majority of nodes.
-    pub fn append(&mut self, entry: &[u8]) -> Result<()> {
-        let mut message = MallocMessageBuilder::new_default();
-        {
-            message.init_root::<message::Builder>()
-                   .init_client_append_request()
-                   .set_entry(entry);
-        }
+    /// Proposes an entry to be appended to the replicated log. This will only
+    /// return once the entry has been durably committed.
+    pub fn propose(&mut self, entry: &[u8]) -> Result<()> {
+        let mut message = messages::propose_request(entry);
 
         let mut members = self.cluster_members.iter().cloned().cycle();
 
@@ -136,14 +132,14 @@ impl Raft {
             let response = try!(serialize::read_message(&mut socket, ReaderOptions::new()));
 
             match try!(response.get_root::<message::Reader>()).which().unwrap() {
-                message::Which::ClientAppendResponse(Ok(response)) => {
+                message::Which::ProposeResponse(Ok(response)) => {
                     match response.which().unwrap() {
-                        client_append_response::Which::Success(()) => {
+                        propose_response::Which::Success(()) => {
                             self.current_leader = Some(leader);
                             return Ok(())
                         },
-                        client_append_response::Which::UnknownLeader(()) => (),
-                        client_append_response::Which::NotLeader(leader) => {
+                        propose_response::Which::UnknownLeader(()) => (),
+                        propose_response::Which::NotLeader(leader) => {
                             let leader_addr: SocketAddr = SocketAddr::from_str(try!(leader)).unwrap();
                             assert!(self.cluster_members.contains(&leader_addr));
                             self.current_leader = Some(leader_addr);
