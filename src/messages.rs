@@ -9,7 +9,7 @@ use capnp::{
 };
 
 use {Term, LogIndex};
-use messages_capnp::message;
+use messages_capnp::{client_request, client_response, message};
 
 // AppendEntries
 
@@ -70,8 +70,8 @@ pub fn append_entries_response_inconsistent_prev_entry(term: Term) -> Rc<MallocM
 }
 
 pub fn append_entries_response_internal_error(term: Term,
-                                                   error: &str)
-                                                   -> Rc<MallocMessageBuilder> {
+                                              error: &str)
+                                              -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
@@ -154,44 +154,55 @@ pub fn request_vote_response_internal_error(term: Term, error: &str) -> Rc<Mallo
     Rc::new(message)
 }
 
-// Propose
+// Ping
 
-pub fn propose_request(entry: &[u8]) -> MallocMessageBuilder {
+pub fn ping_request(entry: &[u8]) -> MallocMessageBuilder {
     let mut message = MallocMessageBuilder::new_default();
     {
-        let mut request = message.init_root::<message::Builder>()
-                                 .init_propose_request();
-        request.set_entry(entry);
+        message.init_root::<client_request::Builder>()
+               .init_ping();
     }
     message
 }
 
-pub fn propose_response_success() -> Rc<MallocMessageBuilder> {
+// Proposal
+
+pub fn proposal_request(entry: &[u8]) -> MallocMessageBuilder {
     let mut message = MallocMessageBuilder::new_default();
     {
-        let mut response = message.init_root::<message::Builder>()
-                                  .init_propose_response();
-        response.set_success(());
+        message.init_root::<client_request::Builder>()
+               .init_proposal()
+               .set_entry(entry);
+    }
+    message
+}
+
+pub fn proposal_response_success() -> Rc<MallocMessageBuilder> {
+    let mut message = MallocMessageBuilder::new_default();
+    {
+        message.init_root::<client_response::Builder>()
+               .init_proposal()
+               .set_success(());
     }
     Rc::new(message)
 }
 
-pub fn propose_response_unknown_leader() -> Rc<MallocMessageBuilder> {
+pub fn proposal_response_unknown_leader() -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
-        let mut response = message.init_root::<message::Builder>()
-                                  .init_propose_response();
-        response.set_unknown_leader(());
+        message.init_root::<client_response::Builder>()
+               .init_proposal()
+               .set_unknown_leader(());
     }
     Rc::new(message)
 }
 
-pub fn propose_response_not_leader(leader_hint: &str) -> Rc<MallocMessageBuilder> {
+pub fn proposal_response_not_leader(leader_hint: &str) -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
-        let mut response = message.init_root::<message::Builder>()
-                                  .init_propose_response();
-        response.set_not_leader(leader_hint);
+        message.init_root::<client_response::Builder>()
+               .init_proposal()
+               .set_not_leader(leader_hint);
     }
     Rc::new(message)
 }

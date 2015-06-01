@@ -5,7 +5,7 @@ use std::net::TcpStream;
 
 use capnp::{serialize, MessageReader, ReaderOptions};
 
-use messages_capnp::{message, propose_response};
+use messages_capnp::{client_response, proposal_response};
 use messages;
 use Result;
 
@@ -27,7 +27,7 @@ impl Client {
     /// Proposes an entry to be appended to the replicated log. This will only
     /// return once the entry has been durably committed.
     pub fn propose(&mut self, entry: &[u8]) -> Result<()> {
-        let mut message = messages::propose_request(entry);
+        let mut message = messages::proposal_request(entry);
 
         let mut members = self.cluster.iter().cloned().cycle();
 
@@ -45,15 +45,15 @@ impl Client {
             try!(connection.flush());
             let response = try!(serialize::read_message(&mut connection, ReaderOptions::new()));
 
-            match try!(response.get_root::<message::Reader>()).which().unwrap() {
-                message::Which::ProposeResponse(Ok(response)) => {
+            match try!(response.get_root::<client_response::Reader>()).which().unwrap() {
+                client_response::Which::Proposal(Ok(response)) => {
                     match response.which().unwrap() {
-                        propose_response::Which::Success(()) => {
+                        proposal_response::Which::Success(()) => {
                             self.leader_connection = Some(connection);
                             return Ok(())
                         },
-                        propose_response::Which::UnknownLeader(()) => (),
-                        propose_response::Which::NotLeader(leader) => {
+                        proposal_response::Which::UnknownLeader(()) => (),
+                        proposal_response::Which::NotLeader(leader) => {
                             let connection: TcpStream = try!(TcpStream::connect(try!(leader)));
                             self.leader_connection = Some(BufStream::new(connection));
                         }

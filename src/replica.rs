@@ -12,7 +12,8 @@ use {LogIndex, Term, ServerId, ClientId, messages};
 use messages_capnp::{
     append_entries_request,
     append_entries_response,
-    propose_request,
+    client_request,
+    proposal_request,
     message,
     request_vote_request,
     request_vote_response,
@@ -131,10 +132,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                    message: &R)
                                    -> Actions
     where R: MessageReader {
-        let reader = message.get_root::<message::Reader>().unwrap().which().unwrap();
+        let reader = message.get_root::<client_request::Reader>().unwrap().which().unwrap();
         match reader {
-            message::Which::ProposeRequest(Ok(request)) =>
-                self.propose_request(from, request),
+            client_request::Which::Proposal(Ok(request)) =>
+                self.proposal_request(from, request),
             _ => panic!("cannot handle message"),
         }
     }
@@ -406,12 +407,12 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         actions
     }
 
-    /// Apply a client propose request to the Raft replica.
-    pub fn propose_request(&mut self,
+    /// Apply a client proposal to the Raft replica.
+    pub fn proposal_request(&mut self,
                            from: ClientId,
-                           request: propose_request::Reader)
+                           request: proposal_request::Reader)
                            -> Actions {
-        debug!("{:?}: Propose from Client({})", self, from);
+        debug!("{:?}: Proposal from Client({})", self, from);
         unimplemented!()
     }
 
