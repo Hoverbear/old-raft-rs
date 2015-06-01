@@ -45,6 +45,9 @@
 //!
 #![feature(buf_stream)]
 
+use std::io;
+use std::ops;
+
 extern crate capnp;
 extern crate mio;
 extern crate rand;
@@ -55,102 +58,22 @@ extern crate uuid;
 pub mod state_machine;
 pub mod store;
 
-pub mod server;
-mod replica;
-mod state;
+mod client;
 mod messages;
+mod replica;
+mod server;
+mod state;
 
 mod messages_capnp {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/messages_capnp.rs"));
 }
 
-use std::collections::HashSet;
-use std::io::{self, BufStream, Write};
-use std::net::SocketAddr;
-use std::net::TcpStream;
-use std::ops;
-use std::str::FromStr;
+pub use server::Server;
+pub use state_machine::StateMachine;
+pub use store::Store;
+pub use client::Client;
 
-use capnp::{serialize, MessageReader, ReaderOptions};
-use rustc_serialize::Encodable;
-
-use messages_capnp::{message, propose_response};
-use server::Server;
-use state_machine::StateMachine;
-use store::Store;
-
-/// This is the primary interface with a `Server` in the cluster.
-///
-/// Note: Creating a new `Raft` client will, for now, automatically spawn a `Server` with the
-/// relevant parameters. This may be changed in the future. This is based on the assumption that
-/// any consuming application interacting with a Raft cluster will also be a participant.
-pub struct Raft {
-    current_leader: Option<SocketAddr>,
-    cluster_members: HashSet<SocketAddr>,
-}
-
-impl Raft {
-    /// Create a new `Raft` client that has a cooresponding `Server` attached. Note that this
-    /// `Raft` may not necessarily interact with the cooreponding `Server`, it will interact with
-    /// the `Leader` of a cluster in almost all cases.
-    /// *Note:* All requests are blocking, by design from the Raft paper.
-    pub fn new<S, M>(addr: SocketAddr,
-                     cluster_members: HashSet<SocketAddr>,
-                     store: S,
-                     state_machine: M)
-                     -> Raft
-    where S: Store, M: StateMachine {
-        debug!("Starting Raft on {}", addr);
-        assert!(cluster_members.contains(&addr));
-        let mut peers = cluster_members.clone();
-        peers.remove(&addr);
-        Server::<S, M>::spawn(addr, peers, store, state_machine);
-        // Store relevant information.
-        Raft {
-            current_leader: None,
-            cluster_members: cluster_members,
-        }
-    }
-
-    /// Proposes an entry to be appended to the replicated log. This will only
-    /// return once the entry has been durably committed.
-    pub fn propose(&mut self, entry: &[u8]) -> Result<()> {
-        let mut message = messages::propose_request(entry);
-
-        let mut members = self.cluster_members.iter().cloned().cycle();
-
-        loop {
-            let leader: SocketAddr = self.current_leader
-                                         .take()
-                                         .unwrap_or_else(|| members.next().unwrap());
-            debug!("connecting to potential leader {}", leader);
-
-            let mut socket = BufStream::new(try!(TcpStream::connect(leader)));
-            try!(serialize::write_message(&mut socket, &mut message));
-            try!(socket.flush());
-            let response = try!(serialize::read_message(&mut socket, ReaderOptions::new()));
-
-            match try!(response.get_root::<message::Reader>()).which().unwrap() {
-                message::Which::ProposeResponse(Ok(response)) => {
-                    match response.which().unwrap() {
-                        propose_response::Which::Success(()) => {
-                            self.current_leader = Some(leader);
-                            return Ok(())
-                        },
-                        propose_response::Which::UnknownLeader(()) => (),
-                        propose_response::Which::NotLeader(leader) => {
-                            let leader_addr: SocketAddr = SocketAddr::from_str(try!(leader)).unwrap();
-                            assert!(self.cluster_members.contains(&leader_addr));
-                            self.current_leader = Some(leader_addr);
-                        }
-                    }
-                },
-                _ => panic!("Unexpected message type"), // TODO: return a proper error
-            }
-        }
-    }
-}
 
 pub type Result<T> = std::result::Result<T, Error>;
 

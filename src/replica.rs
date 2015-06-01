@@ -7,7 +7,6 @@ use capnp::{
     MallocMessageBuilder,
     MessageBuilder,
     MessageReader,
-    OwnedSpaceMessageReader
 };
 
 use {LogIndex, Term, messages};
