@@ -51,7 +51,6 @@ use std::ops;
 extern crate capnp;
 extern crate mio;
 extern crate rand;
-extern crate rustc_serialize;
 extern crate uuid;
 #[macro_use] extern crate log;
 
@@ -122,7 +121,7 @@ impl From<capnp::NotInSchema> for Error {
 }
 
 /// The term of a log entry.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Term(u64);
 impl From<u64> for Term {
     fn from(val: u64) -> Term {
@@ -148,7 +147,7 @@ impl ops::Sub<u64> for Term {
 }
 
 /// The index of a log entry.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LogIndex(u64);
 impl From<u64> for LogIndex {
     fn from(val: u64) -> LogIndex {

@@ -10,7 +10,6 @@ git = "https://github.com/dwrensha/capnpc-rust"
 [dependencies]
 log = "*"
 rand = "*"
-rustc-serialize = "*"
 uuid = "*"
 
 [dependencies.capnp]
