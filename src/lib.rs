@@ -61,7 +61,7 @@ mod replica;
 mod server;
 mod state;
 
-mod messages_capnp {
+pub mod messages_capnp {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/messages_capnp.rs"));
 }

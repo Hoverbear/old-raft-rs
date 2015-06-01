@@ -16,6 +16,7 @@ use mio::{
 use rand::{self, Rng};
 use capnp::{
     MallocMessageBuilder,
+    MessageReader,
     OwnedSpaceMessageReader,
     ReaderOptions,
 };
@@ -27,12 +28,13 @@ use capnp::serialize::{
     WriteContinuation,
 };
 
-use replica::{Replica, Actions, Timeout};
-use state_machine::StateMachine;
-use store::Store;
 use ClientId;
 use Result;
 use ServerId;
+use messages_capnp::connection_preamble;
+use replica::{Replica, Actions, Timeout};
+use state_machine::StateMachine;
+use store::Store;
 
 const LISTENER: Token = Token(0);
 
@@ -144,12 +146,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
     fn writable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
         debug!("{:?}: Writeable {:?}", self, token);
-        match token {
-            LISTENER => unreachable!(),
-            tok => {
-                self.connections[tok].writable(reactor).unwrap();
-            }
-        }
+        self.connections[token].writable(reactor).unwrap();
     }
 
     fn readable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, _hint: ReadHint) {
@@ -186,7 +183,19 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                             self.execute_actions(reactor, actions);
                         },
                         ConnectionId::Unknown => {
-                            // TODO: parse preamble message and setup connection appropriately
+                            let preamble = message.get_root::<connection_preamble::Reader>().unwrap();
+                            match preamble.get_id().which().unwrap() {
+                                connection_preamble::id::Which::Server(id) => {
+                                    self.connections[token].id = ConnectionId::Server(ServerId::from(id));
+                                },
+                                connection_preamble::id::Which::Client(Ok(id)) => {
+                                    self.connections[token].id = ConnectionId::Client(ClientId::from_bytes(id).unwrap());
+                                },
+                                _ => {
+                                    // TODO: drop the connection
+                                    unimplemented!()
+                                }
+                            }
                         }
                     }
                     let from = self.connections[token].id;
