@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
 
 use LogIndex;
+use ServerId;
 
 /// Replicas can be in one of three state:
 ///
@@ -21,8 +21,8 @@ pub enum ReplicaState {
 /// The state associated with a Raft replica in the `Leader` state.
 #[derive(Clone, Debug)]
 pub struct LeaderState {
-    next_index: HashMap<SocketAddr, LogIndex>,
-    match_index: HashMap<SocketAddr, LogIndex>,
+    next_index: HashMap<ServerId, LogIndex>,
+    match_index: HashMap<ServerId, LogIndex>,
 }
 
 impl LeaderState {
@@ -34,7 +34,7 @@ impl LeaderState {
     /// * `latest_log_index` - The index of the leader's most recent log entry at the
     ///                        time of election.
     /// * `peers` - The set of peer cluster members.
-    pub fn new(latest_log_index: LogIndex, peers: &HashSet<SocketAddr>) -> LeaderState {
+    pub fn new(latest_log_index: LogIndex, peers: &HashSet<ServerId>) -> LeaderState {
         let next_index = peers.iter().cloned().map(|peer| (peer, latest_log_index + 1)).collect();
         let match_index = peers.iter().cloned().map(|peer| (peer, LogIndex::from(0))).collect();
 
@@ -44,29 +44,29 @@ impl LeaderState {
         }
     }
 
-    /// Returns the next log entry index of the follower node.
-    pub fn next_index(&mut self, node: &SocketAddr) -> LogIndex {
-        self.next_index[node]
+    /// Returns the next log entry index of the follower.
+    pub fn next_index(&mut self, follower: &ServerId) -> LogIndex {
+        self.next_index[follower]
     }
 
-    /// Sets the next log entry index of the follower node.
-    pub fn set_next_index(&mut self, node: SocketAddr, index: LogIndex) {
-        self.next_index.insert(node, index);
+    /// Sets the next log entry index of the follower.
+    pub fn set_next_index(&mut self, follower: ServerId, index: LogIndex) {
+        self.next_index.insert(follower, index);
     }
 
     /// Returns the index of the highest log entry known to be replicated on
-    /// the follower node.
-    pub fn match_index(&self, node: &SocketAddr) -> LogIndex {
-        self.match_index[node]
+    /// the follower.
+    pub fn match_index(&self, follower: &ServerId) -> LogIndex {
+        self.match_index[follower]
     }
 
     /// Sets the index of the highest log entry known to be replicated on the
-    /// follower node.
-    pub fn set_match_index(&mut self, node: SocketAddr, index: LogIndex) {
-        self.match_index.insert(node, index);
+    /// follower.
+    pub fn set_match_index(&mut self, follower: ServerId, index: LogIndex) {
+        self.match_index.insert(follower, index);
     }
 
-    /// Counts the number of follower nodes containing the given log index.
+    /// Counts the number of followers containing the given log index.
     pub fn count_match_indexes(&self, index: LogIndex) -> usize {
         self.match_index.values().filter(|&&i| i >= index).count()
     }
@@ -85,7 +85,7 @@ impl LeaderState {
 /// The state associated with a Raft replica in the `Candidate` state.
 #[derive(Clone, Debug)]
 pub struct CandidateState {
-    granted_votes: HashSet<SocketAddr>,
+    granted_votes: HashSet<ServerId>,
 }
 
 impl CandidateState {
@@ -96,7 +96,7 @@ impl CandidateState {
     }
 
     /// Records a vote from `voter`.
-    pub fn record_vote(&mut self, voter: SocketAddr) {
+    pub fn record_vote(&mut self, voter: ServerId) {
         self.granted_votes.insert(voter);
     }
 
@@ -116,7 +116,7 @@ impl CandidateState {
 pub struct FollowerState {
     /// The most recent leader of the follower. The leader is not guaranteed to be active, so this
     /// should only be used as a hint.
-    pub leader: Option<SocketAddr>,
+    pub leader: Option<ServerId>,
 }
 
 impl FollowerState {
@@ -127,7 +127,7 @@ impl FollowerState {
     }
 
     /// Sets a new leader.
-    pub fn set_leader(&mut self, leader: SocketAddr) {
+    pub fn set_leader(&mut self, leader: ServerId) {
         self.leader = Some(leader)
     }
 }

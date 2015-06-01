@@ -30,7 +30,9 @@ use capnp::serialize::{
 use replica::{Replica, Actions, Timeout};
 use state_machine::StateMachine;
 use store::Store;
-use super::Result;
+use ClientId;
+use Result;
+use ServerId;
 
 const LISTENER: Token = Token(0);
 
@@ -50,66 +52,69 @@ const HEARTBEAT_DURATION: u64 = 500;
 ///
 /// Currently, the `Server` API is not well defined. **We are looking for feedback and suggestions.**
 pub struct Server<S, M> where S: Store, M: StateMachine {
+    id: ServerId,
+    peers: HashMap<ServerId, SocketAddr>,
     replica: Replica<S, M>,
     listener: TcpListener,
-    tokens: HashMap<SocketAddr, Token>,
     connections: Slab<Connection>,
+    peer_tokens: HashMap<ServerId, Token>,
+    client_tokens: HashMap<ClientId, Token>,
 }
 
-/// The implementation of the Server. In most use cases, creating a `Server` should just be
-/// done via `::new()`.
+/// The implementation of the Server.
 impl<S, M> Server<S, M> where S: Store, M: StateMachine {
 
     /// Creates a new Raft node with the cluster members specified.
     ///
     /// # Arguments
     ///
+    /// * `id` - The ID of the new node.
     /// * `addr` - The address of the new node.
-    /// * `peers` - The address of all peers in the Raft cluster.
-    /// * `store` - The persitent log store.
+    /// * `peers` - The ID and address of all peers in the Raft cluster.
+    /// * `store` - The persistent log store.
     /// * `state_machine` - The client state machine to which client commands will be applied.
-    pub fn spawn(addr: SocketAddr,
-                 peers: HashSet<SocketAddr>,
+    pub fn spawn(id: ServerId,
+                 addr: SocketAddr,
+                 peers: HashMap<ServerId, SocketAddr>,
                  store: S,
                  state_machine: M) {
-        debug!("Spawning Server");
-        // Create an event loop
+        assert!(!peers.contains_key(&id));
+        debug!("Spawning Server({})", id);
+        let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
         let mut event_loop = EventLoop::<Server<S, M>>::new().unwrap();
-        // Setup the socket, make it not block.
         let listener = TcpListener::bind(&addr).unwrap();
         event_loop.register(&listener, LISTENER).unwrap();
-        let timeout = rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX);
-        event_loop.timeout_ms(Timeout::Election, timeout).unwrap();
-        event_loop.timeout_ms(Timeout::Heartbeat, HEARTBEAT_DURATION).unwrap();
-        let replica = Replica::new(addr, peers, store, state_machine);
 
-        // Fire up the thread.
-        thread::Builder::new().name(format!("Server {}", addr)).spawn(move || {
+        thread::Builder::new().name(format!("raft::Server({})", id)).spawn(move || {
             let mut raft_node = Server {
-                listener: listener,
+                id: id,
+                peers: peers,
                 replica: replica,
-                connections: Slab::new_starting_at(Token(3), 128),
-                tokens: HashMap::new(),
+                listener: listener,
+                connections: Slab::new_starting_at(Token(1), 129),
+                peer_tokens: HashMap::new(),
+                client_tokens: HashMap::new(),
             };
             event_loop.run(&mut raft_node).unwrap();
         }).unwrap();
     }
 
-    /// Finds an existing connection, or opens a new one if necessary.
-    fn connection<'a>(&'a mut self,
-                      event_loop: &mut EventLoop<Server<S, M>>,
-                      addr: SocketAddr)
-                      -> Result<&'a mut Connection> {
-        let token: Token = match self.tokens.entry(addr) {
+    /// Finds an existing connection to a peer, or opens a new one if necessary.
+    fn peer_connection(&mut self,
+                       event_loop: &mut EventLoop<Server<S, M>>,
+                       peer_id: ServerId)
+                       -> Result<&mut Connection> {
+        let token: Token = match self.peer_tokens.entry(peer_id) {
             hash_map::Entry::Occupied(entry) => *entry.get(),
             hash_map::Entry::Vacant(entry) => {
-                let socket: TcpStream = TcpStream::connect(&addr).unwrap();
-                let token: Token = self.connections.insert(Connection::new(socket)).unwrap();
+                let peer_addr = self.peers[&peer_id];
+                let socket: TcpStream = try!(TcpStream::connect(&peer_addr));
+                let token: Token = self.connections.insert(Connection::with_server_id(peer_id, socket)).unwrap();
                 self.connections[token].token = token;
-                event_loop.register_opt(&self.connections[token].stream,
+                try!(event_loop.register_opt(&self.connections[token].stream,
                                         token,
                                         Interest::readable(),
-                                        poll_opt()).unwrap();
+                                        poll_opt()));
                 entry.insert(token);
                 token
             },
@@ -117,9 +122,18 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         Ok(&mut self.connections[token])
     }
 
+    /// Finds an existing connection to a client.
+    fn client_connection<'a>(&'a mut self, client_id: ClientId) -> Option<&'a mut Connection> {
+        match self.client_tokens.get(&client_id) {
+            Some(&token) => self.connections.get_mut(token),
+            None => None
+        }
+    }
+
     fn execute_actions(&mut self,
                        event_loop: &mut EventLoop<Server<S, M>>,
                        actions: Actions) {
+        unimplemented!()
     }
 }
 
@@ -156,16 +170,26 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
                 // Register the connection
                 self.connections[token].token = token;
-                self.tokens.insert(addr, token);
                 reactor.register_opt(&self.connections[token].stream, token, Interest::readable(), poll_opt())
                        .unwrap();
             },
             token => {
                 // Read messages from the socket until there are no more.
                 while let Some(message) = self.connections[token].readable(reactor).unwrap() {
-                    let from = self.connections[token].stream.peer_addr().unwrap();
-                    let actions = self.replica.apply_message(from, &message);
-                    self.execute_actions(reactor, actions);
+                    match self.connections[token].id {
+                        ConnectionId::Server(id) => {
+                            let actions = self.replica.apply_peer_message(id, &message);
+                            self.execute_actions(reactor, actions);
+                        },
+                        ConnectionId::Client(id) => {
+                            let actions = self.replica.apply_client_message(id, &message);
+                            self.execute_actions(reactor, actions);
+                        },
+                        ConnectionId::Unknown => {
+                            // TODO: parse preamble message and setup connection appropriately
+                        }
+                    }
+                    let from = self.connections[token].id;
                 }
             }
         }
@@ -188,8 +212,16 @@ fn poll_opt() -> PollOpt {
     PollOpt::edge() | PollOpt::oneshot()
 }
 
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+enum ConnectionId {
+    Server(ServerId),
+    Client(ClientId),
+    Unknown,
+}
+
 struct Connection {
     stream: TcpStream,
+    id: ConnectionId,
     token: Token,
     interest: Interest,
     read_continuation: Option<ReadContinuation>,
@@ -205,8 +237,21 @@ impl Connection {
     /// connection into a slab.
     fn new(socket: TcpStream) -> Connection {
         Connection {
+            id: ConnectionId::Unknown,
             stream: socket,
-            token: Token(0), // Effectively a `null`. This needs to be assigned by the caller.
+            token: Token(0),
+            interest: Interest::hup(),
+            read_continuation: None,
+            write_continuation: None,
+            write_queue: VecDeque::new(),
+        }
+    }
+
+    fn with_server_id(id: ServerId, socket: TcpStream) -> Connection {
+        Connection {
+            id: ConnectionId::Server(id),
+            stream: socket,
+            token: Token(0),
             interest: Interest::hup(),
             read_continuation: None,
             write_continuation: None,

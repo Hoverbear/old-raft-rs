@@ -10,11 +10,11 @@ mod mem;
 
 use std::error;
 use std::fmt::Debug;
-use std::net::SocketAddr;
 use std::result;
 
 use LogIndex;
 use Term;
+use ServerId;
 
 pub use store::mem::{MemStore, Error};
 
@@ -34,10 +34,10 @@ pub trait Store: Clone + Debug + Send + 'static {
     fn inc_current_term(&mut self) -> result::Result<Term, Self::Error>;
 
     /// Returns the candidate id of the candidate voted for in the current term (or none).
-    fn voted_for(&self) -> result::Result<Option<SocketAddr>, Self::Error>;
+    fn voted_for(&self) -> result::Result<Option<ServerId>, Self::Error>;
 
     /// Sets the candidate id voted for in the current term.
-    fn set_voted_for(&mut self, address: SocketAddr) -> result::Result<(), Self::Error>;
+    fn set_voted_for(&mut self, server: ServerId) -> result::Result<(), Self::Error>;
 
     /// Returns the index of the latest persisted log entry (0 if the log is empty).
     fn latest_log_index(&self) -> result::Result<LogIndex, Self::Error>;

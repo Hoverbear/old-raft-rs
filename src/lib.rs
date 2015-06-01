@@ -45,8 +45,6 @@
 //!
 #![feature(buf_stream)]
 
-use std::io;
-use std::ops;
 
 extern crate capnp;
 extern crate mio;
@@ -73,6 +71,9 @@ pub use state_machine::StateMachine;
 pub use store::Store;
 pub use client::Client;
 
+use std::{io, ops, fmt};
+
+use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -100,6 +101,7 @@ pub enum ErrorKind {
     CannotProceed,
     NotInCluster,
     BadResponse,
+    InvalidClientId,
 }
 
 impl From<io::Error> for Error {
@@ -169,5 +171,58 @@ impl ops::Sub<u64> for LogIndex {
     type Output = LogIndex;
     fn sub(self, rhs: u64) -> LogIndex {
         LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
+    }
+}
+
+/// The id of a Raft server. Must be unique among the participants in a
+/// consensus group.
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+pub struct ServerId(u64);
+impl From<u64> for ServerId {
+    fn from(val: u64) -> ServerId {
+        ServerId(val)
+    }
+}
+impl Into<u64> for ServerId {
+    fn into(self) -> u64 {
+        self.0
+    }
+}
+impl fmt::Debug for ServerId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ServerId({})", self.0)
+    }
+}
+impl fmt::Display for ServerId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// The ID of a Raft client.
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+struct ClientId(Uuid);
+impl ClientId {
+    fn new() -> ClientId {
+        ClientId(Uuid::new_v4())
+    }
+    fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+    fn from_bytes(bytes: &[u8]) -> Result<ClientId> {
+        match Uuid::from_bytes(bytes) {
+            Some(uuid) => Ok(ClientId(uuid)),
+            None => Err(Error::Raft(ErrorKind::InvalidClientId)),
+        }
+    }
+}
+impl fmt::Debug for ClientId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ClientId({})", self.0)
+    }
+}
+impl fmt::Display for ClientId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
     }
 }
