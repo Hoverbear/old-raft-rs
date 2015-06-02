@@ -112,12 +112,12 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             hash_map::Entry::Vacant(entry) => {
                 let peer_addr = self.peers[&peer_id];
                 let socket: TcpStream = try!(TcpStream::connect(&peer_addr));
-                let token: Token = self.connections.insert(Connection::with_server_id(peer_id, socket)).unwrap();
+                let token: Token = self.connections.insert(Connection::peer(peer_id, peer_addr, socket)).unwrap();
                 self.connections[token].token = token;
-                try!(event_loop.register_opt(&self.connections[token].stream,
-                                        token,
-                                        Interest::readable(),
-                                        poll_opt()));
+                try_warn!(event_loop.register_opt(&self.connections[token].stream,
+                                                  token, Interest::readable(), poll_opt()),
+                          "Server({}): unable to connect to peer Server {{ id: {}, address: {} }}: {}",
+                          self.id, peer_id, peer_addr);
                 entry.insert(token);
                 token
             },
@@ -182,7 +182,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                 let stream = self.listener.accept().unwrap().unwrap();
                 let addr = stream.peer_addr().unwrap();
                 debug!("{:?}: new connection received from {}", self, &addr);
-                let conn = Connection::new(stream);
+                let conn = Connection::unknown(stream);
                 let token = match self.connections.insert(conn) {
                     Ok(token) => token,
                     Err(conn) => {
@@ -201,22 +201,22 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                 // Read messages from the socket until there are no more.
                 while let Some(message) = self.connections[token].readable(reactor).unwrap() {
                     match self.connections[token].id {
-                        ConnectionId::Server(id) => {
+                        ConnectionType::Peer(id) => {
                             let actions = self.replica.apply_peer_message(id, &message);
                             self.execute_actions(reactor, actions);
                         },
-                        ConnectionId::Client(id) => {
+                        ConnectionType::Client(id) => {
                             let actions = self.replica.apply_client_message(id, &message);
                             self.execute_actions(reactor, actions);
                         },
-                        ConnectionId::Unknown => {
+                        ConnectionType::Unknown => {
                             let preamble = message.get_root::<connection_preamble::Reader>().unwrap();
                             match preamble.get_id().which().unwrap() {
                                 connection_preamble::id::Which::Server(id) => {
-                                    self.connections[token].id = ConnectionId::Server(ServerId::from(id));
+                                    self.connections[token].id = ConnectionType::Peer(ServerId::from(id));
                                 },
                                 connection_preamble::id::Which::Client(Ok(id)) => {
-                                    self.connections[token].id = ConnectionId::Client(ClientId::from_bytes(id).unwrap());
+                                    self.connections[token].id = ConnectionType::Client(ClientId::from_bytes(id).unwrap());
                                 },
                                 _ => {
                                     // TODO: drop the connection
@@ -249,15 +249,16 @@ fn poll_opt() -> PollOpt {
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-enum ConnectionId {
-    Server(ServerId),
+enum ConnectionType {
+    Peer(ServerId),
     Client(ClientId),
     Unknown,
 }
 
 struct Connection {
     stream: TcpStream,
-    id: ConnectionId,
+    id: ConnectionType,
+    address: SocketAddr,
     token: Token,
     interest: Interest,
     read_continuation: Option<ReadContinuation>,
@@ -269,12 +270,16 @@ impl Connection {
 
     /// Creates a new `Connection` wrapping the provided socket.
     ///
+    /// The socket must already be connected.
+    ///
     /// Note: the caller must manually call `set_token` after inserting the
     /// connection into a slab.
-    fn new(socket: TcpStream) -> Connection {
+    fn unknown(socket: TcpStream) -> Connection {
+        let address = socket.peer_addr().unwrap();
         Connection {
-            id: ConnectionId::Unknown,
             stream: socket,
+            id: ConnectionType::Unknown,
+            address: address,
             token: Token(0),
             interest: Interest::hup(),
             read_continuation: None,
@@ -283,10 +288,11 @@ impl Connection {
         }
     }
 
-    fn with_server_id(id: ServerId, socket: TcpStream) -> Connection {
+    fn peer(id: ServerId, address: SocketAddr, socket: TcpStream) -> Connection {
         Connection {
-            id: ConnectionId::Server(id),
             stream: socket,
+            id: ConnectionType::Peer(id),
+            address: address,
             token: Token(0),
             interest: Interest::hup(),
             read_continuation: None,
@@ -357,7 +363,8 @@ impl Connection {
         self.write_queue.push_back(message);
         if self.write_queue.is_empty() {
             self.interest.insert(Interest::writable());
-            try!(event_loop.reregister(&self.stream, self.token, self.interest, poll_opt()));
+            try_warn!(event_loop.reregister(&self.stream, self.token, self.interest, poll_opt()),
+                      "{:?}: unable to register with event loop: {}", self);
         }
         Ok(())
     }
@@ -366,6 +373,16 @@ impl Connection {
 
 impl fmt::Debug for Connection {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "Connection({})", self.stream.peer_addr().unwrap())
+        match self.id {
+            ConnectionType::Peer(id) => {
+                write!(fmt, "PeerConnection {{ id: {}, address: {} }}", id, self.address)
+            },
+            ConnectionType::Client(id) => {
+                write!(fmt, "ClientConnection {{ id: {}, address: {} }}", id, self.address)
+            },
+            ConnectionType::Unknown => {
+                write!(fmt, "UnknownConnection {{ address: {} }}", self.address)
+            },
+        }
     }
 }

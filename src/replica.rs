@@ -444,7 +444,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         if !self.is_leader() {
             if self.peers.is_empty() {
                 // Solitary replica special case; jump straight to leader status
-                info!("{:?}: Transition to Leader", self);
+                info!("{:?}: transition to Leader", self);
                 assert!(self.is_follower());
                 assert!(self.store.voted_for().unwrap().is_none());
                 self.store.inc_current_term().unwrap();

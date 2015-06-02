@@ -45,12 +45,23 @@
 //!
 #![feature(buf_stream)]
 
-
 extern crate capnp;
 extern crate mio;
 extern crate rand;
 extern crate uuid;
 #[macro_use] extern crate log;
+
+/// Unwraps the Result value, or logs a warning and returns early if the value
+/// is an `Err`.
+macro_rules! try_warn {
+    ($expr:expr, $($arg:tt)*) => (match $expr {
+        ::std::result::Result::Ok(val) => val,
+        ::std::result::Result::Err(err) => {
+            warn!($($arg)*, err);
+            return ::std::result::Result::Err(::std::convert::From::from(err));
+        },
+    })
+}
 
 pub mod state_machine;
 pub mod store;
