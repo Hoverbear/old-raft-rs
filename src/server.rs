@@ -65,7 +65,6 @@ pub struct Server<S, M> where S: Store, M: StateMachine {
 
 /// The implementation of the Server.
 impl<S, M> Server<S, M> where S: Store, M: StateMachine {
-
     /// Creates a new Raft node with the cluster members specified.
     ///
     /// # Arguments
@@ -85,7 +84,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
         let mut event_loop = EventLoop::<Server<S, M>>::new().unwrap();
         let listener = TcpListener::bind(&addr).unwrap();
-        event_loop.register(&listener, LISTENER).unwrap();
+        register_timeout(&mut event_loop, Timeout::Election);
 
         thread::Builder::new().name(format!("raft::Server({})", id)).spawn(move || {
             let mut raft_node = Server {
@@ -135,9 +134,35 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     fn execute_actions(&mut self,
                        event_loop: &mut EventLoop<Server<S, M>>,
                        actions: Actions) {
-        unimplemented!()
+        let Actions { peer_messages, client_messages, timeouts } = actions;
+
+        for (peer, message) in peer_messages {
+            self.peer_connection(event_loop, peer)
+                .and_then(|connection| connection.send_message(event_loop, message))
+                .unwrap(); // TODO: log and ignore
+        }
+        for (client, message) in client_messages {
+            if let Some(connection) = self.client_connection(client) {
+                connection.send_message(event_loop, message)
+                          .unwrap(); // TODO: log and ignore
+
+            }
+        }
+        for timeout in timeouts {
+            register_timeout(event_loop, timeout)
+        }
     }
 }
+
+fn register_timeout<S, M>(event_loop: &mut EventLoop<Server<S, M>>, timeout: Timeout)
+where S: Store, M: StateMachine {
+    let ms = match timeout {
+        Timeout::Election => rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX),
+        Timeout::Heartbeat(_) => HEARTBEAT_DURATION,
+    };
+    event_loop.timeout_ms(Timeout::Election, ms).unwrap();
+}
+
 
 impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 

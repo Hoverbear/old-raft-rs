@@ -201,7 +201,7 @@ impl fmt::Display for ServerId {
 
 /// The ID of a Raft client.
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
-struct ClientId(Uuid);
+pub struct ClientId(Uuid);
 impl ClientId {
     fn new() -> ClientId {
         ClientId(Uuid::new_v4())

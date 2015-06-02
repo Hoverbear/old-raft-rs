@@ -156,7 +156,7 @@ pub fn request_vote_response_internal_error(term: Term, error: &str) -> Rc<Mallo
 
 // Ping
 
-pub fn ping_request(entry: &[u8]) -> MallocMessageBuilder {
+pub fn ping_request() -> MallocMessageBuilder {
     let mut message = MallocMessageBuilder::new_default();
     {
         message.init_root::<client_request::Builder>()

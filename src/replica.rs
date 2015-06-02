@@ -29,9 +29,9 @@ pub enum Timeout {
 }
 
 pub struct Actions {
-    peer_messages: Vec<(ServerId, Rc<MallocMessageBuilder>)>,
-    client_messages: Vec<(ClientId, Rc<MallocMessageBuilder>)>,
-    timeouts: Vec<(Timeout, u64)>,
+    pub peer_messages: Vec<(ServerId, Rc<MallocMessageBuilder>)>,
+    pub client_messages: Vec<(ClientId, Rc<MallocMessageBuilder>)>,
+    pub timeouts: Vec<Timeout>,
 }
 
 impl Actions {
@@ -148,10 +148,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Apply an append entries request to the Raft replica.
-    pub fn append_entries_request(&mut self,
-                                  from: ServerId,
-                                  request: append_entries_request::Reader)
-                                  -> Actions {
+    fn append_entries_request(&mut self,
+                              from: ServerId,
+                              request: append_entries_request::Reader)
+                              -> Actions {
         assert!(self.peers.contains(&from),
                 "Received append entries request from unknown node {}.", &from);
         debug!("{:?}: AppendEntriesRequest from Replica({})", self, &from);
@@ -234,10 +234,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     ///
     /// The provided message may be initialized with a new AppendEntries request to send back to
     /// the follower in the case that the follower's log is behind.
-    pub fn append_entries_response(&mut self,
-                                   from: ServerId,
-                                   response: append_entries_response::Reader)
-                                   -> Actions {
+    fn append_entries_response(&mut self,
+                               from: ServerId,
+                               response: append_entries_response::Reader)
+                               -> Actions {
         assert!(self.peers.contains(&from),
                 "{:?} received AppendEntries response from unknown peer {}.",
                 self, &from);
@@ -331,10 +331,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Apply a request vote request to the Raft replica.
-    pub fn request_vote_request(&mut self,
-                                candidate: ServerId,
-                                request: request_vote_request::Reader)
-                                -> Actions {
+    fn request_vote_request(&mut self,
+                            candidate: ServerId,
+                            request: request_vote_request::Reader)
+                            -> Actions {
         assert!(self.peers.contains(&candidate),
                 "Received request vote request from unknown node {}.", &candidate);
         debug!("{:?}: RequestVoteRequest from Replica({})", self, &candidate);
@@ -373,10 +373,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Apply a request vote response to the Raft replica.
-    pub fn request_vote_response(&mut self,
-                                 from: ServerId,
-                                 response: request_vote_response::Reader)
-                                 -> Actions {
+    fn request_vote_response(&mut self,
+                             from: ServerId,
+                             response: request_vote_response::Reader)
+                             -> Actions {
         assert!(self.peers.contains(&from), "Received request vote response from unknown node {}.", from);
         debug!("{:?}: RequestVoteResponse from Replica({})", self, from);
 
@@ -408,10 +408,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Apply a client proposal to the Raft replica.
-    pub fn proposal_request(&mut self,
-                           from: ClientId,
-                           request: proposal_request::Reader)
-                           -> Actions {
+    fn proposal_request(&mut self,
+                        from: ClientId,
+                        request: proposal_request::Reader)
+                        -> Actions {
         debug!("{:?}: Proposal from Client({})", self, from);
         unimplemented!()
     }
@@ -420,7 +420,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     ///
     /// The provided AppendEntriesRequest builder may be initialized with a message to send to each
     /// cluster peer.
-    pub fn heartbeat_timeout(&mut self, id: ServerId) -> Actions {
+    fn heartbeat_timeout(&mut self, id: ServerId) -> Actions {
         debug!("{:?}: HeartbeatTimeout", self);
         /*
         // Send a heartbeat
@@ -438,7 +438,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     ///
     /// The provided RequestVoteRequest builder may be initialized with a message to send to each
     /// cluster peer.
-    pub fn election_timeout(&mut self) -> Actions {
+    fn election_timeout(&mut self) -> Actions {
         debug!("{:?}: ElectionTimeout", self);
         let mut actions = Actions::new();
         if !self.is_leader() {
