@@ -1,7 +1,8 @@
-use std::{fmt, thread};
+use std::fmt;
 use std::collections::{hash_map, HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
+use std::thread::{self, JoinHandle};
 
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
@@ -65,7 +66,8 @@ pub struct Server<S, M> where S: Store, M: StateMachine {
 
 /// The implementation of the Server.
 impl<S, M> Server<S, M> where S: Store, M: StateMachine {
-    /// Creates a new Raft node with the cluster members specified.
+
+    /// Spawns a new Raft server in a background thread.
     ///
     /// # Arguments
     ///
@@ -78,15 +80,15 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                  addr: SocketAddr,
                  peers: HashMap<ServerId, SocketAddr>,
                  store: S,
-                 state_machine: M) {
+                 state_machine: M) -> Result<JoinHandle<()>> {
         assert!(!peers.contains_key(&id));
-        debug!("Spawning Server({})", id);
         let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
-        let mut event_loop = EventLoop::<Server<S, M>>::new().unwrap();
-        let listener = TcpListener::bind(&addr).unwrap();
+        let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
+        let listener = try!(TcpListener::bind(&addr));
         register_timeout(&mut event_loop, Timeout::Election);
 
         thread::Builder::new().name(format!("raft::Server({})", id)).spawn(move || {
+            debug!("Server({}): Spawning", id);
             let mut raft_node = Server {
                 id: id,
                 peers: peers,
@@ -97,7 +99,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                 client_tokens: HashMap::new(),
             };
             event_loop.run(&mut raft_node).unwrap();
-        }).unwrap();
+        }).map_err(From::from)
     }
 
     /// Finds an existing connection to a peer, or opens a new one if necessary.
@@ -230,7 +232,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
     }
 
     fn timeout(&mut self, reactor: &mut EventLoop<Server<S, M>>, timeout: Timeout) {
-        debug!("{:?}: Timeout", self);
+        debug!("{:?}: Timeout: {:?}", self, &timeout);
         let actions = self.replica.apply_timeout(timeout);
         self.execute_actions(reactor, actions);
     }
@@ -238,7 +240,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
 impl <S, M> fmt::Debug for Server<S, M> where S: Store, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "Server({})", self.listener.local_addr().unwrap())
+        write!(fmt, "Server({})", self.id)
     }
 }
 
