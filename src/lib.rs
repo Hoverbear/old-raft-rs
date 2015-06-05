@@ -45,116 +45,35 @@
 //!
 #![feature(buf_stream)]
 
+
 extern crate capnp;
 extern crate mio;
 extern crate rand;
-extern crate rustc_serialize;
 extern crate uuid;
 #[macro_use] extern crate log;
 
 pub mod state_machine;
 pub mod store;
 
-mod server;
+mod client;
+mod messages;
 mod replica;
+mod server;
 mod state;
 
-mod messages_capnp {
+pub mod messages_capnp {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/messages_capnp.rs"));
 }
 
-use std::collections::HashSet;
-use std::io::{self, BufStream, Write};
-use std::net::SocketAddr;
-use std::net::TcpStream;
-use std::ops;
-use std::str::FromStr;
+pub use server::Server;
+pub use state_machine::StateMachine;
+pub use store::Store;
+pub use client::Client;
 
-use capnp::{serialize_packed, MallocMessageBuilder, MessageBuilder, MessageReader, ReaderOptions};
-use rustc_serialize::Encodable;
+use std::{io, ops, fmt};
 
-use messages_capnp::{message, client_append_response};
-use server::Server;
-use state_machine::StateMachine;
-use store::Store;
-
-/// This is the primary interface with a `Server` in the cluster.
-///
-/// Note: Creating a new `Raft` client will, for now, automatically spawn a `Server` with the
-/// relevant parameters. This may be changed in the future. This is based on the assumption that
-/// any consuming application interacting with a Raft cluster will also be a participant.
-pub struct Raft {
-    current_leader: Option<SocketAddr>,
-    cluster_members: HashSet<SocketAddr>,
-}
-
-impl Raft {
-    /// Create a new `Raft` client that has a cooresponding `Server` attached. Note that this
-    /// `Raft` may not necessarily interact with the cooreponding `Server`, it will interact with
-    /// the `Leader` of a cluster in almost all cases.
-    /// *Note:* All requests are blocking, by design from the Raft paper.
-    pub fn new<S, M>(addr: SocketAddr,
-                     cluster_members: HashSet<SocketAddr>,
-                     store: S,
-                     state_machine: M)
-                     -> Raft
-    where S: Store, M: StateMachine {
-        debug!("Starting Raft on {}", addr);
-        assert!(cluster_members.contains(&addr));
-        let mut peers = cluster_members.clone();
-        peers.remove(&addr);
-        Server::<S, M>::spawn(addr, peers, store, state_machine);
-        // Store relevant information.
-        Raft {
-            current_leader: None,
-            cluster_members: cluster_members,
-        }
-    }
-
-    /// Appends an entry to the replicated log. This will only return once it's properly replicated
-    /// to a majority of nodes.
-    pub fn append(&mut self, entry: &[u8]) -> Result<()> {
-        let mut message = MallocMessageBuilder::new_default();
-        {
-            message.init_root::<message::Builder>()
-                   .init_client_append_request()
-                   .set_entry(entry);
-        }
-
-        let mut members = self.cluster_members.iter().cloned().cycle();
-
-        loop {
-            let leader: SocketAddr = self.current_leader
-                                         .take()
-                                         .unwrap_or_else(|| members.next().unwrap());
-            debug!("connecting to potential leader {}", leader);
-
-            let mut socket = BufStream::new(try!(TcpStream::connect(leader)));
-            try!(serialize_packed::write_message(&mut socket, &mut message));
-            try!(socket.flush());
-            let response = try!(serialize_packed::read_message(&mut socket, ReaderOptions::new()));
-
-            match try!(response.get_root::<message::Reader>()).which().unwrap() {
-                message::Which::ClientAppendResponse(Ok(response)) => {
-                    match response.which().unwrap() {
-                        client_append_response::Which::Success(()) => {
-                            self.current_leader = Some(leader);
-                            return Ok(())
-                        },
-                        client_append_response::Which::UnknownLeader(()) => (),
-                        client_append_response::Which::NotLeader(leader) => {
-                            let leader_addr: SocketAddr = SocketAddr::from_str(try!(leader)).unwrap();
-                            assert!(self.cluster_members.contains(&leader_addr));
-                            self.current_leader = Some(leader_addr);
-                        }
-                    }
-                },
-                _ => panic!("Unexpected message type"), // TODO: return a proper error
-            }
-        }
-    }
-}
+use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -182,6 +101,7 @@ pub enum ErrorKind {
     CannotProceed,
     NotInCluster,
     BadResponse,
+    InvalidClientId,
 }
 
 impl From<io::Error> for Error {
@@ -203,7 +123,7 @@ impl From<capnp::NotInSchema> for Error {
 }
 
 /// The term of a log entry.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Term(u64);
 impl From<u64> for Term {
     fn from(val: u64) -> Term {
@@ -229,7 +149,7 @@ impl ops::Sub<u64> for Term {
 }
 
 /// The index of a log entry.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LogIndex(u64);
 impl From<u64> for LogIndex {
     fn from(val: u64) -> LogIndex {
@@ -251,5 +171,58 @@ impl ops::Sub<u64> for LogIndex {
     type Output = LogIndex;
     fn sub(self, rhs: u64) -> LogIndex {
         LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
+    }
+}
+
+/// The id of a Raft server. Must be unique among the participants in a
+/// consensus group.
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+pub struct ServerId(u64);
+impl From<u64> for ServerId {
+    fn from(val: u64) -> ServerId {
+        ServerId(val)
+    }
+}
+impl Into<u64> for ServerId {
+    fn into(self) -> u64 {
+        self.0
+    }
+}
+impl fmt::Debug for ServerId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ServerId({})", self.0)
+    }
+}
+impl fmt::Display for ServerId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// The ID of a Raft client.
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+struct ClientId(Uuid);
+impl ClientId {
+    fn new() -> ClientId {
+        ClientId(Uuid::new_v4())
+    }
+    fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+    fn from_bytes(bytes: &[u8]) -> Result<ClientId> {
+        match Uuid::from_bytes(bytes) {
+            Some(uuid) => Ok(ClientId(uuid)),
+            None => Err(Error::Raft(ErrorKind::InvalidClientId)),
+        }
+    }
+}
+impl fmt::Debug for ClientId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ClientId({})", self.0)
+    }
+}
+impl fmt::Display for ClientId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
     }
 }

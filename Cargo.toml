@@ -10,11 +10,11 @@ git = "https://github.com/dwrensha/capnpc-rust"
 [dependencies]
 log = "*"
 rand = "*"
-rustc-serialize = "*"
 uuid = "*"
 
 [dependencies.capnp]
-git = "https://github.com/dwrensha/capnproto-rust"
+git = "https://github.com/danburkert/capnproto-rust"
+branch = "async"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio"

@@ -1,13 +1,33 @@
 @0xbdca3d7c76dab735;
 
+struct ConnectionPreamble {
+    # Every connection opened to a Raft server, whether it is from a peer server
+    # or a client, must begin with a ConnectionPreamble message. The Raft server
+    # will not reply to this message, and it is safe for the connecting process
+    # to immediately begin sending further messages. The connecting process must
+    # include its ID, which indicates if the connecting process is a server or
+    # client.
+
+    id :union {
+        server @0 :UInt64;
+        # Indicates that the connecting process is a Raft peer, and that all
+        # further messages in the connection (in both directions) will be of
+        # type Message.
+
+        client @1 :Data;
+        # Indicates that the connecting process is a client, and that all
+        # further messages sent by the client will be of type ClientRequest, and
+        # all replys from the server to the client will be of type
+        # ClientResponse.
+    }
+}
+
 struct Message {
     union {
         appendEntriesRequest @0 :AppendEntriesRequest;
         appendEntriesResponse @1 :AppendEntriesResponse;
         requestVoteResponse @2 :RequestVoteResponse;
         requestVoteRequest @3 :RequestVoteRequest;
-        clientAppendRequest @4 :ClientAppendRequest;
-        clientAppendResponse @5 :ClientAppendResponse;
     }
 }
 
@@ -91,22 +111,55 @@ struct RequestVoteResponse {
   }
 }
 
-struct ClientAppendRequest {
-    entry @0 :Data;
-    # An entry to append.
+struct ClientRequest {
+  union {
+    ping @0 :PingRequest;
+    proposal @1 :ProposalRequest;
+  }
 }
 
-struct ClientAppendResponse {
-    union {
-        success @0 :Void;
-        # The client request succeeded.
+struct ClientResponse {
+  union {
+    ping @0 :PingResponse;
+    proposal @1 :ProposalResponse;
+  }
+}
 
-        unknownLeader @1 :Void;
-        # The client request failed because the Raft node is not the leader,
-        # and does not know who the leader is.
+struct PingRequest {
+}
 
-        notLeader @2 :Text;
-        # The client request failed because the Raft node is not the leader.
-        # The value returned may be the address of the current leader.
-    }
+struct PingResponse {
+
+  term @0 :UInt64;
+  # The servers current term.
+
+  index @1 :UInt64;
+  # The servers current index.
+
+  state :union {
+  # The servers current state.
+    leader @2 :Void;
+    follower @3 :Void;
+    candidate @4 :Void;
+  }
+}
+
+struct ProposalRequest {
+  entry @0 :Data;
+  # An entry to append.
+}
+
+struct ProposalResponse {
+  union {
+    success @0 :Void;
+    # The proposal succeeded.
+
+    unknownLeader @1 :Void;
+    # The proposal failed because the Raft node is not the leader, and does
+    # not know who the leader is.
+
+    notLeader @2 :Text;
+    # The client request failed because the Raft node is not the leader.
+    # The value returned may be the address of the current leader.
+  }
 }

@@ -1,9 +1,9 @@
 use std::{error, fmt, result};
-use std::net::SocketAddr;
 
 use store::Store;
 
 use LogIndex;
+use ServerId;
 use Term;
 
 /// This is a `Store` implementation that stores entries in a simple in-memory vector. Other data
@@ -11,7 +11,7 @@ use Term;
 #[derive(Clone, Debug)]
 pub struct MemStore {
     current_term: Term,
-    voted_for: Option<SocketAddr>,
+    voted_for: Option<ServerId>,
     entries: Vec<(Term, Vec<u8>)>,
 }
 
@@ -66,11 +66,11 @@ impl Store for MemStore {
         self.current_term()
     }
 
-    fn voted_for(&self) -> result::Result<Option<SocketAddr>, Error> {
+    fn voted_for(&self) -> result::Result<Option<ServerId>, Error> {
         Ok(self.voted_for)
     }
 
-    fn set_voted_for(&mut self, address: SocketAddr) -> result::Result<(), Error> {
+    fn set_voted_for(&mut self, address: ServerId) -> result::Result<(), Error> {
         Ok(self.voted_for = Some(address))
     }
 
@@ -106,10 +106,10 @@ impl Store for MemStore {
 mod test {
 
     use std::str::FromStr;
-    use std::net::SocketAddr;
 
     use super::*;
     use LogIndex;
+    use ServerId;
     use Term;
     use store::Store;
 
@@ -117,7 +117,7 @@ mod test {
     fn test_current_term() {
         let mut store = MemStore::new();
         assert_eq!(Term(0), store.current_term().unwrap());
-        store.set_voted_for(SocketAddr::from_str("127.0.0.1:0").unwrap()).unwrap();
+        store.set_voted_for(ServerId::from(0)).unwrap();
         store.set_current_term(Term(42)).unwrap();
         assert_eq!(None, store.voted_for().unwrap());
         assert_eq!(Term(42), store.current_term().unwrap());
@@ -129,9 +129,9 @@ mod test {
     fn test_voted_for() {
         let mut store = MemStore::new();
         assert_eq!(None, store.voted_for().unwrap());
-        let addr = SocketAddr::from_str("127.0.0.1:0").unwrap();
-        store.set_voted_for(addr.clone()).unwrap();
-        assert_eq!(Some(addr), store.voted_for().unwrap());
+        let id = ServerId::from(0);
+        store.set_voted_for(id).unwrap();
+        assert_eq!(Some(id), store.voted_for().unwrap());
     }
 
     #[test]
