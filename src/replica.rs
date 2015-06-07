@@ -159,8 +159,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                               from: ServerId,
                               request: append_entries_request::Reader)
                               -> Actions {
-        assert!(self.peers.contains(&from),
-                "Received append entries request from unknown node {}.", &from);
         debug!("{:?}: AppendEntriesRequest from Replica({})", self, &from);
 
         let leader_term = Term(request.get_term());
@@ -245,9 +243,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                from: ServerId,
                                response: append_entries_response::Reader)
                                -> Actions {
-        assert!(self.peers.contains(&from),
-                "{:?} received AppendEntries response from unknown peer {}.",
-                self, &from);
         debug!("{:?}: AppendEntriesResponse from Replica({})", self, from);
 
         let local_term = self.current_term();
@@ -342,8 +337,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                             candidate: ServerId,
                             request: request_vote_request::Reader)
                             -> Actions {
-        assert!(self.peers.contains(&candidate),
-                "Received request vote request from unknown node {}.", &candidate);
         debug!("{:?}: RequestVoteRequest from Replica({})", self, &candidate);
 
         let candidate_term = Term(request.get_term());
@@ -384,7 +377,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                              from: ServerId,
                              response: request_vote_response::Reader)
                              -> Actions {
-        assert!(self.peers.contains(&from), "Received request vote response from unknown node {}.", from);
         debug!("{:?}: RequestVoteResponse from Replica({})", self, from);
 
         let local_term = self.current_term();
