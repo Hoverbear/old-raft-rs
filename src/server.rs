@@ -14,6 +14,7 @@ use mio::{
     ReadHint,
     Token,
 };
+use mio::Timeout as TimeoutHandle;
 use rand::{self, Rng};
 use capnp::{
     MallocMessageBuilder,
@@ -62,6 +63,7 @@ pub struct Server<S, M> where S: Store, M: StateMachine {
     connections: Slab<Connection>,
     peer_tokens: HashMap<ServerId, Token>,
     client_tokens: HashMap<ClientId, Token>,
+    timeouts: HashMap<Timeout, TimeoutHandle>,
 }
 
 /// The implementation of the Server.
@@ -84,6 +86,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             connections: Slab::new_starting_at(Token(1), 129),
             peer_tokens: HashMap::new(),
             client_tokens: HashMap::new(),
+            timeouts: HashMap::new(),
         };
         Ok((server, event_loop))
     }
@@ -164,7 +167,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     fn execute_actions(&mut self,
                        event_loop: &mut EventLoop<Server<S, M>>,
                        actions: Actions) {
-        let Actions { peer_messages, client_messages, timeouts } = actions;
+        let Actions { peer_messages, client_messages, timeouts, clear_timeouts } = actions;
 
         for (peer, message) in peer_messages {
             let _ = self.peer_connection(event_loop, peer)
@@ -175,19 +178,39 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                 let _ = connection.send_message(event_loop, message);
             }
         }
+        if clear_timeouts {
+            self.clear_timeouts(event_loop);
+        }
         for timeout in timeouts {
-            register_timeout(event_loop, timeout)
+            self.register_timeout(event_loop, timeout);
         }
     }
-}
 
-fn register_timeout<S, M>(event_loop: &mut EventLoop<Server<S, M>>, timeout: Timeout)
-where S: Store, M: StateMachine {
-    let ms = match timeout {
-        Timeout::Election => rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX),
-        Timeout::Heartbeat(_) => HEARTBEAT_DURATION,
-    };
-    event_loop.timeout_ms(Timeout::Election, ms).unwrap();
+
+    // Registers a new timeout.
+    fn register_timeout(&mut self,
+                        event_loop: &mut EventLoop<Server<S, M>>,
+                        timeout: Timeout) {
+        let ms = match timeout {
+            Timeout::Election(..) => rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX),
+            Timeout::Heartbeat(..) => HEARTBEAT_DURATION,
+        };
+
+        // Registering a timeout may only fail if the maximum number of timeouts
+        // is already registered, which is by default 65,536. We (should) use a
+        // maximum of one timeout per peer, so this unwrap should be safe.
+        let handle = event_loop.timeout_ms(timeout, ms).unwrap();
+        self.timeouts.insert(timeout, handle)
+            .map(|handle| event_loop.clear_timeout(handle));
+    }
+
+    // Clears all registered timeouts.
+    fn clear_timeouts(&mut self, event_loop: &mut EventLoop<Server<S, M>>) {
+        for (timeout, &handle) in self.timeouts.iter() {
+            assert!(event_loop.clear_timeout(handle), "unable to clear timeout: {:?}", timeout);
+        }
+        self.timeouts.clear();
+    }
 }
 
 impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {

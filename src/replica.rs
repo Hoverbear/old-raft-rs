@@ -22,7 +22,7 @@ use state::{ReplicaState, LeaderState, CandidateState, FollowerState};
 use state_machine::StateMachine;
 use store::Store;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Timeout {
     Election,
     Heartbeat(ServerId),
@@ -31,6 +31,7 @@ pub enum Timeout {
 pub struct Actions {
     pub peer_messages: Vec<(ServerId, Rc<MallocMessageBuilder>)>,
     pub client_messages: Vec<(ClientId, Rc<MallocMessageBuilder>)>,
+    pub clear_timeouts: bool,
     pub timeouts: Vec<Timeout>,
 }
 
@@ -39,6 +40,7 @@ impl Actions {
         Actions {
             peer_messages: vec![],
             client_messages: vec![],
+            clear_timeouts: false,
             timeouts: vec![],
         }
     }
@@ -49,6 +51,7 @@ impl Actions {
         Actions {
             peer_messages: vec![(peer_id, message)],
             client_messages: vec![],
+            clear_timeouts: false,
             timeouts: vec![],
         }
     }
@@ -150,7 +153,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     pub fn apply_timeout(&mut self, timeout: Timeout) -> Actions {
         match timeout {
             Timeout::Election => self.election_timeout(),
-            Timeout::Heartbeat(id) => self.heartbeat_timeout(id),
+            Timeout::Heartbeat(peer) => self.heartbeat_timeout(peer),
         }
     }
 
@@ -184,7 +187,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                     let leader_prev_log_index = LogIndex(request.get_prev_log_index());
                     let leader_prev_log_term = Term(request.get_prev_log_term());
 
-                    let latest_log_index = self.store.latest_log_index().unwrap();
+                    let latest_log_index = self.latest_log_index();
                     if latest_log_index < leader_prev_log_index {
                         messages::append_entries_response_inconsistent_prev_entry(current_term)
                     } else {
@@ -247,7 +250,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
         let local_term = self.current_term();
         let responder_term = Term::from(response.get_term());
-        let local_latest_log_index = self.store.latest_log_index().unwrap();
+        let local_latest_log_index = self.latest_log_index();
 
         if local_term < responder_term {
             // Responder has a higher term number. Relinquish leader position (if it is held), and
@@ -301,11 +304,11 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             }
         }
 
-        // TODO: set a new heartbeat
         // TODO: add client responses based on new commit index
 
         let next_index = self.leader_state.next_index(&from);
         if next_index <= local_latest_log_index {
+            // If the replica is behind, send it entries to catch up.
             let prev_log_index = next_index - 1;
             let (prev_log_term, _) = self.store.entry(prev_log_index).unwrap();
 
@@ -328,7 +331,11 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             self.leader_state.set_next_index(from, local_latest_log_index + 1);
             Actions::with_peer_message(from, Rc::new(message))
         } else {
-            Actions::new()
+            // If the replica is caught up, set a heartbeat timeout.
+            let timeout = Timeout::Heartbeat(from);
+            let mut actions = Actions::new();
+            actions.timeouts.push(timeout);
+            actions
         }
     }
 
@@ -342,7 +349,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         let candidate_term = Term(request.get_term());
         let candidate_index = LogIndex(request.get_last_log_index());
         let local_term = self.current_term();
-        let local_index = self.store.latest_log_index().unwrap();
+        let local_index = self.latest_log_index();
 
         let new_local_term = if candidate_term > local_term {
             self.store.set_current_term(candidate_term).unwrap();
@@ -416,21 +423,23 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Trigger a heartbeat timeout on the Raft replica.
-    ///
-    /// The provided AppendEntriesRequest builder may be initialized with a message to send to each
-    /// cluster peer.
-    fn heartbeat_timeout(&mut self, _id: ServerId) -> Actions {
+    fn heartbeat_timeout(&mut self, peer: ServerId) -> Actions {
         debug!("{:?}: HeartbeatTimeout", self);
-        /*
-        // Send a heartbeat
-        message.set_term(self.current_term().into());
-        message.set_prev_log_index(self.store.latest_log_index().unwrap().into());
-        message.set_prev_log_term(self.store.latest_log_term().unwrap().into());
-        message.set_leader_commit(self.commit_index.into());
-        message.init_entries(0);
-        */
-        // TODO: send an AppendEntries heartbeat
-        unimplemented!()
+        assert!(self.is_leader());
+        let mut actions = Actions::new();
+        let mut message = MallocMessageBuilder::new_default();
+        {
+            let mut request = message.init_root::<message::Builder>()
+                                     .init_append_entries_request();
+            request.set_term(self.current_term().into());
+            request.set_prev_log_index(self.latest_log_index().into());
+            request.set_prev_log_term(self.store.latest_log_term().unwrap().into());
+            request.set_leader_commit(self.commit_index.into());
+            request.init_entries(0);
+        }
+        actions.peer_messages.push((peer, Rc::new(message)));
+
+        actions
     }
 
     /// Trigger an election timeout on the Raft replica.
@@ -439,22 +448,22 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// cluster peer.
     fn election_timeout(&mut self) -> Actions {
         debug!("{:?}: ElectionTimeout", self);
+        assert!(!self.is_leader());
         let mut actions = Actions::new();
-        if !self.is_leader() {
-            if self.peers.is_empty() {
-                // Solitary replica special case; jump straight to leader status
-                info!("{:?}: transition to Leader", self);
-                assert!(self.is_follower());
-                assert!(self.store.voted_for().unwrap().is_none());
-                self.store.inc_current_term().unwrap();
-                self.store.set_voted_for(self.id).unwrap();
-                let latest_log_index = self.store.latest_log_index().unwrap();
-                self.state = ReplicaState::Leader;
-                self.leader_state.reinitialize(latest_log_index);
-            } else {
-                self.transition_to_candidate(&mut actions);
-            }
+        if self.peers.is_empty() {
+            // Solitary replica special case; jump straight to leader status
+            info!("{:?}: transition to Leader", self);
+            assert!(self.is_follower());
+            assert!(self.store.voted_for().unwrap().is_none());
+            self.store.inc_current_term().unwrap();
+            self.store.set_voted_for(self.id).unwrap();
+            let latest_log_index = self.latest_log_index();
+            self.state = ReplicaState::Leader;
+            self.leader_state.reinitialize(latest_log_index);
+        } else {
+            self.transition_to_candidate(&mut actions);
         }
+
         actions
     }
 
@@ -465,7 +474,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     fn transition_to_leader(&mut self, actions: &mut Actions) {
         info!("{:?}: Transition to Leader", self);
         let current_term = self.current_term();
-        let latest_log_index = self.store.latest_log_index().unwrap();
+        let latest_log_index = self.latest_log_index();
         let latest_log_term = self.store.latest_log_term().unwrap();
         self.state = ReplicaState::Leader;
         self.leader_state.reinitialize(latest_log_index);
@@ -499,7 +508,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         self.candidate_state.record_vote(self.id);
 
         let current_term = self.current_term();
-        let latest_index = self.store.latest_log_index().unwrap();
+        let latest_index = self.latest_log_index();
         let latest_term = self.store.latest_log_term().unwrap();
 
         let mut message = MallocMessageBuilder::new_default();
@@ -515,6 +524,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         for &peer in self.peers().iter() {
             actions.peer_messages.push((peer, message_rc.clone()));
         }
+        actions.timeouts.push(Timeout::Election);
     }
 
     /// Advance the commit index and apply committed entries to the state machine, if possible.
@@ -573,6 +583,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// Returns the current term of the replica.
     fn current_term(&self) -> Term {
         self.store.current_term().unwrap()
+    }
+
+    fn latest_log_index(&self) -> LogIndex {
+        self.store.latest_log_index().unwrap()
     }
 
     /// Get the cluster quorum majority size.
