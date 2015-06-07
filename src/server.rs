@@ -74,9 +74,8 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
            state_machine: M) -> Result<(Server<S, M>, EventLoop<Server<S, M>>)> {
         assert!(!peers.contains_key(&id));
         let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
-        let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
+        let event_loop = try!(EventLoop::<Server<S, M>>::new());
         let listener = try!(TcpListener::bind(&addr));
-        register_timeout(&mut event_loop, Timeout::Election);
         let server = Server {
             id: id,
             peers: peers,
@@ -144,7 +143,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                 let token: Token = self.connections.insert(Connection::peer(peer_id, peer_addr, socket)).unwrap();
                 self.connections[token].token = token;
                 try_warn!(event_loop.register_opt(&self.connections[token].stream,
-                                                  token, Interest::readable(), poll_opt()),
+                                                  token, self.connections[token].interest, poll_opt()),
                           "Server({}): unable to register connection with event loop: {}",
                           self.id);
                 entry.insert(token);
@@ -219,7 +218,8 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
                 // Register the connection.
                 self.connections[token].token = token;
-                reactor.register_opt(&self.connections[token].stream, token, Interest::readable(), poll_opt())
+                reactor.register_opt(&self.connections[token].stream, token,
+                                     self.connections[token].interest, poll_opt())
                        .unwrap();
             },
             token if hint.is_hup() => {
@@ -319,7 +319,7 @@ impl Connection {
             id: ConnectionType::Unknown,
             address: address,
             token: Token(0),
-            interest: Interest::hup(),
+            interest: Interest::hup() | Interest::readable(),
             read_continuation: None,
             write_continuation: None,
             write_queue: VecDeque::new(),
@@ -332,7 +332,7 @@ impl Connection {
             id: ConnectionType::Peer(id),
             address: address,
             token: Token(0),
-            interest: Interest::hup(),
+            interest: Interest::hup() | Interest::readable(),
             read_continuation: None,
             write_continuation: None,
             write_queue: VecDeque::new(),
@@ -384,7 +384,6 @@ impl Connection {
             AsyncValue::Continue(continuation) => {
                 // the read only partially completed. Save the continuation and return.
                 self.read_continuation = Some(continuation);
-                self.interest.insert(Interest::readable());
                 try!(event_loop.reregister(&self.stream, self.token, self.interest, poll_opt()));
                 Ok(None)
             },
@@ -398,12 +397,12 @@ impl Connection {
                           -> Result<()>
     where S: Store, M: StateMachine {
         debug!("{:?}: send_message", self);
-        self.write_queue.push_back(message);
         if self.write_queue.is_empty() {
             self.interest.insert(Interest::writable());
             try_warn!(event_loop.reregister(&self.stream, self.token, self.interest, poll_opt()),
                       "{:?}: unable to register with event loop: {}", self);
         }
+        self.write_queue.push_back(message);
         Ok(())
     }
 
