@@ -105,8 +105,6 @@ impl Store for MemStore {
 #[cfg(test)]
 mod test {
 
-    use std::str::FromStr;
-
     use super::*;
     use LogIndex;
     use ServerId;

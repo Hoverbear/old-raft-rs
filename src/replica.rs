@@ -104,6 +104,13 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
     }
 
+    /// Returns the set of initial action which should be executed upon startup.
+    pub fn init(&self) -> Actions {
+        let mut actions = Actions::new();
+        actions.timeouts.push(Timeout::Election);
+        actions
+    }
+
     pub fn peers(&self) -> &HashSet<ServerId> {
         &self.peers
     }
@@ -410,7 +417,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// Apply a client proposal to the Raft replica.
     fn proposal_request(&mut self,
                         from: ClientId,
-                        request: proposal_request::Reader)
+                        _request: proposal_request::Reader)
                         -> Actions {
         debug!("{:?}: Proposal from Client({})", self, from);
         unimplemented!()
@@ -420,7 +427,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     ///
     /// The provided AppendEntriesRequest builder may be initialized with a message to send to each
     /// cluster peer.
-    fn heartbeat_timeout(&mut self, id: ServerId) -> Actions {
+    fn heartbeat_timeout(&mut self, _id: ServerId) -> Actions {
         debug!("{:?}: HeartbeatTimeout", self);
         /*
         // Send a heartbeat
@@ -598,21 +605,12 @@ mod test {
     use std::collections::{HashSet, HashMap};
     use std::io::Cursor;
     use std::rc::Rc;
-    use std::str::FromStr;
-    use std::sync::mpsc;
 
-    use capnp::{MallocMessageBuilder, MessageBuilder, MessageReader, ReaderOptions};
+    use capnp::{MallocMessageBuilder, MessageBuilder, ReaderOptions};
     use capnp::serialize::{self, OwnedSpaceMessageReader};
 
     use ClientId;
     use ServerId;
-    use Term;
-    use messages_capnp::{
-        append_entries_request,
-        append_entries_response,
-        request_vote_request,
-        request_vote_response,
-    };
     use replica::{Actions, Replica};
     use state_machine::NullStateMachine;
     use store::MemStore;
@@ -691,7 +689,7 @@ mod test {
     #[test]
     fn test_election() {
         let mut replicas = new_cluster(2);
-        let mut replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
         let leader = &replica_ids[0];
         let follower = &replica_ids[1];
         elect_leader(leader.clone(), &mut replicas);

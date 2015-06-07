@@ -16,7 +16,6 @@ use raft::{state_machine, store, ServerId};
 const USAGE: &'static str =
     "Usage:\n\t./dummy <server-id> <server-address> [<peer-id> <peer-address>]*";
 
-
 fn main() {
     env_logger::init().unwrap();
     let args: Vec<String> = env::args().skip(1).collect();
@@ -35,9 +34,8 @@ fn main() {
     let store = store::MemStore::new();
     let state_machine = state_machine::NullStateMachine;
 
-    raft::Server::spawn(id, addr,
-                        servers.into_iter().skip(1).collect(),
-                        store,
-                        state_machine)
-                 .unwrap().join().unwrap();
+    raft::Server::run(id, addr,
+                      servers.into_iter().skip(1).collect(),
+                      store,
+                      state_machine).unwrap();
 }

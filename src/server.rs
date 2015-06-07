@@ -1,5 +1,5 @@
 use std::fmt;
-use std::collections::{hash_map, HashMap, HashSet, VecDeque};
+use std::collections::{hash_map, HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::thread::{self, JoinHandle};
@@ -67,6 +67,48 @@ pub struct Server<S, M> where S: Store, M: StateMachine {
 /// The implementation of the Server.
 impl<S, M> Server<S, M> where S: Store, M: StateMachine {
 
+    fn new(id: ServerId,
+           addr: SocketAddr,
+           peers: HashMap<ServerId, SocketAddr>,
+           store: S,
+           state_machine: M) -> Result<(Server<S, M>, EventLoop<Server<S, M>>)> {
+        assert!(!peers.contains_key(&id));
+        let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
+        let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
+        let listener = try!(TcpListener::bind(&addr));
+        register_timeout(&mut event_loop, Timeout::Election);
+        let server = Server {
+            id: id,
+            peers: peers,
+            replica: replica,
+            listener: listener,
+            connections: Slab::new_starting_at(Token(1), 129),
+            peer_tokens: HashMap::new(),
+            client_tokens: HashMap::new(),
+        };
+        Ok((server, event_loop))
+    }
+
+    /// Runs a new Raft server in the current thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID of the new node.
+    /// * `addr` - The address of the new node.
+    /// * `peers` - The ID and address of all peers in the Raft cluster.
+    /// * `store` - The persistent log store.
+    /// * `state_machine` - The client state machine to which client commands will be applied.
+    pub fn run(id: ServerId,
+               addr: SocketAddr,
+               peers: HashMap<ServerId, SocketAddr>,
+               store: S,
+               state_machine: M) -> Result<()> {
+        let (mut server, mut event_loop) = try!(Server::new(id, addr, peers, store, state_machine));
+        let actions = server.replica.init();
+        server.execute_actions(&mut event_loop, actions);
+        event_loop.run(&mut server).map_err(From::from)
+    }
+
     /// Spawns a new Raft server in a background thread.
     ///
     /// # Arguments
@@ -80,25 +122,9 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                  addr: SocketAddr,
                  peers: HashMap<ServerId, SocketAddr>,
                  store: S,
-                 state_machine: M) -> Result<JoinHandle<()>> {
-        assert!(!peers.contains_key(&id));
-        let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
-        let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
-        let listener = try!(TcpListener::bind(&addr));
-        register_timeout(&mut event_loop, Timeout::Election);
-
+                 state_machine: M) -> Result<JoinHandle<Result<()>>> {
         thread::Builder::new().name(format!("raft::Server({})", id)).spawn(move || {
-            debug!("Server({}): Spawning", id);
-            let mut raft_node = Server {
-                id: id,
-                peers: peers,
-                replica: replica,
-                listener: listener,
-                connections: Slab::new_starting_at(Token(1), 129),
-                peer_tokens: HashMap::new(),
-                client_tokens: HashMap::new(),
-            };
-            event_loop.run(&mut raft_node).unwrap();
+            Server::run(id, addr, peers, store, state_machine)
         }).map_err(From::from)
     }
 
@@ -111,13 +137,16 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             hash_map::Entry::Occupied(entry) => *entry.get(),
             hash_map::Entry::Vacant(entry) => {
                 let peer_addr = self.peers[&peer_id];
-                let socket: TcpStream = try!(TcpStream::connect(&peer_addr));
+                let socket: TcpStream =
+                    try_warn!(TcpStream::connect(&peer_addr),
+                              "Server({}): unable to connect to peer Server {{ id: {}, address: {} }}: {}",
+                              self.id, peer_id, peer_addr);
                 let token: Token = self.connections.insert(Connection::peer(peer_id, peer_addr, socket)).unwrap();
                 self.connections[token].token = token;
                 try_warn!(event_loop.register_opt(&self.connections[token].stream,
                                                   token, Interest::readable(), poll_opt()),
-                          "Server({}): unable to connect to peer Server {{ id: {}, address: {} }}: {}",
-                          self.id, peer_id, peer_addr);
+                          "Server({}): unable to register connection with event loop: {}",
+                          self.id);
                 entry.insert(token);
                 token
             },
@@ -139,15 +168,12 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         let Actions { peer_messages, client_messages, timeouts } = actions;
 
         for (peer, message) in peer_messages {
-            self.peer_connection(event_loop, peer)
-                .and_then(|connection| connection.send_message(event_loop, message))
-                .unwrap(); // TODO: log and ignore
+            let _ = self.peer_connection(event_loop, peer)
+                        .and_then(|connection| connection.send_message(event_loop, message));
         }
         for (client, message) in client_messages {
             if let Some(connection) = self.client_connection(client) {
-                connection.send_message(event_loop, message)
-                          .unwrap(); // TODO: log and ignore
-
+                let _ = connection.send_message(event_loop, message);
             }
         }
         for timeout in timeouts {
@@ -165,18 +191,17 @@ where S: Store, M: StateMachine {
     event_loop.timeout_ms(Timeout::Election, ms).unwrap();
 }
 
-
 impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
     type Message = ();
     type Timeout = Timeout;
 
     fn writable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
-        debug!("{:?}: Writeable {:?}", self, token);
+        debug!("{:?}: connection writable: {:?}", self, self.connections[token]);
         self.connections[token].writable(reactor).unwrap();
     }
 
-    fn readable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, _hint: ReadHint) {
+    fn readable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, hint: ReadHint) {
         match token {
             LISTENER => {
                 let stream = self.listener.accept().unwrap().unwrap();
@@ -192,12 +217,26 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     },
                 };
 
-                // Register the connection
+                // Register the connection.
                 self.connections[token].token = token;
                 reactor.register_opt(&self.connections[token].stream, token, Interest::readable(), poll_opt())
                        .unwrap();
             },
+            token if hint.is_hup() => {
+                debug!("{:?}: connection closed: {:?}, hint: {:?}", self, self.connections[token], hint);
+                let connection = self.connections.remove(token).unwrap();
+                match connection.id {
+                    ConnectionType::Peer(ref id) => {
+                        self.peer_tokens.remove(id);
+                    },
+                    ConnectionType::Client(ref id) => {
+                        self.client_tokens.remove(id);
+                    },
+                    _ => (),
+                }
+            },
             token => {
+                debug!("{:?}: connection readable: {:?}, hint: {:?}", self, self.connections[token], hint);
                 // Read messages from the socket until there are no more.
                 while let Some(message) = self.connections[token].readable(reactor).unwrap() {
                     match self.connections[token].id {
@@ -225,7 +264,6 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                             }
                         }
                     }
-                    let from = self.connections[token].id;
                 }
             }
         }
@@ -384,5 +422,67 @@ impl fmt::Debug for Connection {
                 write!(fmt, "UnknownConnection {{ address: {} }}", self.address)
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    extern crate env_logger;
+
+    use std::collections::HashMap;
+    use std::net::{TcpListener, SocketAddr};
+    use std::rc::Rc;
+    use std::str::FromStr;
+
+    use ServerId;
+    use messages;
+    use replica::Actions;
+    use state_machine::NullStateMachine;
+    use store::MemStore;
+    use super::*;
+
+    use mio::EventLoop;
+
+    type TestServer = Server<MemStore, NullStateMachine>;
+
+    fn new_test_server() -> (TestServer, EventLoop<TestServer>) {
+        Server::new(ServerId::from(0),
+                    SocketAddr::from_str("127.0.0.1:0").unwrap(),
+                    HashMap::new(),
+                    MemStore::new(),
+                    NullStateMachine)
+              .unwrap()
+    }
+
+    /// Attempts to grab a local, unbound socket address for testing.
+    fn get_unbound_address() -> SocketAddr {
+        TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+    }
+
+    #[test]
+    pub fn test_illegal_peer_address() {
+        let _ = env_logger::init();
+        let (mut server, mut event_loop) = new_test_server();
+        let peer_id = ServerId::from(1);
+        let peer_addr = SocketAddr::from_str("127.0.0.1:0").unwrap();
+        server.peers.insert(peer_id, peer_addr);
+        let actions = Actions::with_peer_message(peer_id, Rc::new(messages::ping_request()));
+        server.execute_actions(&mut event_loop, actions);
+        event_loop.run_once(&mut server).unwrap();
+        assert!(server.peer_tokens.is_empty());
+    }
+
+    #[test]
+    pub fn test_unbound_peer_address() {
+        let _ = env_logger::init();
+        let (mut server, mut event_loop) = new_test_server();
+        let peer_id = ServerId::from(1);
+        let peer_addr = get_unbound_address();
+        server.peers.insert(peer_id, peer_addr);
+        let actions = Actions::with_peer_message(peer_id, Rc::new(messages::ping_request()));
+        server.execute_actions(&mut event_loop, actions);
+        event_loop.run_once(&mut server).unwrap();
+        assert!(server.peer_tokens.is_empty());
     }
 }
