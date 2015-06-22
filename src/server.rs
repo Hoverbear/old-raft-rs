@@ -11,7 +11,6 @@ use mio::{
     Handler,
     Interest,
     PollOpt,
-    ReadHint,
     Token,
 };
 use mio::Timeout as TimeoutHandle;
@@ -33,6 +32,7 @@ use capnp::serialize::{
 use ClientId;
 use Result;
 use ServerId;
+use messages;
 use messages_capnp::connection_preamble;
 use replica::{Replica, Actions, Timeout};
 use state_machine::StateMachine;
@@ -76,8 +76,9 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
            state_machine: M) -> Result<(Server<S, M>, EventLoop<Server<S, M>>)> {
         assert!(!peers.contains_key(&id));
         let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
-        let event_loop = try!(EventLoop::<Server<S, M>>::new());
+        let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
         let listener = try!(TcpListener::bind(&addr));
+        try!(event_loop.register(&listener, LISTENER));
         let server = Server {
             id: id,
             peers: peers,
@@ -150,6 +151,8 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                           "Server({}): unable to register connection with event loop: {}",
                           self.id);
                 entry.insert(token);
+                self.connections[token].write_queue.push_back(messages::server_connection_preamble(self.id));
+                info!("opening new connection to {:?}", self.connections[token]);
                 token
             },
         };
@@ -170,6 +173,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         let Actions { peer_messages, client_messages, timeouts, clear_timeouts } = actions;
 
         for (peer, message) in peer_messages {
+            debug!("sending message to peer: {:?}", peer);
             let _ = self.peer_connection(event_loop, peer)
                         .and_then(|connection| connection.send_message(event_loop, message));
         }
@@ -186,8 +190,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         }
     }
 
-
-    // Registers a new timeout.
+    /// Registers a new timeout.
     fn register_timeout(&mut self,
                         event_loop: &mut EventLoop<Server<S, M>>,
                         timeout: Timeout) {
@@ -204,12 +207,26 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             .map(|handle| event_loop.clear_timeout(handle));
     }
 
-    // Clears all registered timeouts.
+    /// Clears all registered timeouts.
     fn clear_timeouts(&mut self, event_loop: &mut EventLoop<Server<S, M>>) {
         for (timeout, &handle) in self.timeouts.iter() {
             assert!(event_loop.clear_timeout(handle), "unable to clear timeout: {:?}", timeout);
         }
         self.timeouts.clear();
+    }
+
+    /// Closes the connection corresponding to the token.
+    fn close_connection(&mut self, token: Token) {
+        let connection = self.connections.remove(token).unwrap();
+        match connection.id {
+            ConnectionType::Peer(ref id) => {
+                self.peer_tokens.remove(id);
+            },
+            ConnectionType::Client(ref id) => {
+                self.client_tokens.remove(id);
+            },
+            _ => (),
+        }
     }
 }
 
@@ -218,14 +235,30 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
     type Message = ();
     type Timeout = Timeout;
 
-    fn writable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token) {
-        debug!("{:?}: connection writable: {:?}", self, self.connections[token]);
-        self.connections[token].writable(reactor).unwrap();
-    }
+    fn ready(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, events: Interest) {
 
-    fn readable(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, hint: ReadHint) {
-        match token {
-            LISTENER => {
+        if events.is_error() {
+            assert!(token != LISTENER, "Unexpected error event from LISTENER");
+            warn!("error event on connection {:?}", self.connections[token]);
+            self.close_connection(token);
+            return;
+        }
+
+        if events.is_hup() {
+            assert!(token != LISTENER, "Unexpected hup event from LISTENER");
+            info!("hup event on connection {:?}", self.connections[token]);
+            self.close_connection(token);
+            return;
+        }
+
+        if events.is_writable() {
+            assert!(token != LISTENER, "Unexpected writeable event for LISTENER");
+            debug!("{:?}: connection writable: {:?}", self, self.connections[token]);
+            self.connections[token].writable(reactor).unwrap();
+        }
+
+        if events.is_readable() {
+            if token == LISTENER {
                 let stream = self.listener.accept().unwrap().unwrap();
                 let addr = stream.peer_addr().unwrap();
                 debug!("{:?}: new connection received from {}", self, &addr);
@@ -238,28 +271,13 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                         return;
                     },
                 };
-
                 // Register the connection.
                 self.connections[token].token = token;
                 reactor.register_opt(&self.connections[token].stream, token,
                                      self.connections[token].interest, poll_opt())
                        .unwrap();
-            },
-            token if hint.is_hup() => {
-                debug!("{:?}: connection closed: {:?}, hint: {:?}", self, self.connections[token], hint);
-                let connection = self.connections.remove(token).unwrap();
-                match connection.id {
-                    ConnectionType::Peer(ref id) => {
-                        self.peer_tokens.remove(id);
-                    },
-                    ConnectionType::Client(ref id) => {
-                        self.client_tokens.remove(id);
-                    },
-                    _ => (),
-                }
-            },
-            token => {
-                debug!("{:?}: connection readable: {:?}, hint: {:?}", self, self.connections[token], hint);
+            } else {
+                debug!("{:?}: connection readable: {:?}, events: {:?}", self, self.connections[token], events);
                 // Read messages from the socket until there are no more.
                 while let Some(message) = self.connections[token].readable(reactor).unwrap() {
                     match self.connections[token].id {
@@ -276,6 +294,8 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                             match preamble.get_id().which().unwrap() {
                                 connection_preamble::id::Which::Server(id) => {
                                     self.connections[token].id = ConnectionType::Peer(ServerId::from(id));
+                                    assert!(self.peer_tokens.get(&ServerId(id)).is_none(), "connection already exists to {:?}", self.connections[token]);
+                                    self.peer_tokens.insert(ServerId(id), token);
                                 },
                                 connection_preamble::id::Which::Client(Ok(id)) => {
                                     self.connections[token].id = ConnectionType::Client(ClientId::from_bytes(id).unwrap());
@@ -355,7 +375,7 @@ impl Connection {
             id: ConnectionType::Peer(id),
             address: address,
             token: Token(0),
-            interest: Interest::hup() | Interest::readable(),
+            interest: Interest::hup() | Interest::readable() | Interest::writable(),
             read_continuation: None,
             write_continuation: None,
             write_queue: VecDeque::new(),
@@ -367,7 +387,7 @@ impl Connection {
                       event_loop: &mut EventLoop<Server<S, M>>)
                       -> Result<()>
     where S: Store, M: StateMachine {
-        debug!("{:?}: writable", self);
+        debug!("{:?}: writable; queued messages: {}", self, self.write_queue.len());
 
         while let Some(message) = self.write_queue.pop_front() {
             match try!(write_message_async(&mut self.stream, &*message, self.write_continuation.take())) {
@@ -507,4 +527,7 @@ mod test {
         event_loop.run_once(&mut server).unwrap();
         assert!(server.peer_tokens.is_empty());
     }
+
+
+
 }

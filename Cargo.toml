@@ -17,7 +17,7 @@ git = "https://github.com/danburkert/capnproto-rust"
 branch = "async"
 
 [dependencies.mio]
-git = "https://github.com/carllerche/mio"
+git = "https://github.com/danburkert/mio"
 
 [dev-dependencies]
 env_logger = "*"

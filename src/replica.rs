@@ -501,7 +501,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// cluster peer.
     fn transition_to_candidate(&mut self, actions: &mut Actions) {
         info!("{:?}: Transition to Candidate", self);
-        self.store.inc_current_term().unwrap();
         self.store.set_voted_for(self.id).unwrap();
         self.state = ReplicaState::Candidate;
         self.candidate_state.clear();
@@ -597,11 +596,15 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 }
 
-impl <S, M> fmt::Debug for Replica<S, M> {
+impl <S, M> fmt::Debug for Replica<S, M> where S: Store, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(fmt, "Replica("));
+        try!(write!(fmt, "Replica {{ id: "));
         try!(fmt::Display::fmt(&self.id, fmt));
-        write!(fmt, ")")
+        try!(write!(fmt, ", term: "));
+        try!(fmt::Display::fmt(&self.current_term(), fmt));
+        try!(write!(fmt, ", index: "));
+        try!(fmt::Display::fmt(&self.latest_log_index(), fmt));
+        write!(fmt, " }}")
     }
 }
 

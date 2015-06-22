@@ -8,8 +8,25 @@ use capnp::{
     MessageBuilder,
 };
 
-use {Term, LogIndex};
-use messages_capnp::{client_request, client_response, message};
+use {Term, LogIndex, ServerId};
+use messages_capnp::{
+    client_request,
+    client_response,
+    connection_preamble,
+    message
+};
+
+// ConnectionPreamble
+
+pub fn server_connection_preamble(id: ServerId) -> Rc<MallocMessageBuilder> {
+    let mut message = MallocMessageBuilder::new_default();
+    {
+        message.init_root::<connection_preamble::Builder>()
+               .init_id()
+               .set_server(id.into());
+    }
+    Rc::new(message)
+}
 
 // AppendEntries
 

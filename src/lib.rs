@@ -158,6 +158,11 @@ impl ops::Sub<u64> for Term {
         Term(self.0.checked_sub(rhs).expect("underflow while decrementing Term"))
     }
 }
+impl fmt::Display for Term {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// The index of a log entry.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -182,6 +187,11 @@ impl ops::Sub<u64> for LogIndex {
     type Output = LogIndex;
     fn sub(self, rhs: u64) -> LogIndex {
         LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
+    }
+}
+impl fmt::Display for LogIndex {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
