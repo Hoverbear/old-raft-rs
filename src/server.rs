@@ -152,7 +152,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                           self.id);
                 entry.insert(token);
                 self.connections[token].write_queue.push_back(messages::server_connection_preamble(self.id));
-                info!("opening new connection to {:?}", self.connections[token]);
+                info!("opening new connection: {:?}", self.connections[token]);
                 token
             },
         };
@@ -170,10 +170,10 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     fn execute_actions(&mut self,
                        event_loop: &mut EventLoop<Server<S, M>>,
                        actions: Actions) {
+        debug!("{:?}: executing actions: {:?}", self, actions);
         let Actions { peer_messages, client_messages, timeouts, clear_timeouts } = actions;
 
         for (peer, message) in peer_messages {
-            debug!("sending message to peer: {:?}", peer);
             let _ = self.peer_connection(event_loop, peer)
                         .and_then(|connection| connection.send_message(event_loop, message));
         }
@@ -239,21 +239,20 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
         if events.is_error() {
             assert!(token != LISTENER, "Unexpected error event from LISTENER");
-            warn!("error event on connection {:?}", self.connections[token]);
+            warn!("{:?}: error event on connection {:?}", self, self.connections[token]);
             self.close_connection(token);
             return;
         }
 
         if events.is_hup() {
             assert!(token != LISTENER, "Unexpected hup event from LISTENER");
-            info!("hup event on connection {:?}", self.connections[token]);
+            trace!("{:?}: hup event on connection {:?}", self, self.connections[token]);
             self.close_connection(token);
             return;
         }
 
         if events.is_writable() {
             assert!(token != LISTENER, "Unexpected writeable event for LISTENER");
-            debug!("{:?}: connection writable: {:?}", self, self.connections[token]);
             self.connections[token].writable(reactor).unwrap();
         }
 
@@ -261,7 +260,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
             if token == LISTENER {
                 let stream = self.listener.accept().unwrap().unwrap();
                 let addr = stream.peer_addr().unwrap();
-                debug!("{:?}: new connection received from {}", self, &addr);
+                trace!("{:?}: new connection received from {}", self, &addr);
                 let conn = Connection::unknown(stream);
                 let token = match self.connections.insert(conn) {
                     Ok(token) => token,
@@ -277,7 +276,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                                      self.connections[token].interest, poll_opt())
                        .unwrap();
             } else {
-                debug!("{:?}: connection readable: {:?}, events: {:?}", self, self.connections[token], events);
+                trace!("{:?}: connection readable: {:?}, events: {:?}", self, self.connections[token], events);
                 // Read messages from the socket until there are no more.
                 while let Some(message) = self.connections[token].readable(reactor).unwrap() {
                     match self.connections[token].id {
@@ -294,7 +293,8 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                             match preamble.get_id().which().unwrap() {
                                 connection_preamble::id::Which::Server(id) => {
                                     self.connections[token].id = ConnectionType::Peer(ServerId::from(id));
-                                    assert!(self.peer_tokens.get(&ServerId(id)).is_none(), "connection already exists to {:?}", self.connections[token]);
+                                    assert!(self.peer_tokens.get(&ServerId(id)).is_none(),
+                                            "connection already exists to {:?}", self.connections[token]);
                                     self.peer_tokens.insert(ServerId(id), token);
                                 },
                                 connection_preamble::id::Which::Client(Ok(id)) => {
@@ -313,7 +313,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
     }
 
     fn timeout(&mut self, reactor: &mut EventLoop<Server<S, M>>, timeout: Timeout) {
-        debug!("{:?}: Timeout: {:?}", self, &timeout);
+        trace!("{:?}: Timeout: {:?}", self, &timeout);
         let actions = self.replica.apply_timeout(timeout);
         self.execute_actions(reactor, actions);
     }
@@ -387,7 +387,7 @@ impl Connection {
                       event_loop: &mut EventLoop<Server<S, M>>)
                       -> Result<()>
     where S: Store, M: StateMachine {
-        debug!("{:?}: writable; queued messages: {}", self, self.write_queue.len());
+        trace!("{:?}: writable; queued message count: {}", self, self.write_queue.len());
 
         while let Some(message) = self.write_queue.pop_front() {
             match try!(write_message_async(&mut self.stream, &*message, self.write_continuation.take())) {
@@ -419,7 +419,7 @@ impl Connection {
                       event_loop: &mut EventLoop<Server<S, M>>)
                       -> Result<Option<OwnedSpaceMessageReader>>
     where S: Store, M: StateMachine {
-        debug!("{:?}: readable", self);
+        trace!("{:?}: readable", self);
         match try!(read_message_async(&mut self.stream, ReaderOptions::new(), self.read_continuation.take())) {
             AsyncValue::Complete(message) => {
                 Ok(Some(message))
@@ -439,7 +439,7 @@ impl Connection {
                           message: Rc<MallocMessageBuilder>)
                           -> Result<()>
     where S: Store, M: StateMachine {
-        debug!("{:?}: send_message", self);
+        trace!("{:?}: send_message", self);
         if self.write_queue.is_empty() {
             self.interest.insert(Interest::writable());
             try_warn!(event_loop.reregister(&self.stream, self.token, self.interest, poll_opt()),
@@ -448,7 +448,6 @@ impl Connection {
         self.write_queue.push_back(message);
         Ok(())
     }
-
 }
 
 impl fmt::Debug for Connection {
@@ -527,7 +526,4 @@ mod test {
         event_loop.run_once(&mut server).unwrap();
         assert!(server.peer_tokens.is_empty());
     }
-
-
-
 }

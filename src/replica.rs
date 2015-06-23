@@ -35,6 +35,20 @@ pub struct Actions {
     pub timeouts: Vec<Timeout>,
 }
 
+impl fmt::Debug for Actions {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        let peer_messages: Vec<ServerId> = self.peer_messages
+                                               .iter().map(|peer_message| peer_message.0)
+                                               .collect();
+        let client_messages: Vec<ClientId> = self.client_messages
+                                                 .iter().map(|client_message| client_message.0)
+                                                 .collect();
+        write!(fmt, "Actions {{ peer_messages: {:?}, client_messages: {:?}, \
+                     clear_timeouts: {:?}, timeouts: {:?} }}",
+               peer_messages, client_messages, self.clear_timeouts, self.timeouts)
+    }
+}
+
 impl Actions {
     pub fn new() -> Actions {
         Actions {
@@ -344,15 +358,16 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                             candidate: ServerId,
                             request: request_vote_request::Reader)
                             -> Actions {
-        debug!("{:?}: RequestVoteRequest from Replica({})", self, &candidate);
-
+        // TODO: this is wrong, we aren't using the lastLogTerm/lastLogIndex correctly
         let candidate_term = Term(request.get_term());
         let candidate_index = LogIndex(request.get_last_log_index());
+        debug!("{:?}: RequestVoteRequest from Replica {{ id: {} term: {}, index: {} }}",
+                self, &candidate, candidate_term, candidate_index);
         let local_term = self.current_term();
         let local_index = self.latest_log_index();
 
         let new_local_term = if candidate_term > local_term {
-            self.store.set_current_term(candidate_term).unwrap();
+            self.transition_to_follower(candidate_term, candidate);
             candidate_term
         } else {
             local_term
@@ -452,7 +467,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         let mut actions = Actions::new();
         if self.peers.is_empty() {
             // Solitary replica special case; jump straight to leader status
-            info!("{:?}: transition to Leader", self);
+            info!("{:?}: transitioning to Leader", self);
             assert!(self.is_follower());
             assert!(self.store.voted_for().unwrap().is_none());
             self.store.inc_current_term().unwrap();
@@ -472,7 +487,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// The provided Actions instance will have an AppendEntriesRequest message
     /// added for each cluster peer.
     fn transition_to_leader(&mut self, actions: &mut Actions) {
-        info!("{:?}: Transition to Leader", self);
+        info!("{:?}: transitioning to Leader", self);
         let current_term = self.current_term();
         let latest_log_index = self.latest_log_index();
         let latest_log_term = self.store.latest_log_term().unwrap();
@@ -500,7 +515,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// The provided RequestVoteRequest message will be initialized with a message to send to each
     /// cluster peer.
     fn transition_to_candidate(&mut self, actions: &mut Actions) {
-        info!("{:?}: Transition to Candidate", self);
+        info!("{:?}: transitioning to Candidate", self);
+        self.store.inc_current_term().unwrap();
         self.store.set_voted_for(self.id).unwrap();
         self.state = ReplicaState::Candidate;
         self.candidate_state.clear();
@@ -558,7 +574,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     fn transition_to_follower(&mut self,
                               term: Term,
                               leader: ServerId) {
-        info!("{:?}: Transition to Follower", self);
+        info!("{:?}: transitioning to Follower", self);
         self.store.set_current_term(term).unwrap();
         self.state = ReplicaState::Follower;
         self.follower_state.set_leader(leader);
@@ -600,6 +616,8 @@ impl <S, M> fmt::Debug for Replica<S, M> where S: Store, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         try!(write!(fmt, "Replica {{ id: "));
         try!(fmt::Display::fmt(&self.id, fmt));
+        try!(write!(fmt, ", state: "));
+        try!(fmt::Debug::fmt(&self.state, fmt));
         try!(write!(fmt, ", term: "));
         try!(fmt::Display::fmt(&self.current_term(), fmt));
         try!(write!(fmt, ", index: "));
