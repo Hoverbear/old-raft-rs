@@ -11,6 +11,7 @@ git = "https://github.com/dwrensha/capnpc-rust"
 log = "*"
 rand = "*"
 uuid = "*"
+bufstream = "*"
 
 [dependencies.capnp]
 git = "https://github.com/danburkert/capnproto-rust"

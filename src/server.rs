@@ -1,48 +1,40 @@
 use std::fmt;
-use std::collections::{hash_map, HashMap, VecDeque};
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::rc::Rc;
 use std::thread::{self, JoinHandle};
 
-use mio::tcp::{TcpListener, TcpStream};
+use mio::tcp::TcpListener;
 use mio::util::Slab;
 use mio::{
     EventLoop,
     Handler,
     Interest,
-    PollOpt,
     Token,
 };
 use mio::Timeout as TimeoutHandle;
-use rand::{self, Rng};
 use capnp::{
-    MallocMessageBuilder,
     MessageReader,
-    OwnedSpaceMessageReader,
-    ReaderOptions,
-};
-use capnp::serialize::{
-    read_message_async,
-    write_message_async,
-    AsyncValue,
-    ReadContinuation,
-    WriteContinuation,
 };
 
 use ClientId;
 use Result;
+use Error;
+use ErrorKind;
 use ServerId;
 use messages;
 use messages_capnp::connection_preamble;
-use replica::{Replica, Actions, Timeout};
+use replica::{Replica, Actions, ReplicaTimeout};
 use state_machine::StateMachine;
 use store::Store;
+use connection::{Connection, ConnectionKind};
 
 const LISTENER: Token = Token(0);
 
-const ELECTION_MIN: u64 = 1500;
-const ELECTION_MAX: u64 = 3000;
-const HEARTBEAT_DURATION: u64 = 500;
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ServerTimeout {
+    Replica(ReplicaTimeout),
+    Reconnect(Token),
+}
 
 /// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
 ///
@@ -56,14 +48,27 @@ const HEARTBEAT_DURATION: u64 = 500;
 ///
 /// Currently, the `Server` API is not well defined. **We are looking for feedback and suggestions.**
 pub struct Server<S, M> where S: Store, M: StateMachine {
+
+    /// Id of this server.
     id: ServerId,
-    peers: HashMap<ServerId, SocketAddr>,
+
+    /// Raft state machine replica.
     replica: Replica<S, M>,
+
+    /// Connection listener.
     listener: TcpListener,
+
+    /// Collection of connections indexed by token.
     connections: Slab<Connection>,
+
+    /// Index of peer id to connection token.
     peer_tokens: HashMap<ServerId, Token>,
+
+    /// Index of client id to connection token.
     client_tokens: HashMap<ClientId, Token>,
-    timeouts: HashMap<Timeout, TimeoutHandle>,
+
+    /// Currently registered replica timeouts.
+    timeouts: HashMap<ServerTimeout, TimeoutHandle>,
 }
 
 /// The implementation of the Server.
@@ -74,14 +79,14 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
            peers: HashMap<ServerId, SocketAddr>,
            store: S,
            state_machine: M) -> Result<(Server<S, M>, EventLoop<Server<S, M>>)> {
-        assert!(!peers.contains_key(&id));
+        assert!(!peers.contains_key(&id), "peer set must not contain the local server");
         let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
         let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
         let listener = try!(TcpListener::bind(&addr));
         try!(event_loop.register(&listener, LISTENER));
-        let server = Server {
+
+        let mut server = Server {
             id: id,
-            peers: peers,
             replica: replica,
             listener: listener,
             connections: Slab::new_starting_at(Token(1), 129),
@@ -89,6 +94,18 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             client_tokens: HashMap::new(),
             timeouts: HashMap::new(),
         };
+
+        for (peer_id, peer_addr) in peers {
+            let token = try!(server.connections
+                                   .insert(try!(Connection::peer(peer_id, peer_addr)))
+                                   .map_err(|_| Error::Raft(ErrorKind::ConnectionLimitReached)));
+            assert!(server.peer_tokens.insert(peer_id, token).is_none());
+
+            let mut connection = &mut server.connections[token];
+            connection.set_token(token);
+            try!(connection.send_message(&mut event_loop, messages::server_connection_preamble(id)));
+        }
+
         Ok((server, event_loop))
     }
 
@@ -131,32 +148,10 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         }).map_err(From::from)
     }
 
-    /// Finds an existing connection to a peer, or opens a new one if necessary.
-    fn peer_connection(&mut self,
-                       event_loop: &mut EventLoop<Server<S, M>>,
-                       peer_id: ServerId)
-                       -> Result<&mut Connection> {
-        let token: Token = match self.peer_tokens.entry(peer_id) {
-            hash_map::Entry::Occupied(entry) => *entry.get(),
-            hash_map::Entry::Vacant(entry) => {
-                let peer_addr = self.peers[&peer_id];
-                let socket: TcpStream =
-                    try_warn!(TcpStream::connect(&peer_addr),
-                              "Server({}): unable to connect to peer Server {{ id: {}, address: {} }}: {}",
-                              self.id, peer_id, peer_addr);
-                let token: Token = self.connections.insert(Connection::peer(peer_id, peer_addr, socket)).unwrap();
-                self.connections[token].token = token;
-                try_warn!(event_loop.register_opt(&self.connections[token].stream,
-                                                  token, self.connections[token].interest, poll_opt()),
-                          "Server({}): unable to register connection with event loop: {}",
-                          self.id);
-                entry.insert(token);
-                self.connections[token].write_queue.push_back(messages::server_connection_preamble(self.id));
-                info!("opening new connection: {:?}", self.connections[token]);
-                token
-            },
-        };
-        Ok(&mut self.connections[token])
+    /// Returns the connection to the peer.
+    fn peer_connection(&mut self, peer_id: &ServerId) -> &mut Connection {
+       let token = self.peer_tokens.get(peer_id).unwrap();
+       &mut self.connections[*token]
     }
 
     /// Finds an existing connection to a client.
@@ -174,8 +169,8 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         let Actions { peer_messages, client_messages, timeouts, clear_timeouts } = actions;
 
         for (peer, message) in peer_messages {
-            let _ = self.peer_connection(event_loop, peer)
-                        .and_then(|connection| connection.send_message(event_loop, message));
+            let _ = self.peer_connection(&peer)
+                        .send_message(event_loop, message);
         }
         for (client, message) in client_messages {
             if let Some(connection) = self.client_connection(client) {
@@ -183,49 +178,54 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             }
         }
         if clear_timeouts {
-            self.clear_timeouts(event_loop);
+            for (timeout, &handle) in self.timeouts.iter() {
+                if let &ServerTimeout::Replica(..) = timeout {
+                    assert!(event_loop.clear_timeout(handle),
+                            "raft::{:?}: unable to clear timeout: {:?}", self, timeout);
+                }
+            }
+            self.timeouts.clear();
         }
         for timeout in timeouts {
-            self.register_timeout(event_loop, timeout);
+            let duration = timeout.duration_ms();
+            let server_timeout = ServerTimeout::Replica(timeout);
+
+            // Registering a timeout may only fail if the maximum number of timeouts
+            // is already registered, which is by default 65,536. We (should) use a
+            // maximum of one timeout per peer, so this unwrap should be safe.
+            let handle = event_loop.timeout_ms(server_timeout, duration).unwrap();
+            self.timeouts
+                .insert(server_timeout, handle)
+                .map(|handle| assert!(event_loop.clear_timeout(handle),
+                                      "raft::{:?}: unable to clear timeout: {:?}", self, timeout));
         }
     }
 
-    /// Registers a new timeout.
-    fn register_timeout(&mut self,
-                        event_loop: &mut EventLoop<Server<S, M>>,
-                        timeout: Timeout) {
-        let ms = match timeout {
-            Timeout::Election(..) => rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX),
-            Timeout::Heartbeat(..) => HEARTBEAT_DURATION,
-        };
+    /// Resets the connection corresponding to the provided token.
+    ///
+    /// If the connection is to a peer, the server will attempt to reconnect after a waiting
+    /// period.
+    ///
+    /// If the connection is to a client or unknown it will be closed.
+    fn reset_connection(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) {
+        let kind = *self.connections[token].kind();
+        match kind {
+            ConnectionKind::Peer(..) => {
+                // Crash if reseting the connection fails.
+                let (duration, timeout, handle) = self.connections[token].reset_peer(event_loop).unwrap();
 
-        // Registering a timeout may only fail if the maximum number of timeouts
-        // is already registered, which is by default 65,536. We (should) use a
-        // maximum of one timeout per peer, so this unwrap should be safe.
-        let handle = event_loop.timeout_ms(timeout, ms).unwrap();
-        self.timeouts.insert(timeout, handle)
-            .map(|handle| event_loop.clear_timeout(handle));
-    }
-
-    /// Clears all registered timeouts.
-    fn clear_timeouts(&mut self, event_loop: &mut EventLoop<Server<S, M>>) {
-        for (timeout, &handle) in self.timeouts.iter() {
-            assert!(event_loop.clear_timeout(handle), "unable to clear timeout: {:?}", timeout);
-        }
-        self.timeouts.clear();
-    }
-
-    /// Closes the connection corresponding to the token.
-    fn close_connection(&mut self, token: Token) {
-        let connection = self.connections.remove(token).unwrap();
-        match connection.id {
-            ConnectionType::Peer(ref id) => {
-                self.peer_tokens.remove(id);
+                info!("{:?}: {:?} reset, will attempt to reconnect in {}ms", self,
+                      &self.connections[token], duration);
+                assert!(self.timeouts.insert(timeout, handle).is_none(),
+                        "raft::{:?}: timeout already registered: {:?}", self, timeout);
             },
-            ConnectionType::Client(ref id) => {
+            ConnectionKind::Client(ref id) => {
+                self.connections.remove(token);
                 self.client_tokens.remove(id);
             },
-            _ => (),
+            ConnectionKind::Unknown => {
+                self.connections.remove(token);
+            },
         }
     }
 }
@@ -233,75 +233,81 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
 impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
     type Message = ();
-    type Timeout = Timeout;
+    type Timeout = ServerTimeout;
 
-    fn ready(&mut self, reactor: &mut EventLoop<Server<S, M>>, token: Token, events: Interest) {
+    fn ready(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token, events: Interest) {
+        trace!("{:?}: ready; token: {:?}; events: {:?}", self, token, events);
 
         if events.is_error() {
-            assert!(token != LISTENER, "Unexpected error event from LISTENER");
+            assert!(token != LISTENER, "raft::{:?}: unexpected error event from LISTENER", self);
             warn!("{:?}: error event on connection {:?}", self, self.connections[token]);
-            self.close_connection(token);
+            self.reset_connection(event_loop, token);
             return;
         }
 
         if events.is_hup() {
-            assert!(token != LISTENER, "Unexpected hup event from LISTENER");
+            assert!(token != LISTENER, "raft::{:?}: unexpected hup event from LISTENER", self);
             trace!("{:?}: hup event on connection {:?}", self, self.connections[token]);
-            self.close_connection(token);
+            self.reset_connection(event_loop, token);
             return;
         }
 
         if events.is_writable() {
-            assert!(token != LISTENER, "Unexpected writeable event for LISTENER");
-            self.connections[token].writable(reactor).unwrap();
+            assert!(token != LISTENER, "raft::{:?}: unexpected writeable event for LISTENER", self);
+            if let Err(error) = self.connections[token].writable(event_loop) {
+                warn!("{:?}: unable to write to conection {:?}: {}",
+                      self, self.connections[token], error);
+                self.reset_connection(event_loop, token);
+                return;
+            }
         }
 
         if events.is_readable() {
             if token == LISTENER {
-                let stream = self.listener.accept().unwrap().unwrap();
-                let addr = stream.peer_addr().unwrap();
-                trace!("{:?}: new connection received from {}", self, &addr);
-                let conn = Connection::unknown(stream);
-                let token = match self.connections.insert(conn) {
-                    Ok(token) => token,
-                    Err(conn) => {
-                        warn!("Unable to accept connection from {}: connection slab is full.",
-                              conn.stream.peer_addr().unwrap());
-                        return;
-                    },
-                };
-                // Register the connection.
-                self.connections[token].token = token;
-                reactor.register_opt(&self.connections[token].stream, token,
-                                     self.connections[token].interest, poll_opt())
-                       .unwrap();
+                self.listener
+                    .accept().map_err(From::from)
+                    .and_then(|stream| Connection::unknown(stream.unwrap()))
+                    .and_then(|connection| {
+                        debug!("{:?}: new connection received: {:?}", self, connection);
+                        self.connections
+                            .insert(connection)
+                            .map_err(|_| Error::Raft(ErrorKind::ConnectionLimitReached))
+                    })
+                    .and_then(|token| {
+                        let mut connection = &mut self.connections[token];
+                        connection.set_token(token);
+                        connection.register(event_loop)
+                    })
+                    .unwrap_or_else(|error| warn!("{:?}: unable to accept connection: {}", self, error));
             } else {
                 trace!("{:?}: connection readable: {:?}, events: {:?}", self, self.connections[token], events);
                 // Read messages from the socket until there are no more.
-                while let Some(message) = self.connections[token].readable(reactor).unwrap() {
-                    match self.connections[token].id {
-                        ConnectionType::Peer(id) => {
-                            let actions = self.replica.apply_peer_message(id, &message);
-                            self.execute_actions(reactor, actions);
+                while let Some(message) = self.connections[token].readable(event_loop).unwrap() {
+                    match *self.connections[token].kind() {
+                        ConnectionKind::Peer(id) => {
+                            let mut actions = Actions::new();
+                            self.replica.apply_peer_message(id, &message, &mut actions);
+                            self.execute_actions(event_loop, actions);
                         },
-                        ConnectionType::Client(id) => {
-                            let actions = self.replica.apply_client_message(id, &message);
-                            self.execute_actions(reactor, actions);
+                        ConnectionKind::Client(id) => {
+                            let mut actions = Actions::new();
+                            self.replica.apply_client_message(id, &message, &mut actions);
+                            self.execute_actions(event_loop, actions);
                         },
-                        ConnectionType::Unknown => {
+                        ConnectionKind::Unknown => {
                             let preamble = message.get_root::<connection_preamble::Reader>().unwrap();
                             match preamble.get_id().which().unwrap() {
                                 connection_preamble::id::Which::Server(id) => {
-                                    self.connections[token].id = ConnectionType::Peer(ServerId::from(id));
-                                    assert!(self.peer_tokens.get(&ServerId(id)).is_none(),
-                                            "connection already exists to {:?}", self.connections[token]);
-                                    self.peer_tokens.insert(ServerId(id), token);
+                                    self.connections[token].set_kind(ConnectionKind::Peer(ServerId::from(id)));
+                                    assert!(self.peer_tokens.insert(ServerId(id), token).is_none(),
+                                            "raft::{:?}: connection already exists to {:?}",
+                                            self, self.connections[token]);
                                 },
                                 connection_preamble::id::Which::Client(Ok(id)) => {
-                                    self.connections[token].id = ConnectionType::Client(ClientId::from_bytes(id).unwrap());
+                                    self.connections[token].set_kind(ConnectionKind::Client(ClientId::from_bytes(id).unwrap()));
                                 },
                                 _ => {
-                                    // TODO: drop the connection
+                                    // TODO: reset the connection
                                     unimplemented!()
                                 }
                             }
@@ -312,157 +318,33 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
         }
     }
 
-    fn timeout(&mut self, reactor: &mut EventLoop<Server<S, M>>, timeout: Timeout) {
-        trace!("{:?}: Timeout: {:?}", self, &timeout);
-        let actions = self.replica.apply_timeout(timeout);
-        self.execute_actions(reactor, actions);
+    fn timeout(&mut self, event_loop: &mut EventLoop<Server<S, M>>, timeout: ServerTimeout) {
+        trace!("{:?}: timeout: {:?}", self, &timeout);
+        assert!(self.timeouts.remove(&timeout).is_some(), "raft::{:?}: missing timeout: {:?}",
+                self, timeout);
+        match timeout {
+            ServerTimeout::Replica(replica) => {
+                let mut actions = Actions::new();
+                self.replica.apply_timeout(replica, &mut actions);
+                self.execute_actions(event_loop, actions);
+            },
+
+            ServerTimeout::Reconnect(token) => {
+                self.connections[token]
+                    .reconnect_peer(self.id, event_loop)
+                    .unwrap_or_else(|error| {
+                        warn!("{:?}: unable to reconnect connection {:?}: {}",
+                              self, &self.connections[token], error);
+                    });
+                // TODO: add reconnect messages from replica
+            },
+        }
     }
 }
 
 impl <S, M> fmt::Debug for Server<S, M> where S: Store, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "Server({})", self.id)
-    }
-}
-
-fn poll_opt() -> PollOpt {
-    PollOpt::edge() | PollOpt::oneshot()
-}
-
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-enum ConnectionType {
-    Peer(ServerId),
-    Client(ClientId),
-    Unknown,
-}
-
-struct Connection {
-    stream: TcpStream,
-    id: ConnectionType,
-    address: SocketAddr,
-    token: Token,
-    interest: Interest,
-    read_continuation: Option<ReadContinuation>,
-    write_continuation: Option<WriteContinuation>,
-    write_queue: VecDeque<Rc<MallocMessageBuilder>>,
-}
-
-impl Connection {
-
-    /// Creates a new `Connection` wrapping the provided socket.
-    ///
-    /// The socket must already be connected.
-    ///
-    /// Note: the caller must manually call `set_token` after inserting the
-    /// connection into a slab.
-    fn unknown(socket: TcpStream) -> Connection {
-        let address = socket.peer_addr().unwrap();
-        Connection {
-            stream: socket,
-            id: ConnectionType::Unknown,
-            address: address,
-            token: Token(0),
-            interest: Interest::hup() | Interest::readable(),
-            read_continuation: None,
-            write_continuation: None,
-            write_queue: VecDeque::new(),
-        }
-    }
-
-    fn peer(id: ServerId, address: SocketAddr, socket: TcpStream) -> Connection {
-        Connection {
-            stream: socket,
-            id: ConnectionType::Peer(id),
-            address: address,
-            token: Token(0),
-            interest: Interest::hup() | Interest::readable() | Interest::writable(),
-            read_continuation: None,
-            write_continuation: None,
-            write_queue: VecDeque::new(),
-        }
-    }
-
-    /// Writes queued messages to the socket.
-    fn writable<S, M>(&mut self,
-                      event_loop: &mut EventLoop<Server<S, M>>)
-                      -> Result<()>
-    where S: Store, M: StateMachine {
-        trace!("{:?}: writable; queued message count: {}", self, self.write_queue.len());
-
-        while let Some(message) = self.write_queue.pop_front() {
-            match try!(write_message_async(&mut self.stream, &*message, self.write_continuation.take())) {
-                AsyncValue::Complete(()) => (),
-                AsyncValue::Continue(continuation) =>  {
-                    // the write only partially completed. Save the continuation and add the
-                    // message back to the front of the queue.
-                    self.write_continuation = Some(continuation);
-                    self.write_queue.push_front(message);
-                    break;
-                }
-            }
-        }
-
-        if self.write_queue.is_empty() {
-            self.interest.remove(Interest::writable());
-        }
-
-        event_loop.reregister(&self.stream, self.token, self.interest, poll_opt())
-                  .map_err(From::from)
-    }
-
-    /// Reads a message from the socket, or if a full message is not available,
-    /// returns `None`.
-    ///
-    /// Because connections are registered as edge-triggered, the handler must
-    /// continue calling this until no more messages are returned.
-    fn readable<S, M>(&mut self,
-                      event_loop: &mut EventLoop<Server<S, M>>)
-                      -> Result<Option<OwnedSpaceMessageReader>>
-    where S: Store, M: StateMachine {
-        trace!("{:?}: readable", self);
-        match try!(read_message_async(&mut self.stream, ReaderOptions::new(), self.read_continuation.take())) {
-            AsyncValue::Complete(message) => {
-                Ok(Some(message))
-            },
-            AsyncValue::Continue(continuation) => {
-                // the read only partially completed. Save the continuation and return.
-                self.read_continuation = Some(continuation);
-                try!(event_loop.reregister(&self.stream, self.token, self.interest, poll_opt()));
-                Ok(None)
-            },
-        }
-    }
-
-    /// Queues a message to be sent to this connection.
-    fn send_message<S, M>(&mut self,
-                          event_loop: &mut EventLoop<Server<S, M>>,
-                          message: Rc<MallocMessageBuilder>)
-                          -> Result<()>
-    where S: Store, M: StateMachine {
-        trace!("{:?}: send_message", self);
-        if self.write_queue.is_empty() {
-            self.interest.insert(Interest::writable());
-            try_warn!(event_loop.reregister(&self.stream, self.token, self.interest, poll_opt()),
-                      "{:?}: unable to register with event loop: {}", self);
-        }
-        self.write_queue.push_back(message);
-        Ok(())
-    }
-}
-
-impl fmt::Debug for Connection {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self.id {
-            ConnectionType::Peer(id) => {
-                write!(fmt, "PeerConnection {{ id: {}, address: {} }}", id, self.address)
-            },
-            ConnectionType::Client(id) => {
-                write!(fmt, "ClientConnection {{ id: {}, address: {} }}", id, self.address)
-            },
-            ConnectionType::Unknown => {
-                write!(fmt, "UnknownConnection {{ address: {} }}", self.address)
-            },
-        }
     }
 }
 
@@ -473,27 +355,24 @@ mod test {
 
     use std::collections::HashMap;
     use std::net::{TcpListener, SocketAddr};
-    use std::rc::Rc;
     use std::str::FromStr;
 
     use ServerId;
-    use messages;
-    use replica::Actions;
     use state_machine::NullStateMachine;
     use store::MemStore;
     use super::*;
+    use Result;
 
     use mio::EventLoop;
 
     type TestServer = Server<MemStore, NullStateMachine>;
 
-    fn new_test_server() -> (TestServer, EventLoop<TestServer>) {
+    fn new_test_server(peers: HashMap<ServerId, SocketAddr>) -> Result<(TestServer, EventLoop<TestServer>)> {
         Server::new(ServerId::from(0),
                     SocketAddr::from_str("127.0.0.1:0").unwrap(),
-                    HashMap::new(),
+                    peers,
                     MemStore::new(),
                     NullStateMachine)
-              .unwrap()
     }
 
     /// Attempts to grab a local, unbound socket address for testing.
@@ -504,26 +383,20 @@ mod test {
     #[test]
     pub fn test_illegal_peer_address() {
         let _ = env_logger::init();
-        let (mut server, mut event_loop) = new_test_server();
         let peer_id = ServerId::from(1);
-        let peer_addr = SocketAddr::from_str("127.0.0.1:0").unwrap();
-        server.peers.insert(peer_id, peer_addr);
-        let actions = Actions::with_peer_message(peer_id, Rc::new(messages::ping_request()));
-        server.execute_actions(&mut event_loop, actions);
-        event_loop.run_once(&mut server).unwrap();
-        assert!(server.peer_tokens.is_empty());
+        let mut peers = HashMap::new();
+        peers.insert(peer_id, SocketAddr::from_str("127.0.0.1:0").unwrap());
+        assert!(new_test_server(peers).is_err());
     }
 
     #[test]
     pub fn test_unbound_peer_address() {
         let _ = env_logger::init();
-        let (mut server, mut event_loop) = new_test_server();
         let peer_id = ServerId::from(1);
-        let peer_addr = get_unbound_address();
-        server.peers.insert(peer_id, peer_addr);
-        let actions = Actions::with_peer_message(peer_id, Rc::new(messages::ping_request()));
-        server.execute_actions(&mut event_loop, actions);
+        let mut peers = HashMap::new();
+        peers.insert(peer_id, get_unbound_address());
+        let (mut server, mut event_loop) = new_test_server(peers).unwrap();
         event_loop.run_once(&mut server).unwrap();
-        assert!(server.peer_tokens.is_empty());
+        // TODO: figure out how to test this
     }
 }

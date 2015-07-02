@@ -43,8 +43,8 @@
 //!
 //!     // TODO
 //!
-#![feature(buf_stream)]
 
+extern crate bufstream;
 extern crate capnp;
 extern crate mio;
 extern crate rand;
@@ -66,7 +66,9 @@ macro_rules! try_warn {
 pub mod state_machine;
 pub mod store;
 
+mod backoff;
 mod client;
+mod connection;
 mod messages;
 mod replica;
 mod server;
@@ -102,16 +104,12 @@ pub enum Error {
 
 /// Currently, this can only be:
 ///
-/// * `RelatedNodeDown` - When the related Server is known to be down.
-/// * `CannotProceed` - When the related Server cannot proceed due to more than a majority of
-///                     nodes being unavailable.
-/// TODO: Hook these up.
+/// * `ConnectionLimitReached` - The server tried to open a new connection (to a peer or a client),
+///                              but the maximum number of connections was already open.
+/// * `InvalidClientId` - A client reported an invalid client id.
 #[derive(Debug)]
 pub enum ErrorKind {
-    RelatedNodeDown,
-    CannotProceed,
-    NotInCluster,
-    BadResponse,
+    ConnectionLimitReached,
     InvalidClientId,
 }
 
@@ -130,6 +128,17 @@ impl From<capnp::Error> for Error {
 impl From<capnp::NotInSchema> for Error {
     fn from(err: capnp::NotInSchema) -> Error {
         Error::SchemaError(err)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::CapnProto(ref error) => fmt::Display::fmt(error, f),
+            Error::SchemaError(ref error) => fmt::Display::fmt(error, f),
+            Error::Io(ref error) => fmt::Display::fmt(error, f),
+            Error::Raft(ref error) => fmt::Debug::fmt(error, f),
+        }
     }
 }
 
