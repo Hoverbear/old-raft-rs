@@ -507,7 +507,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
 
         let message_rc = Rc::new(message);
-        for &peer in self.peers().iter() {
+        for &peer in self.peers() {
             actions.peer_messages.push((peer, message_rc.clone()));
         }
 
@@ -540,7 +540,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
 
         let message_rc = Rc::new(message);
-        for &peer in self.peers().iter() {
+        for &peer in self.peers() {
             actions.peer_messages.push((peer, message_rc.clone()));
         }
         actions.timeouts.push(ReplicaTimeout::Election);
@@ -687,7 +687,7 @@ mod test {
                  replicas: &mut HashMap<ServerId, TestReplica>,
                  client_messages: &mut Vec<(ClientId, Rc<MallocMessageBuilder>)>) {
 
-            for &(peer, ref message) in actions.peer_messages.iter() {
+            for &(peer, ref message) in &actions.peer_messages {
                 let reader = into_reader(&**message);
                 let mut actions = Actions::new();
                 replicas.get_mut(&peer).unwrap().apply_peer_message(from, &reader, &mut actions);

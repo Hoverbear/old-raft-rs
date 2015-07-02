@@ -68,7 +68,10 @@ pub struct Server<S, M> where S: Store, M: StateMachine {
     client_tokens: HashMap<ClientId, Token>,
 
     /// Currently registered replica timeouts.
-    timeouts: HashMap<ServerTimeout, TimeoutHandle>,
+    replica_timeouts: HashMap<ReplicaTimeout, TimeoutHandle>,
+
+    /// Currently registered reconnection timeouts.
+    reconnection_timeouts: HashMap<Token, TimeoutHandle>,
 }
 
 /// The implementation of the Server.
@@ -92,13 +95,14 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             connections: Slab::new_starting_at(Token(1), 129),
             peer_tokens: HashMap::new(),
             client_tokens: HashMap::new(),
-            timeouts: HashMap::new(),
+            replica_timeouts: HashMap::new(),
+            reconnection_timeouts: HashMap::new(),
         };
 
         for (peer_id, peer_addr) in peers {
-            let token = try!(server.connections
-                                   .insert(try!(Connection::peer(peer_id, peer_addr)))
-                                   .map_err(|_| Error::Raft(ErrorKind::ConnectionLimitReached)));
+            let token: Token = try!(server.connections
+                                          .insert(try!(Connection::peer(peer_id, peer_addr)))
+                                          .map_err(|_| Error::Raft(ErrorKind::ConnectionLimitReached)));
             assert!(server.peer_tokens.insert(peer_id, token).is_none());
 
             let mut connection = &mut server.connections[token];
@@ -178,24 +182,22 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             }
         }
         if clear_timeouts {
-            for (timeout, &handle) in self.timeouts.iter() {
-                if let &ServerTimeout::Replica(..) = timeout {
-                    assert!(event_loop.clear_timeout(handle),
-                            "raft::{:?}: unable to clear timeout: {:?}", self, timeout);
-                }
+            for (timeout, &handle) in &self.replica_timeouts {
+                assert!(event_loop.clear_timeout(handle),
+                        "raft::{:?}: unable to clear timeout: {:?}", self, timeout);
             }
-            self.timeouts.clear();
+            self.replica_timeouts.clear();
         }
         for timeout in timeouts {
             let duration = timeout.duration_ms();
-            let server_timeout = ServerTimeout::Replica(timeout);
 
             // Registering a timeout may only fail if the maximum number of timeouts
             // is already registered, which is by default 65,536. We (should) use a
             // maximum of one timeout per peer, so this unwrap should be safe.
-            let handle = event_loop.timeout_ms(server_timeout, duration).unwrap();
-            self.timeouts
-                .insert(server_timeout, handle)
+            let handle = event_loop.timeout_ms(ServerTimeout::Replica(timeout), duration)
+                                   .unwrap();
+            self.replica_timeouts
+                .insert(timeout, handle)
                 .map(|handle| assert!(event_loop.clear_timeout(handle),
                                       "raft::{:?}: unable to clear timeout: {:?}", self, timeout));
         }
@@ -216,7 +218,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
 
                 info!("{:?}: {:?} reset, will attempt to reconnect in {}ms", self,
                       &self.connections[token], duration);
-                assert!(self.timeouts.insert(timeout, handle).is_none(),
+                assert!(self.reconnection_timeouts.insert(token, handle).is_none(),
                         "raft::{:?}: timeout already registered: {:?}", self, timeout);
             },
             ConnectionKind::Client(ref id) => {
@@ -298,10 +300,26 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                             let preamble = message.get_root::<connection_preamble::Reader>().unwrap();
                             match preamble.get_id().which().unwrap() {
                                 connection_preamble::id::Which::Server(id) => {
-                                    self.connections[token].set_kind(ConnectionKind::Peer(ServerId::from(id)));
-                                    assert!(self.peer_tokens.insert(ServerId(id), token).is_none(),
-                                            "raft::{:?}: connection already exists to {:?}",
-                                            self, self.connections[token]);
+                                    let peer_id = ServerId(id);
+
+                                    self.connections[token].set_kind(ConnectionKind::Peer(peer_id));
+                                    let prev_token = self.peer_tokens
+                                                         .insert(peer_id, token)
+                                                         .expect("peer token not found");
+
+                                    // Close the existing connection.
+                                    self.connections
+                                        .remove(prev_token)
+                                        .expect("peer connection not found")
+                                        .unregister_peer(event_loop)
+                                        .unwrap();
+
+                                    // Clear any timeouts associated with the existing connection.
+                                    self.reconnection_timeouts
+                                        .remove(&prev_token)
+                                        .map(|handle| assert!(event_loop.clear_timeout(handle)));
+
+                                    // TODO: add reconnect messages from replica
                                 },
                                 connection_preamble::id::Which::Client(Ok(id)) => {
                                     self.connections[token].set_kind(ConnectionKind::Client(ClientId::from_bytes(id).unwrap()));
@@ -320,16 +338,18 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Server<S, M>>, timeout: ServerTimeout) {
         trace!("{:?}: timeout: {:?}", self, &timeout);
-        assert!(self.timeouts.remove(&timeout).is_some(), "raft::{:?}: missing timeout: {:?}",
-                self, timeout);
         match timeout {
             ServerTimeout::Replica(replica) => {
+                assert!(self.replica_timeouts.remove(&replica).is_some(),
+                        "raft::{:?}: missing timeout: {:?}", self, timeout);
                 let mut actions = Actions::new();
                 self.replica.apply_timeout(replica, &mut actions);
                 self.execute_actions(event_loop, actions);
             },
 
             ServerTimeout::Reconnect(token) => {
+                assert!(self.reconnection_timeouts.remove(&token).is_some(),
+                        "raft::{:?}: missing timeout: {:?}", self, timeout);
                 self.connections[token]
                     .reconnect_peer(self.id, event_loop)
                     .unwrap_or_else(|error| {

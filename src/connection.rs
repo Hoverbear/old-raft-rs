@@ -243,6 +243,18 @@ impl Connection {
         let handle = event_loop.timeout_ms(timeout, duration).unwrap();
         Ok((duration, timeout, handle))
     }
+
+    /// Unregisters a peer connection.
+    pub fn unregister_peer<S, M>(&mut self,
+                                 event_loop: &mut EventLoop<Server<S, M>>)
+                                 -> Result<()>
+    where S: Store, M: StateMachine {
+        if self.is_connected {
+            try!(event_loop.deregister(&self.stream));
+        }
+        Ok(())
+    }
+
 }
 
 impl fmt::Debug for Connection {
