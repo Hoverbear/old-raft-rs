@@ -7,6 +7,7 @@ use capnp::{
     MessageBuilder,
     MessageReader,
 };
+use rand::{self, Rng};
 
 use {LogIndex, Term, ServerId, ClientId, messages};
 use messages_capnp::{
@@ -22,16 +23,44 @@ use state::{ReplicaState, LeaderState, CandidateState, FollowerState};
 use state_machine::StateMachine;
 use store::Store;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Timeout {
+const ELECTION_MIN: u64 = 1500;
+const ELECTION_MAX: u64 = 3000;
+const HEARTBEAT_DURATION: u64 = 500;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ReplicaTimeout {
     Election,
     Heartbeat(ServerId),
 }
 
+impl ReplicaTimeout {
+    pub fn duration_ms(&self) -> u64 {
+        match *self {
+            ReplicaTimeout::Election => rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX),
+            ReplicaTimeout::Heartbeat(..) => HEARTBEAT_DURATION,
+        }
+    }
+}
+
 pub struct Actions {
-    peer_messages: Vec<(ServerId, Rc<MallocMessageBuilder>)>,
-    client_messages: Vec<(ClientId, Rc<MallocMessageBuilder>)>,
-    timeouts: Vec<(Timeout, u64)>,
+    pub peer_messages: Vec<(ServerId, Rc<MallocMessageBuilder>)>,
+    pub client_messages: Vec<(ClientId, Rc<MallocMessageBuilder>)>,
+    pub clear_timeouts: bool,
+    pub timeouts: Vec<ReplicaTimeout>,
+}
+
+impl fmt::Debug for Actions {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        let peer_messages: Vec<ServerId> = self.peer_messages
+                                               .iter().map(|peer_message| peer_message.0)
+                                               .collect();
+        let client_messages: Vec<ClientId> = self.client_messages
+                                                 .iter().map(|client_message| client_message.0)
+                                                 .collect();
+        write!(fmt, "Actions {{ peer_messages: {:?}, client_messages: {:?}, \
+                     clear_timeouts: {:?}, timeouts: {:?} }}",
+               peer_messages, client_messages, self.clear_timeouts, self.timeouts)
+    }
 }
 
 impl Actions {
@@ -39,16 +68,7 @@ impl Actions {
         Actions {
             peer_messages: vec![],
             client_messages: vec![],
-            timeouts: vec![],
-        }
-    }
-
-    pub fn with_peer_message(peer_id: ServerId,
-                             message: Rc<MallocMessageBuilder>)
-                             -> Actions {
-        Actions {
-            peer_messages: vec![(peer_id, message)],
-            client_messages: vec![],
+            clear_timeouts: false,
             timeouts: vec![],
         }
     }
@@ -104,56 +124,58 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
     }
 
+    /// Returns the set of initial action which should be executed upon startup.
+    pub fn init(&self) -> Actions {
+        let mut actions = Actions::new();
+        actions.timeouts.push(ReplicaTimeout::Election);
+        actions
+    }
+
     pub fn peers(&self) -> &HashSet<ServerId> {
         &self.peers
     }
 
-    pub fn apply_peer_message<R>(&mut self,
-                                 from: ServerId,
-                                 message: &R)
-                                 -> Actions
+    pub fn apply_peer_message<R>(&mut self, from: ServerId, message: &R, actions: &mut Actions)
     where R: MessageReader {
         let reader = message.get_root::<message::Reader>().unwrap().which().unwrap();
         match reader {
             message::Which::AppendEntriesRequest(Ok(request)) =>
-                self.append_entries_request(from, request),
+                self.append_entries_request(from, request, actions),
             message::Which::AppendEntriesResponse(Ok(response)) =>
-                self.append_entries_response(from, response),
+                self.append_entries_response(from, response, actions),
             message::Which::RequestVoteRequest(Ok(request)) =>
-                self.request_vote_request(from, request),
+                self.request_vote_request(from, request, actions),
             message::Which::RequestVoteResponse(Ok(response)) =>
-                self.request_vote_response(from, response),
+                self.request_vote_response(from, response, actions),
             _ => panic!("cannot handle message"),
-        }
+        };
     }
 
     pub fn apply_client_message<R>(&mut self,
                                    from: ClientId,
-                                   message: &R)
-                                   -> Actions
+                                   message: &R,
+                                   actions: &mut Actions)
     where R: MessageReader {
         let reader = message.get_root::<client_request::Reader>().unwrap().which().unwrap();
         match reader {
             client_request::Which::Proposal(Ok(request)) =>
-                self.proposal_request(from, request),
+                self.proposal_request(from, request, actions),
             _ => panic!("cannot handle message"),
         }
     }
 
-    pub fn apply_timeout(&mut self, timeout: Timeout) -> Actions {
+    pub fn apply_timeout(&mut self, timeout: ReplicaTimeout, actions: &mut Actions) {
         match timeout {
-            Timeout::Election => self.election_timeout(),
-            Timeout::Heartbeat(id) => self.heartbeat_timeout(id),
+            ReplicaTimeout::Election => self.election_timeout(actions),
+            ReplicaTimeout::Heartbeat(peer) => self.heartbeat_timeout(peer, actions),
         }
     }
 
     /// Apply an append entries request to the Raft replica.
-    pub fn append_entries_request(&mut self,
-                                  from: ServerId,
-                                  request: append_entries_request::Reader)
-                                  -> Actions {
-        assert!(self.peers.contains(&from),
-                "Received append entries request from unknown node {}.", &from);
+    fn append_entries_request(&mut self,
+                              from: ServerId,
+                              request: append_entries_request::Reader,
+                              actions: &mut Actions) {
         debug!("{:?}: AppendEntriesRequest from Replica({})", self, &from);
 
         let leader_term = Term(request.get_term());
@@ -161,12 +183,12 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
         if leader_term < current_term {
             let message = messages::append_entries_response_stale_term(current_term);
-            return Actions::with_peer_message(from, message)
+            actions.peer_messages.push((from, message));
+            return;
         }
 
         let leader_commit_index = LogIndex::from(request.get_leader_commit());
         assert!(self.commit_index <= leader_commit_index);
-        self.commit_index = leader_commit_index;
 
         match self.state {
             ReplicaState::Follower => {
@@ -179,9 +201,9 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                     let leader_prev_log_index = LogIndex(request.get_prev_log_index());
                     let leader_prev_log_term = Term(request.get_prev_log_term());
 
-                    let latest_log_index = self.store.latest_log_index().unwrap();
+                    let latest_log_index = self.latest_log_index();
                     if latest_log_index < leader_prev_log_index {
-                        messages::append_entries_response_inconsistent_prev_entry(current_term)
+                        messages::append_entries_response_inconsistent_prev_entry(self.current_term())
                     } else {
                         let existing_term = if leader_prev_log_index == LogIndex::from(0) {
                             Term::from(0)
@@ -190,7 +212,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                         };
 
                         if existing_term != leader_prev_log_term {
-                            messages::append_entries_response_inconsistent_prev_entry(current_term)
+                            messages::append_entries_response_inconsistent_prev_entry(self.current_term())
                         } else {
                             let entries = request.get_entries().unwrap();
                             let num_entries = entries.len();
@@ -203,17 +225,21 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                             }
                             let latest_log_index = leader_prev_log_index + num_entries as u64;
                             // We are matching the leaders log up to and including `latest_log_index`.
+                            self.commit_index = leader_commit_index;
                             self.apply_commits_until(latest_log_index);
-                            messages::append_entries_response_success(current_term, latest_log_index)
+                            messages::append_entries_response_success(self.current_term(), self.store.latest_log_index().unwrap())
                         }
                     }
                 };
-                return Actions::with_peer_message(from, message);
+                actions.peer_messages.push((from, message));
+                actions.timeouts.push(ReplicaTimeout::Election);
             },
             ReplicaState::Candidate => {
                 // recognize the new leader, return to follower state, and apply the entries
-                self.transition_to_follower(leader_term, from);
-                return self.append_entries_request(from, request)
+                info!("{:?}: received AppendEntriesRequest from Replica {{ id: {}, term: {} }} \
+                       with newer term", self, from, leader_term);
+                self.transition_to_follower(leader_term, from, actions);
+                return self.append_entries_request(from, request, actions)
             },
             ReplicaState::Leader => {
                 if leader_term == current_term {
@@ -224,8 +250,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 }
 
                 // recognize the new leader, return to follower state, and apply the entries
-                self.transition_to_follower(leader_term, from);
-                return self.append_entries_request(from, request)
+                info!("{:?}: received AppendEntriesRequest from Replica {{ id: {}, term: {} }} \
+                       with newer term", self, from, leader_term);
+                self.transition_to_follower(leader_term, from, actions);
+                return self.append_entries_request(from, request, actions)
             },
         }
     }
@@ -234,18 +262,15 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     ///
     /// The provided message may be initialized with a new AppendEntries request to send back to
     /// the follower in the case that the follower's log is behind.
-    pub fn append_entries_response(&mut self,
-                                   from: ServerId,
-                                   response: append_entries_response::Reader)
-                                   -> Actions {
-        assert!(self.peers.contains(&from),
-                "{:?} received AppendEntries response from unknown peer {}.",
-                self, &from);
+    fn append_entries_response(&mut self,
+                               from: ServerId,
+                               response: append_entries_response::Reader,
+                               actions: &mut Actions) {
         debug!("{:?}: AppendEntriesResponse from Replica({})", self, from);
 
         let local_term = self.current_term();
         let responder_term = Term::from(response.get_term());
-        let local_latest_log_index = self.store.latest_log_index().unwrap();
+        let local_latest_log_index = self.latest_log_index();
 
         if local_term < responder_term {
             // Responder has a higher term number. Relinquish leader position (if it is held), and
@@ -253,12 +278,14 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
             // The responder is not necessarily the leader, but it is somewhat likely, so we will
             // use it as the leader hint.
-            self.transition_to_follower(responder_term, from);
-            return Actions::new();
+            info!("{:?}: received AppendEntriesResponse from Replica {{ id: {}, term: {} }} \
+                   with newer term", self, from, responder_term);
+            self.transition_to_follower(responder_term, from, actions);
+            return;
         } else if local_term > responder_term {
             // Responder is responding to an AppendEntries request from a different term. Ignore
             // the response.
-            return Actions::new();
+            return;
         }
 
         // At this point we must be the Leader, since we only send AppendEntries
@@ -299,11 +326,11 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             }
         }
 
-        // TODO: set a new heartbeat
         // TODO: add client responses based on new commit index
 
         let next_index = self.leader_state.next_index(&from);
         if next_index <= local_latest_log_index {
+            // If the replica is behind, send it entries to catch up.
             let prev_log_index = next_index - 1;
             let (prev_log_term, _) = self.store.entry(prev_log_index).unwrap();
 
@@ -324,28 +351,30 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 }
             }
             self.leader_state.set_next_index(from, local_latest_log_index + 1);
-            Actions::with_peer_message(from, Rc::new(message))
+            actions.peer_messages.push((from, Rc::new(message)));
         } else {
-            Actions::new()
+            // If the replica is caught up, set a heartbeat timeout.
+            let timeout = ReplicaTimeout::Heartbeat(from);
+            actions.timeouts.push(timeout);
         }
     }
 
     /// Apply a request vote request to the Raft replica.
-    pub fn request_vote_request(&mut self,
-                                candidate: ServerId,
-                                request: request_vote_request::Reader)
-                                -> Actions {
-        assert!(self.peers.contains(&candidate),
-                "Received request vote request from unknown node {}.", &candidate);
-        debug!("{:?}: RequestVoteRequest from Replica({})", self, &candidate);
-
+    fn request_vote_request(&mut self,
+                            candidate: ServerId,
+                            request: request_vote_request::Reader,
+                            actions: &mut Actions) {
         let candidate_term = Term(request.get_term());
-        let candidate_index = LogIndex(request.get_last_log_index());
+        let candidate_log_term = Term(request.get_last_log_term());
+        let candidate_log_index = LogIndex(request.get_last_log_index());
+        debug!("{:?}: RequestVoteRequest from Replica {{ id: {}, term: {}, latest_log_term: {}, latest_log_index: {} }}",
+                self, &candidate, candidate_term, candidate_log_term, candidate_log_index);
         let local_term = self.current_term();
-        let local_index = self.store.latest_log_index().unwrap();
 
         let new_local_term = if candidate_term > local_term {
-            self.store.set_current_term(candidate_term).unwrap();
+            info!("{:?}: received RequestVoteRequest from Replica {{ id: {}, term: {} }} \
+                   with newer term", self, candidate, candidate_term);
+            self.transition_to_follower(candidate_term, candidate, actions);
             candidate_term
         } else {
             local_term
@@ -353,7 +382,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
         let message = if candidate_term < local_term {
             messages::request_vote_response_stale_term(new_local_term)
-        } else if candidate_index < local_index {
+        } else if candidate_log_term < self.latest_log_term()
+               || candidate_log_index < self.latest_log_index() {
             messages::request_vote_response_inconsistent_log(new_local_term)
         } else {
             match self.store.voted_for().unwrap() {
@@ -361,7 +391,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                     self.store.set_voted_for(candidate).unwrap();
                     messages::request_vote_response_granted(new_local_term)
                 },
-                Some(voted_for) if voted_for == candidate.clone() => {
+                Some(voted_for) if voted_for == candidate => {
                     messages::request_vote_response_granted(new_local_term)
                 },
                 _ => {
@@ -369,21 +399,19 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 },
             }
         };
-        Actions::with_peer_message(candidate, message)
+        actions.peer_messages.push((candidate, message));
     }
 
     /// Apply a request vote response to the Raft replica.
-    pub fn request_vote_response(&mut self,
-                                 from: ServerId,
-                                 response: request_vote_response::Reader)
-                                 -> Actions {
-        assert!(self.peers.contains(&from), "Received request vote response from unknown node {}.", from);
+    fn request_vote_response(&mut self,
+                             from: ServerId,
+                             response: request_vote_response::Reader,
+                             actions: &mut Actions) {
         debug!("{:?}: RequestVoteResponse from Replica({})", self, from);
 
         let local_term = self.current_term();
         let voter_term = Term::from(response.get_term());
 
-        let mut actions = Actions::new();
         let majority = self.majority();
         if local_term < voter_term {
             // Responder has a higher term number. The election is compromised; abandon it and
@@ -392,7 +420,9 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
             // The responder is not necessarily the leader, but it is somewhat likely, so we will
             // use it as the leader hint.
-            self.transition_to_follower(voter_term, from);
+            info!("{:?}: received RequestVoteResponse from Replica {{ id: {}, term: {} }} \
+                   with newer term", self, from, voter_term);
+            self.transition_to_follower(voter_term, from, actions);
         } else if local_term > voter_term {
             // Ignore this message; it came from a previous election cycle.
         } else if self.is_candidate() {
@@ -400,63 +430,58 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             if let Ok(request_vote_response::Granted(_)) = response.which() {
                 self.candidate_state.record_vote(from.clone());
                 if self.candidate_state.count_votes() >= majority {
-                    self.transition_to_leader(&mut actions);
+                    self.transition_to_leader(actions);
                 }
             }
-        }
-        actions
+        };
     }
 
     /// Apply a client proposal to the Raft replica.
-    pub fn proposal_request(&mut self,
-                           from: ClientId,
-                           request: proposal_request::Reader)
-                           -> Actions {
+    fn proposal_request(&mut self,
+                        from: ClientId,
+                        _request: proposal_request::Reader,
+                        _actions: &mut Actions) {
         debug!("{:?}: Proposal from Client({})", self, from);
         unimplemented!()
     }
 
     /// Trigger a heartbeat timeout on the Raft replica.
-    ///
-    /// The provided AppendEntriesRequest builder may be initialized with a message to send to each
-    /// cluster peer.
-    pub fn heartbeat_timeout(&mut self, id: ServerId) -> Actions {
+    fn heartbeat_timeout(&mut self, peer: ServerId, actions: &mut Actions) {
         debug!("{:?}: HeartbeatTimeout", self);
-        /*
-        // Send a heartbeat
-        message.set_term(self.current_term().into());
-        message.set_prev_log_index(self.store.latest_log_index().unwrap().into());
-        message.set_prev_log_term(self.store.latest_log_term().unwrap().into());
-        message.set_leader_commit(self.commit_index.into());
-        message.init_entries(0);
-        */
-        // TODO: send an AppendEntries heartbeat
-        unimplemented!()
+        assert!(self.is_leader());
+        let mut message = MallocMessageBuilder::new_default();
+        {
+            let mut request = message.init_root::<message::Builder>()
+                                     .init_append_entries_request();
+            request.set_term(self.current_term().into());
+            request.set_prev_log_index(self.latest_log_index().into());
+            request.set_prev_log_term(self.store.latest_log_term().unwrap().into());
+            request.set_leader_commit(self.commit_index.into());
+            request.init_entries(0);
+        }
+        actions.peer_messages.push((peer, Rc::new(message)));
     }
 
     /// Trigger an election timeout on the Raft replica.
     ///
     /// The provided RequestVoteRequest builder may be initialized with a message to send to each
     /// cluster peer.
-    pub fn election_timeout(&mut self) -> Actions {
-        debug!("{:?}: ElectionTimeout", self);
-        let mut actions = Actions::new();
-        if !self.is_leader() {
-            if self.peers.is_empty() {
-                // Solitary replica special case; jump straight to leader status
-                info!("{:?}: Transition to Leader", self);
-                assert!(self.is_follower());
-                assert!(self.store.voted_for().unwrap().is_none());
-                self.store.inc_current_term().unwrap();
-                self.store.set_voted_for(self.id).unwrap();
-                let latest_log_index = self.store.latest_log_index().unwrap();
-                self.state = ReplicaState::Leader;
-                self.leader_state.reinitialize(latest_log_index);
-            } else {
-                self.transition_to_candidate(&mut actions);
-            }
+    fn election_timeout(&mut self, actions: &mut Actions) {
+        info!("{:?}: ElectionTimeout", self);
+        assert!(!self.is_leader());
+        if self.peers.is_empty() {
+            // Solitary replica special case; jump straight to leader status
+            info!("{:?}: transitioning to Leader", self);
+            assert!(self.is_follower());
+            assert!(self.store.voted_for().unwrap().is_none());
+            self.store.inc_current_term().unwrap();
+            self.store.set_voted_for(self.id).unwrap();
+            let latest_log_index = self.latest_log_index();
+            self.state = ReplicaState::Leader;
+            self.leader_state.reinitialize(latest_log_index);
+        } else {
+            self.transition_to_candidate(actions);
         }
-        actions
     }
 
     /// Transition this Replica to Leader state.
@@ -464,9 +489,9 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// The provided Actions instance will have an AppendEntriesRequest message
     /// added for each cluster peer.
     fn transition_to_leader(&mut self, actions: &mut Actions) {
-        info!("{:?}: Transition to Leader", self);
+        info!("{:?}: transitioning to Leader", self);
         let current_term = self.current_term();
-        let latest_log_index = self.store.latest_log_index().unwrap();
+        let latest_log_index = self.latest_log_index();
         let latest_log_term = self.store.latest_log_term().unwrap();
         self.state = ReplicaState::Leader;
         self.leader_state.reinitialize(latest_log_index);
@@ -482,9 +507,11 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
 
         let message_rc = Rc::new(message);
-        for &peer in self.peers().iter() {
+        for &peer in self.peers() {
             actions.peer_messages.push((peer, message_rc.clone()));
         }
+
+        actions.clear_timeouts = true;
     }
 
     /// Transition this Replica to Candidate state.
@@ -492,7 +519,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// The provided RequestVoteRequest message will be initialized with a message to send to each
     /// cluster peer.
     fn transition_to_candidate(&mut self, actions: &mut Actions) {
-        info!("{:?}: Transition to Candidate", self);
+        info!("{:?}: transitioning to Candidate", self);
         self.store.inc_current_term().unwrap();
         self.store.set_voted_for(self.id).unwrap();
         self.state = ReplicaState::Candidate;
@@ -500,7 +527,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         self.candidate_state.record_vote(self.id);
 
         let current_term = self.current_term();
-        let latest_index = self.store.latest_log_index().unwrap();
+        let latest_index = self.latest_log_index();
         let latest_term = self.store.latest_log_term().unwrap();
 
         let mut message = MallocMessageBuilder::new_default();
@@ -513,9 +540,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
 
         let message_rc = Rc::new(message);
-        for &peer in self.peers().iter() {
+        for &peer in self.peers() {
             actions.peer_messages.push((peer, message_rc.clone()));
         }
+        actions.timeouts.push(ReplicaTimeout::Election);
     }
 
     /// Advance the commit index and apply committed entries to the state machine, if possible.
@@ -549,11 +577,14 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// The provided leader hint will replace the last known leader.
     fn transition_to_follower(&mut self,
                               term: Term,
-                              leader: ServerId) {
-        info!("{:?}: Transition to Follower", self);
+                              leader: ServerId,
+                              actions: &mut Actions) {
+        info!("{:?}: transitioning to Follower", self);
         self.store.set_current_term(term).unwrap();
         self.state = ReplicaState::Follower;
         self.follower_state.set_leader(leader);
+        actions.clear_timeouts = true;
+        actions.timeouts.push(ReplicaTimeout::Election);
     }
 
     /// Returns `true` if the replica is in the Leader state.
@@ -576,6 +607,16 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         self.store.current_term().unwrap()
     }
 
+    /// Returns the term of the latest applied log entry.
+    fn latest_log_term(&self) -> Term {
+        self.store.latest_log_term().unwrap()
+    }
+
+    /// Returns the index of the latest applied log entry.
+    fn latest_log_index(&self) -> LogIndex {
+        self.store.latest_log_index().unwrap()
+    }
+
     /// Get the cluster quorum majority size.
     fn majority(&self) -> usize {
         let peers = self.peers.len();
@@ -584,11 +625,17 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 }
 
-impl <S, M> fmt::Debug for Replica<S, M> {
+impl <S, M> fmt::Debug for Replica<S, M> where S: Store, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(fmt, "Replica("));
+        try!(write!(fmt, "Replica {{ id: "));
         try!(fmt::Display::fmt(&self.id, fmt));
-        write!(fmt, ")")
+        try!(write!(fmt, ", state: "));
+        try!(fmt::Debug::fmt(&self.state, fmt));
+        try!(write!(fmt, ", term: "));
+        try!(fmt::Display::fmt(&self.current_term(), fmt));
+        try!(write!(fmt, ", index: "));
+        try!(fmt::Display::fmt(&self.latest_log_index(), fmt));
+        write!(fmt, " }}")
     }
 }
 
@@ -598,21 +645,12 @@ mod test {
     use std::collections::{HashSet, HashMap};
     use std::io::Cursor;
     use std::rc::Rc;
-    use std::str::FromStr;
-    use std::sync::mpsc;
 
-    use capnp::{MallocMessageBuilder, MessageBuilder, MessageReader, ReaderOptions};
+    use capnp::{MallocMessageBuilder, MessageBuilder, ReaderOptions};
     use capnp::serialize::{self, OwnedSpaceMessageReader};
 
     use ClientId;
     use ServerId;
-    use Term;
-    use messages_capnp::{
-        append_entries_request,
-        append_entries_response,
-        request_vote_request,
-        request_vote_response,
-    };
     use replica::{Actions, Replica};
     use state_machine::NullStateMachine;
     use store::MemStore;
@@ -649,9 +687,10 @@ mod test {
                  replicas: &mut HashMap<ServerId, TestReplica>,
                  client_messages: &mut Vec<(ClientId, Rc<MallocMessageBuilder>)>) {
 
-            for &(peer, ref message) in actions.peer_messages.iter() {
+            for &(peer, ref message) in &actions.peer_messages {
                 let reader = into_reader(&**message);
-                let actions = replicas.get_mut(&peer).unwrap().apply_peer_message(from, &reader);
+                let mut actions = Actions::new();
+                replicas.get_mut(&peer).unwrap().apply_peer_message(from, &reader, &mut actions);
                 inner(peer, actions, replicas, client_messages);
             }
             client_messages.extend(actions.client_messages.into_iter());
@@ -666,7 +705,8 @@ mod test {
     /// The leader and the followers must be in the same term.
     fn elect_leader(leader: ServerId,
                     replicas: &mut HashMap<ServerId, TestReplica>) {
-        let actions = replicas.get_mut(&leader).unwrap().election_timeout();
+        let mut actions = Actions::new();
+        replicas.get_mut(&leader).unwrap().election_timeout(&mut actions);
         let client_messages = apply_actions(leader, actions, replicas);
         assert!(client_messages.is_empty());
         assert!(replicas[&leader].is_leader());
@@ -680,7 +720,8 @@ mod test {
         let (_, mut replica) = new_cluster(1).into_iter().next().unwrap();
         assert!(replica.is_follower());
 
-        let actions = replica.election_timeout();
+        let mut actions = Actions::new();
+        replica.election_timeout(&mut actions);
         assert!(replica.is_leader());
         assert!(actions.peer_messages.is_empty());
         assert!(actions.client_messages.is_empty());
@@ -691,7 +732,7 @@ mod test {
     #[test]
     fn test_election() {
         let mut replicas = new_cluster(2);
-        let mut replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
         let leader = &replica_ids[0];
         let follower = &replica_ids[1];
         elect_leader(leader.clone(), &mut replicas);

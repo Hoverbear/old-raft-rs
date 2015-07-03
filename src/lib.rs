@@ -43,19 +43,32 @@
 //!
 //!     // TODO
 //!
-#![feature(buf_stream)]
 
-
+extern crate bufstream;
 extern crate capnp;
 extern crate mio;
 extern crate rand;
 extern crate uuid;
 #[macro_use] extern crate log;
 
+/// Unwraps the Result value, or logs a warning and returns early if the value
+/// is an `Err`.
+macro_rules! try_warn {
+    ($expr:expr, $($arg:tt)*) => (match $expr {
+        ::std::result::Result::Ok(val) => val,
+        ::std::result::Result::Err(err) => {
+            warn!($($arg)*, err);
+            return ::std::result::Result::Err(::std::convert::From::from(err));
+        },
+    })
+}
+
 pub mod state_machine;
 pub mod store;
 
+mod backoff;
 mod client;
+mod connection;
 mod messages;
 mod replica;
 mod server;
@@ -91,16 +104,12 @@ pub enum Error {
 
 /// Currently, this can only be:
 ///
-/// * `RelatedNodeDown` - When the related Server is known to be down.
-/// * `CannotProceed` - When the related Server cannot proceed due to more than a majority of
-///                     nodes being unavailable.
-/// TODO: Hook these up.
+/// * `ConnectionLimitReached` - The server tried to open a new connection (to a peer or a client),
+///                              but the maximum number of connections was already open.
+/// * `InvalidClientId` - A client reported an invalid client id.
 #[derive(Debug)]
 pub enum ErrorKind {
-    RelatedNodeDown,
-    CannotProceed,
-    NotInCluster,
-    BadResponse,
+    ConnectionLimitReached,
     InvalidClientId,
 }
 
@@ -119,6 +128,17 @@ impl From<capnp::Error> for Error {
 impl From<capnp::NotInSchema> for Error {
     fn from(err: capnp::NotInSchema) -> Error {
         Error::SchemaError(err)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::CapnProto(ref error) => fmt::Display::fmt(error, f),
+            Error::SchemaError(ref error) => fmt::Display::fmt(error, f),
+            Error::Io(ref error) => fmt::Display::fmt(error, f),
+            Error::Raft(ref error) => fmt::Debug::fmt(error, f),
+        }
     }
 }
 
@@ -147,6 +167,11 @@ impl ops::Sub<u64> for Term {
         Term(self.0.checked_sub(rhs).expect("underflow while decrementing Term"))
     }
 }
+impl fmt::Display for Term {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// The index of a log entry.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -171,6 +196,11 @@ impl ops::Sub<u64> for LogIndex {
     type Output = LogIndex;
     fn sub(self, rhs: u64) -> LogIndex {
         LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
+    }
+}
+impl fmt::Display for LogIndex {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -201,7 +231,7 @@ impl fmt::Display for ServerId {
 
 /// The ID of a Raft client.
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
-struct ClientId(Uuid);
+pub struct ClientId(Uuid);
 impl ClientId {
     fn new() -> ClientId {
         ClientId(Uuid::new_v4())

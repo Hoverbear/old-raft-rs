@@ -1,8 +1,9 @@
 use std::collections::HashSet;
-use std::io::{BufStream, Write};
+use std::io::Write;
 use std::net::SocketAddr;
 use std::net::TcpStream;
 
+use bufstream::BufStream;
 use capnp::{serialize, MessageReader, ReaderOptions};
 
 use messages_capnp::{client_response, proposal_response};
