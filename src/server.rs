@@ -407,9 +407,9 @@ mod test {
 
     type TestServer = Server<MemStore, NullStateMachine>;
 
-    fn new_test_server(peers: HashMap<ServerId, SocketAddr>) -> Result<(TestServer, EventLoop<TestServer>)> {
-        Server::new(ServerId::from(0),
-                    SocketAddr::from_str("127.0.0.1:0").unwrap(),
+    fn new_test_server(id: ServerId, addr: SocketAddr, peers: HashMap<ServerId, SocketAddr>) -> Result<(TestServer, EventLoop<TestServer>)> {
+        Server::new(id,
+                    addr,
                     peers,
                     MemStore::new(),
                     NullStateMachine)
@@ -417,26 +417,46 @@ mod test {
 
     /// Attempts to grab a local, unbound socket address for testing.
     fn get_unbound_address() -> SocketAddr {
-        TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+        let mut current = 4001;
+        loop {
+            let string = format!("127.0.0.1:{}", current);
+            let address = SocketAddr::from_str(&string).unwrap();
+            match TcpListener::bind(address) {
+                Ok(socket) => {
+                    info!("Next unbound address is: {:?}", socket.local_addr());
+                    return socket.local_addr().unwrap()
+                },
+                Err(_) => current += 1,
+            }
+        }
     }
 
     #[test]
+    // This should have an error because the peer address is the same as the test server address.
     pub fn test_illegal_peer_address() {
         let _ = env_logger::init();
         let peer_id = ServerId::from(1);
         let mut peers = HashMap::new();
-        peers.insert(peer_id, SocketAddr::from_str("127.0.0.1:0").unwrap());
-        assert!(new_test_server(peers).is_err());
+        peers.insert(peer_id, SocketAddr::from_str("127.0.0.1:4000").unwrap());
+        assert!(new_test_server(
+            ServerId::from(0),
+            SocketAddr::from_str("127.0.0.1:4000").unwrap(),
+            peers
+        ).is_err());
     }
 
     #[test]
+    // This should fail because the port is unbound and uninteresting.
     pub fn test_unbound_peer_address() {
         let _ = env_logger::init();
         let peer_id = ServerId::from(1);
         let mut peers = HashMap::new();
         peers.insert(peer_id, get_unbound_address());
-        let (mut server, mut event_loop) = new_test_server(peers).unwrap();
-        event_loop.run_once(&mut server).unwrap();
-        // TODO: figure out how to test this
+        let (mut server, mut event_loop) = new_test_server(
+            ServerId::from(0),
+            SocketAddr::from_str("127.0.0.1:4000").unwrap(),
+            peers
+        ).unwrap();
+        assert!(event_loop.run_once(&mut server).is_err());
     }
 }
