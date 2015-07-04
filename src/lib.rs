@@ -51,18 +51,6 @@ extern crate rand;
 extern crate uuid;
 #[macro_use] extern crate log;
 
-/// Unwraps the Result value, or logs a warning and returns early if the value
-/// is an `Err`.
-macro_rules! try_warn {
-    ($expr:expr, $($arg:tt)*) => (match $expr {
-        ::std::result::Result::Ok(val) => val,
-        ::std::result::Result::Err(err) => {
-            warn!($($arg)*, err);
-            return ::std::result::Result::Err(::std::convert::From::from(err));
-        },
-    })
-}
-
 pub mod state_machine;
 pub mod store;
 
@@ -107,10 +95,13 @@ pub enum Error {
 /// * `ConnectionLimitReached` - The server tried to open a new connection (to a peer or a client),
 ///                              but the maximum number of connections was already open.
 /// * `InvalidClientId` - A client reported an invalid client id.
+/// * `InvalidConnectionType` - A remote connection attempted to use an unknown connection type in
+///                             the connection preamble.
 #[derive(Debug)]
 pub enum ErrorKind {
     ConnectionLimitReached,
     InvalidClientId,
+    UnknownConnectionType,
 }
 
 impl From<io::Error> for Error {

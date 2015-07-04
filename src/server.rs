@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, io};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::thread::{self, JoinHandle};
@@ -154,8 +154,8 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
 
     /// Returns the connection to the peer.
     fn peer_connection(&mut self, peer_id: &ServerId) -> &mut Connection {
-       let token = self.peer_tokens.get(peer_id).unwrap();
-       &mut self.connections[*token]
+       let token = self.peer_tokens[peer_id];
+       &mut self.connections[token]
     }
 
     /// Finds an existing connection to a client.
@@ -192,7 +192,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             let duration = timeout.duration_ms();
 
             // Registering a timeout may only fail if the maximum number of timeouts
-            // is already registered, which is by default 65,536. We (should) use a
+            // is already registered, which is by default 65,536. We use a
             // maximum of one timeout per peer, so this unwrap should be safe.
             let handle = event_loop.timeout_ms(ServerTimeout::Replica(timeout), duration)
                                    .unwrap();
@@ -214,7 +214,8 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         match kind {
             ConnectionKind::Peer(..) => {
                 // Crash if reseting the connection fails.
-                let (duration, timeout, handle) = self.connections[token].reset_peer(event_loop).unwrap();
+                let (duration, timeout, handle) = self.connections[token].reset_peer(event_loop)
+                                                      .unwrap();
 
                 info!("{:?}: {:?} reset, will attempt to reconnect in {}ms", self,
                       &self.connections[token], duration);
@@ -229,6 +230,63 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                 self.connections.remove(token);
             },
         }
+    }
+
+    /// Reads messages from the connection until no more are available.
+    ///
+    /// If the connection returns an error on any operation, or any message fails to be
+    /// deserialized, an error result is returned.
+    fn readable(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()> {
+        trace!("{:?}: connection readable: {:?}", self, self.connections[token]);
+        // Read messages from the connection until there are no more.
+        while let Some(message) = try!(self.connections[token].readable(event_loop)) {
+            match *self.connections[token].kind() {
+                ConnectionKind::Peer(id) => {
+                    let mut actions = Actions::new();
+                    self.replica.apply_peer_message(id, &message, &mut actions);
+                    self.execute_actions(event_loop, actions);
+                },
+                ConnectionKind::Client(id) => {
+                    let mut actions = Actions::new();
+                    self.replica.apply_client_message(id, &message, &mut actions);
+                    self.execute_actions(event_loop, actions);
+                },
+                ConnectionKind::Unknown => {
+                    let preamble = try!(message.get_root::<connection_preamble::Reader>());
+                    match try!(preamble.get_id().which()) {
+                        connection_preamble::id::Which::Server(id) => {
+                            let peer_id = ServerId(id);
+
+                            self.connections[token].set_kind(ConnectionKind::Peer(peer_id));
+                            let prev_token = self.peer_tokens
+                                                 .insert(peer_id, token)
+                                                 .expect("peer token not found");
+
+                            // Close the existing connection.
+                            try!(self.connections
+                                     .remove(prev_token)
+                                     .expect("peer connection not found")
+                                     .unregister_peer(event_loop));
+
+                            // Clear any timeouts associated with the existing connection.
+                            self.reconnection_timeouts
+                                .remove(&prev_token)
+                                .map(|handle| assert!(event_loop.clear_timeout(handle)));
+
+                            // TODO: add reconnect messages from replica
+                        },
+                        connection_preamble::id::Which::Client(Ok(id)) => {
+                            self.connections[token]
+                                .set_kind(ConnectionKind::Client(try!(ClientId::from_bytes(id))));
+                        },
+                        _ => {
+                            return Err(Error::Raft(ErrorKind::UnknownConnectionType));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -257,7 +315,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
         if events.is_writable() {
             assert!(token != LISTENER, "raft::{:?}: unexpected writeable event for LISTENER", self);
             if let Err(error) = self.connections[token].writable(event_loop) {
-                warn!("{:?}: unable to write to conection {:?}: {}",
+                warn!("{:?}: unable to write message to conection {:?}: {}",
                       self, self.connections[token], error);
                 self.reset_connection(event_loop, token);
                 return;
@@ -268,7 +326,14 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
             if token == LISTENER {
                 self.listener
                     .accept().map_err(From::from)
-                    .and_then(|stream| Connection::unknown(stream.unwrap()))
+                    .and_then(|stream_opt| {
+                        match stream_opt {
+                            Some(stream) => Connection::unknown(stream),
+                            None => Err(Error::Io(io::Error::new(
+                                        io::ErrorKind::WouldBlock,
+                                        "listener.accept() returned None"))),
+                        }
+                    })
                     .and_then(|connection| {
                         debug!("{:?}: new connection received: {:?}", self, connection);
                         self.connections
@@ -282,55 +347,10 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     })
                     .unwrap_or_else(|error| warn!("{:?}: unable to accept connection: {}", self, error));
             } else {
-                trace!("{:?}: connection readable: {:?}, events: {:?}", self, self.connections[token], events);
-                // Read messages from the socket until there are no more.
-                while let Some(message) = self.connections[token].readable(event_loop).unwrap() {
-                    match *self.connections[token].kind() {
-                        ConnectionKind::Peer(id) => {
-                            let mut actions = Actions::new();
-                            self.replica.apply_peer_message(id, &message, &mut actions);
-                            self.execute_actions(event_loop, actions);
-                        },
-                        ConnectionKind::Client(id) => {
-                            let mut actions = Actions::new();
-                            self.replica.apply_client_message(id, &message, &mut actions);
-                            self.execute_actions(event_loop, actions);
-                        },
-                        ConnectionKind::Unknown => {
-                            let preamble = message.get_root::<connection_preamble::Reader>().unwrap();
-                            match preamble.get_id().which().unwrap() {
-                                connection_preamble::id::Which::Server(id) => {
-                                    let peer_id = ServerId(id);
-
-                                    self.connections[token].set_kind(ConnectionKind::Peer(peer_id));
-                                    let prev_token = self.peer_tokens
-                                                         .insert(peer_id, token)
-                                                         .expect("peer token not found");
-
-                                    // Close the existing connection.
-                                    self.connections
-                                        .remove(prev_token)
-                                        .expect("peer connection not found")
-                                        .unregister_peer(event_loop)
-                                        .unwrap();
-
-                                    // Clear any timeouts associated with the existing connection.
-                                    self.reconnection_timeouts
-                                        .remove(&prev_token)
-                                        .map(|handle| assert!(event_loop.clear_timeout(handle)));
-
-                                    // TODO: add reconnect messages from replica
-                                },
-                                connection_preamble::id::Which::Client(Ok(id)) => {
-                                    self.connections[token].set_kind(ConnectionKind::Client(ClientId::from_bytes(id).unwrap()));
-                                },
-                                _ => {
-                                    // TODO: reset the connection
-                                    unimplemented!()
-                                }
-                            }
-                        }
-                    }
+                if let Err(error) = self.readable(event_loop, token) {
+                    warn!("{:?}: unable to read message from connection {:?}: {}",
+                          self, self.connections[token], error);
+                    self.reset_connection(event_loop, token);
                 }
             }
         }
