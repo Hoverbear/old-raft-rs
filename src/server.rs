@@ -107,7 +107,8 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
 
             let mut connection = &mut server.connections[token];
             connection.set_token(token);
-            try!(connection.send_message(&mut event_loop, messages::server_connection_preamble(id)));
+            connection.send_message(messages::server_connection_preamble(id));
+            try!(connection.register(&mut event_loop));
         }
 
         Ok((server, event_loop))
@@ -173,12 +174,11 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         let Actions { peer_messages, client_messages, timeouts, clear_timeouts } = actions;
 
         for (peer, message) in peer_messages {
-            let _ = self.peer_connection(&peer)
-                        .send_message(event_loop, message);
+            self.peer_connection(&peer).send_message(message);
         }
         for (client, message) in client_messages {
             if let Some(connection) = self.client_connection(client) {
-                let _ = connection.send_message(event_loop, message);
+                connection.send_message(message);
             }
         }
         if clear_timeouts {
@@ -223,11 +223,12 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                         "raft::{:?}: timeout already registered: {:?}", self, timeout);
             },
             ConnectionKind::Client(ref id) => {
-                self.connections.remove(token);
-                self.client_tokens.remove(id);
+                self.connections.remove(token).expect("unable to find client connection");
+                assert!(self.client_tokens.remove(id).is_some(),
+                        "{:?}: client {:?} not connected");
             },
             ConnectionKind::Unknown => {
-                self.connections.remove(token);
+                self.connections.remove(token).expect("unable to find unknown connection");
             },
         }
     }
@@ -239,7 +240,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     fn readable(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()> {
         trace!("{:?}: connection readable: {:?}", self, self.connections[token]);
         // Read messages from the connection until there are no more.
-        while let Some(message) = try!(self.connections[token].readable(event_loop)) {
+        while let Some(message) = try!(self.connections[token].readable()) {
             match *self.connections[token].kind() {
                 ConnectionKind::Peer(id) => {
                     let mut actions = Actions::new();
@@ -256,6 +257,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                     match try!(preamble.get_id().which()) {
                         connection_preamble::id::Which::Server(id) => {
                             let peer_id = ServerId(id);
+                            debug!("{:?}: received new connection from {:?}", self, peer_id);
 
                             self.connections[token].set_kind(ConnectionKind::Peer(peer_id));
                             let prev_token = self.peer_tokens
@@ -263,10 +265,9 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                                                  .expect("peer token not found");
 
                             // Close the existing connection.
-                            try!(self.connections
-                                     .remove(prev_token)
-                                     .expect("peer connection not found")
-                                     .unregister_peer(event_loop));
+                            self.connections
+                                .remove(prev_token)
+                                .expect("peer connection not found");
 
                             // Clear any timeouts associated with the existing connection.
                             self.reconnection_timeouts
@@ -276,8 +277,15 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                             // TODO: add reconnect messages from replica
                         },
                         connection_preamble::id::Which::Client(Ok(id)) => {
+                            let client_id = try!(ClientId::from_bytes(id));
+                            debug!("{:?}: received new connection from {:?}", self, client_id);
                             self.connections[token]
-                                .set_kind(ConnectionKind::Client(try!(ClientId::from_bytes(id))));
+                                .set_kind(ConnectionKind::Client(client_id));
+                            let prev_token = self.client_tokens
+                                                 .insert(client_id, token);
+                            assert!(prev_token.is_none(),
+                                    "{:?}: two clients connected with the same id: {:?}",
+                                    self, client_id);
                         },
                         _ => {
                             return Err(Error::Raft(ErrorKind::UnknownConnectionType));
@@ -314,7 +322,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
         if events.is_writable() {
             assert!(token != LISTENER, "raft::{:?}: unexpected writeable event for LISTENER", self);
-            if let Err(error) = self.connections[token].writable(event_loop) {
+            if let Err(error) = self.connections[token].writable() {
                 warn!("{:?}: unable to write message to conection {:?}: {}",
                       self, self.connections[token], error);
                 self.reset_connection(event_loop, token);
@@ -345,13 +353,18 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                         connection.set_token(token);
                         connection.register(event_loop)
                     })
-                    .unwrap_or_else(|error| warn!("{:?}: unable to accept connection: {}", self, error));
+                    .unwrap_or_else(|error| warn!("{:?}: unable to accept connection: {}",
+                                                  self, error));
             } else {
-                if let Err(error) = self.readable(event_loop, token) {
-                    warn!("{:?}: unable to read message from connection {:?}: {}",
-                          self, self.connections[token], error);
-                    self.reset_connection(event_loop, token);
-                }
+                self.readable(event_loop, token)
+                    // Only reregister the connection with the event loop if no
+                    // error occurs and the connection is *not* reset.
+                    .and_then(|_| self.connections[token].reregister(event_loop))
+                    .unwrap_or_else(|error| {
+                        warn!("{:?}: unable to read message from connection {:?}: {}",
+                              self, self.connections[token], error);
+                        self.reset_connection(event_loop, token);
+                    });
             }
         }
     }
@@ -371,7 +384,8 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                 assert!(self.reconnection_timeouts.remove(&token).is_some(),
                         "raft::{:?}: missing timeout: {:?}", self, timeout);
                 self.connections[token]
-                    .reconnect_peer(self.id, event_loop)
+                    .reconnect_peer(self.id)
+                    .and_then(|_| self.connections[token].reregister(event_loop))
                     .unwrap_or_else(|error| {
                         warn!("{:?}: unable to reconnect connection {:?}: {}",
                               self, &self.connections[token], error);
@@ -394,20 +408,26 @@ mod test {
     extern crate env_logger;
 
     use std::collections::HashMap;
-    use std::net::{TcpListener, SocketAddr};
+    use std::net::{TcpListener, TcpStream, SocketAddr};
     use std::str::FromStr;
+    use std::io::{Read, Write};
 
+    use mio::EventLoop;
+    use capnp::{serialize, MessageReader, ReaderOptions};
+
+    use ClientId;
+    use Result;
     use ServerId;
+    use messages;
+    use messages_capnp::connection_preamble;
     use state_machine::NullStateMachine;
     use store::MemStore;
     use super::*;
-    use Result;
-
-    use mio::EventLoop;
 
     type TestServer = Server<MemStore, NullStateMachine>;
 
-    fn new_test_server(peers: HashMap<ServerId, SocketAddr>) -> Result<(TestServer, EventLoop<TestServer>)> {
+    fn new_test_server(peers: HashMap<ServerId, SocketAddr>)
+                       -> Result<(TestServer, EventLoop<TestServer>)> {
         Server::new(ServerId::from(0),
                     SocketAddr::from_str("127.0.0.1:0").unwrap(),
                     peers,
@@ -420,8 +440,44 @@ mod test {
         TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
     }
 
+    /// Verifies that the proved stream has been sent a valid connection
+    /// preamble.
+    fn read_server_preamble<R>(read: &mut R) -> ServerId where R: Read {
+        let message = serialize::read_message(read, ReaderOptions::new()).unwrap();
+        let preamble = message.get_root::<connection_preamble::Reader>().unwrap();
+
+        match preamble.get_id().which().unwrap() {
+            connection_preamble::id::Which::Server(id) => {
+                ServerId::from(id)
+            },
+            _ => {
+                panic!("unexpected preamble id");
+            }
+        }
+    }
+
+    /// Returns true if the server has an open connection with the peer.
+    fn peer_connected(server: &TestServer, peer: ServerId) -> bool {
+        let token = server.peer_tokens[&peer];
+        server.reconnection_timeouts.get(&token).is_none()
+    }
+
+    fn client_connected(server: &TestServer, client: ClientId) -> bool {
+        server.client_tokens.contains_key(&client)
+    }
+
+    /// Returns true if the provided TCP connection has been shutdown.
+    ///
+    /// TODO: figure out a more robust way to implement this, the current check
+    /// will block the thread indefinitely if the stream is not shutdown.
+    fn stream_shutdown(stream: &mut TcpStream) -> bool {
+        let mut buf = [0u8; 128];
+        stream.read(&mut buf).unwrap() == 0
+    }
+
+    /// Tests that a Server will reject an invalid peer address on creation.
     #[test]
-    pub fn test_illegal_peer_address() {
+    fn test_illegal_peer_address() {
         let _ = env_logger::init();
         let peer_id = ServerId::from(1);
         let mut peers = HashMap::new();
@@ -429,14 +485,213 @@ mod test {
         assert!(new_test_server(peers).is_err());
     }
 
+    /// Tests that a Server connects to peer at startup, and reconnects when the
+    /// connection is droped.
     #[test]
-    pub fn test_unbound_peer_address() {
+    fn test_peer_connect() {
+        let _ = env_logger::init();
+        let peer_id = ServerId::from(1);
+
+        let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+
+        let mut peers = HashMap::new();
+        peers.insert(peer_id, peer_listener.local_addr().unwrap());
+        let (mut server, mut event_loop) = new_test_server(peers).unwrap();
+
+        // Accept the server's connection.
+        let (mut stream, _)  = peer_listener.accept().unwrap();
+
+        // Check that the server sends a valid preamble.
+        event_loop.run_once(&mut server).unwrap();
+        assert_eq!(ServerId::from(0), read_server_preamble(&mut stream));
+        assert!(peer_connected(&server, peer_id));
+
+        // Drop the connection.
+        drop(stream);
+        event_loop.run_once(&mut server).unwrap();
+        assert!(!peer_connected(&server, peer_id));
+
+        // Check that the server reconnects after a timeout.
+        event_loop.run_once(&mut server).unwrap();
+        assert!(peer_connected(&server, peer_id));
+        let (mut stream, _)  = peer_listener.accept().unwrap();
+
+        // Check that the server sends a valid preamble after the connection is
+        // established.
+        event_loop.run_once(&mut server).unwrap();
+        assert_eq!(ServerId::from(0), read_server_preamble(&mut stream));
+        assert!(peer_connected(&server, peer_id));
+    }
+
+    /// Tests that a Server will replace a peer's TCP connection if the peer
+    /// connects through another TCP connection.
+    #[test]
+    fn test_peer_accept() {
+        let _ = env_logger::init();
+        let peer_id = ServerId::from(1);
+
+        let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+
+        let mut peers = HashMap::new();
+        peers.insert(peer_id, peer_listener.local_addr().unwrap());
+        let (mut server, mut event_loop) = new_test_server(peers).unwrap();
+
+        // Accept the server's connection.
+        let (mut in_stream, _)  = peer_listener.accept().unwrap();
+
+        // Check that the server sends a valid preamble.
+        event_loop.run_once(&mut server).unwrap();
+        assert_eq!(ServerId::from(0), read_server_preamble(&mut in_stream));
+        assert!(peer_connected(&server, peer_id));
+
+        let server_addr = server.listener.local_addr().unwrap();
+
+        // Open a replacement connection to the server.
+        let mut out_stream = TcpStream::connect(server_addr).unwrap();
+        event_loop.run_once(&mut server).unwrap();
+
+        // Send server the preamble message to the server.
+        serialize::write_message(&mut out_stream, &*messages::server_connection_preamble(peer_id))
+                 .unwrap();
+        event_loop.run_once(&mut server).unwrap();
+
+        // Check that the server has closed the old connection.
+        assert!(stream_shutdown(&mut in_stream));
+    }
+
+    /// Tests that the server will accept a client connection, then dispose of
+    /// it when the client disconnects.
+    #[test]
+    fn test_client_accept() {
+        let _ = env_logger::init();
+
+        let (mut server, mut event_loop) = new_test_server(HashMap::new()).unwrap();
+
+        // Connect to the server.
+        let server_addr = server.listener.local_addr().unwrap();
+        let mut stream = TcpStream::connect(server_addr).unwrap();
+        event_loop.run_once(&mut server).unwrap();
+
+        let client_id = ClientId::new();
+
+        // Send the client preamble message to the server.
+        serialize::write_message(&mut stream, &*messages::client_connection_preamble(client_id))
+                 .unwrap();
+        event_loop.run_once(&mut server).unwrap();
+
+        // Check that the server holds on to the client connection.
+        assert!(client_connected(&server, client_id));
+
+        // Check that the server disposes of the client connection when the TCP
+        // stream is dropped.
+        drop(stream);
+        event_loop.run_once(&mut server).unwrap();
+        assert!(!client_connected(&server, client_id));
+    }
+
+    /// Tests that the server will throw away connections that do not properly
+    /// send a preamble.
+    #[test]
+    fn test_invalid_accept() {
+        let _ = env_logger::init();
+
+        let (mut server, mut event_loop) = new_test_server(HashMap::new()).unwrap();
+
+        // Connect to the server.
+        let server_addr = server.listener.local_addr().unwrap();
+        let mut stream = TcpStream::connect(server_addr).unwrap();
+        event_loop.run_once(&mut server).unwrap();
+
+        // Send an invalid preamble.
+        stream.write(b"foo bar baz").unwrap();
+        event_loop.run_once(&mut server).unwrap();
+
+        // Check that the server disposes of the connection.
+        assert!(stream_shutdown(&mut stream));
+    }
+
+    /// Tests that the server will reset a peer connection when an invalid
+    /// message is received.
+    #[test]
+    fn test_invalid_peer_message() {
+        let _ = env_logger::init();
+
+        let peer_id = ServerId::from(1);
+
+        let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+
+        let mut peers = HashMap::new();
+        peers.insert(peer_id, peer_listener.local_addr().unwrap());
+        let (mut server, mut event_loop) = new_test_server(peers).unwrap();
+
+        // Accept the server's connection.
+        let (mut stream_a, _)  = peer_listener.accept().unwrap();
+
+        // Send an invalid message.
+        stream_a.write(b"foo bar baz").unwrap();
+        event_loop.run_once(&mut server).unwrap();
+
+        // Check that the server resets the connection.
+        assert!(!peer_connected(&server, peer_id));
+
+        // Check that the server reconnects after a timeout.
+        event_loop.run_once(&mut server).unwrap();
+        assert!(peer_connected(&server, peer_id));
+    }
+
+    /// Tests that the server will reset a client connection when an invalid
+    /// message is received.
+    #[test]
+    fn test_invalid_client_message() {
+        let _ = env_logger::init();
+
+        let (mut server, mut event_loop) = new_test_server(HashMap::new()).unwrap();
+
+        // Connect to the server.
+        let server_addr = server.listener.local_addr().unwrap();
+        let mut stream = TcpStream::connect(server_addr).unwrap();
+        event_loop.run_once(&mut server).unwrap();
+
+        let client_id = ClientId::new();
+
+        // Send the client preamble message to the server.
+        serialize::write_message(&mut stream, &*messages::client_connection_preamble(client_id))
+                 .unwrap();
+        event_loop.run_once(&mut server).unwrap();
+
+        // Check that the server holds on to the client connection.
+        assert!(client_connected(&server, client_id));
+
+        // Send an invalid client message to the server.
+        stream.write(b"foo bar baz").unwrap();
+        event_loop.run_once(&mut server).unwrap();
+
+        // Check that the server disposes of the client connection.
+        assert!(!client_connected(&server, client_id));
+    }
+
+    /// Tests that a Server will attempt to reconnect to an unreachable peer
+    /// after failing to connect at startup.
+    #[test]
+    fn test_unreachable_peer_reconnect() {
         let _ = env_logger::init();
         let peer_id = ServerId::from(1);
         let mut peers = HashMap::new();
         peers.insert(peer_id, get_unbound_address());
+
+        // Creates the Server, which registers the peer connection.
         let (mut server, mut event_loop) = new_test_server(peers).unwrap();
+
+        // Error event for the peer connection; connection is reset.
         event_loop.run_once(&mut server).unwrap();
-        // TODO: figure out how to test this
+        assert!(!peer_connected(&mut server, peer_id));
+
+        // Reconnection timeout fires and connection stream is recreated.
+        event_loop.run_once(&mut server).unwrap();
+        assert!(peer_connected(&mut server, peer_id));
+
+        // Error event for the new peer connection; connection is reset.
+        event_loop.run_once(&mut server).unwrap();
+        assert!(!peer_connected(&mut server, peer_id));
     }
 }
