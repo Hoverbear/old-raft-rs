@@ -123,10 +123,7 @@ impl Connection {
     }
 
     /// Writes queued messages to the socket.
-    pub fn writable<S, M>(&mut self,
-                          event_loop: &mut EventLoop<Server<S, M>>)
-                          -> Result<()>
-    where S: Store, M: StateMachine {
+    pub fn writable(&mut self) -> Result<()> {
         trace!("{:?}: writable; queued message count: {}", self, self.write_queue.len());
         assert!(self.is_connected, "raft::{:?}: writable event while not connected", self);
 
@@ -154,9 +151,7 @@ impl Connection {
         }
 
         self.backoff.reset();
-
-        event_loop.reregister(&self.stream, self.token, self.interest, poll_opt())
-                  .map_err(From::from)
+        Ok(())
     }
 
     /// Reads a message from the connection's stream, or if a full message is
@@ -164,10 +159,7 @@ impl Connection {
     ///
     /// Connections are edge-triggered, so the handler must continue calling
     /// until no more messages are returned.
-    pub fn readable<S, M>(&mut self,
-                          event_loop: &mut EventLoop<Server<S, M>>)
-                          -> Result<Option<OwnedSpaceMessageReader>>
-    where S: Store, M: StateMachine {
+    pub fn readable(&mut self) -> Result<Option<OwnedSpaceMessageReader>> {
         trace!("{:?}: readable", self);
         assert!(self.is_connected, "raft::{:?}: readable event while not connected", self);
 
@@ -182,26 +174,20 @@ impl Connection {
             AsyncValue::Continue(continuation) => {
                 // the read only partially completed. Save the continuation and return.
                 self.read_continuation = Some(continuation);
-                try!(self.reregister(event_loop));
                 Ok(None)
             },
         }
     }
 
     /// Queues a message to be sent to this connection.
-    pub fn send_message<S, M>(&mut self,
-                              event_loop: &mut EventLoop<Server<S, M>>,
-                              message: Rc<MallocMessageBuilder>)
-                              -> Result<()>
-    where S: Store, M: StateMachine {
+    pub fn send_message(&mut self, message: Rc<MallocMessageBuilder>) {
         trace!("{:?}: send_message", self);
-        if self.is_connected && self.write_queue.is_empty() {
-            trace!("{:?}: send_message reregistering", self);
-            self.interest.insert(Interest::writable());
-            try!(event_loop.reregister(&self.stream, self.token, self.interest, poll_opt()));
+        if self.is_connected {
+            if self.write_queue.is_empty() {
+                self.interest.insert(Interest::writable());
+            }
+            self.write_queue.push_back(message);
         }
-        self.write_queue.push_back(message);
-        Ok(())
     }
 
     /// Registers the connection with the event loop.
@@ -218,14 +204,14 @@ impl Connection {
                   .map_err(From::from)
     }
 
-    pub fn reconnect_peer<S, M>(&mut self, id: ServerId, event_loop: &mut EventLoop<Server<S, M>>) -> Result<()>
-    where S: Store, M: StateMachine {
+    pub fn reconnect_peer(&mut self, id: ServerId) -> Result<()> {
         self.stream = try!(TcpStream::connect(&self.addr));
         self.is_connected = true;
         self.read_continuation = None;
         self.write_continuation = None;
         self.write_queue.clear();
-        self.send_message(event_loop, messages::server_connection_preamble(id))
+        self.send_message(messages::server_connection_preamble(id));
+        Ok(())
     }
 
     /// Resets a peer connection.
@@ -243,18 +229,6 @@ impl Connection {
         let handle = event_loop.timeout_ms(timeout, duration).unwrap();
         Ok((duration, timeout, handle))
     }
-
-    /// Unregisters a peer connection.
-    pub fn unregister_peer<S, M>(&mut self,
-                                 event_loop: &mut EventLoop<Server<S, M>>)
-                                 -> Result<()>
-    where S: Store, M: StateMachine {
-        if self.is_connected {
-            try!(event_loop.deregister(&self.stream));
-        }
-        Ok(())
-    }
-
 }
 
 impl fmt::Debug for Connection {
