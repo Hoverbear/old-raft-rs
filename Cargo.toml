@@ -12,6 +12,7 @@ log = "*"
 rand = "*"
 uuid = "*"
 bufstream = "*"
+wrapped_enum = "*"
 
 [dependencies.capnp]
 git = "https://github.com/danburkert/capnproto-rust"

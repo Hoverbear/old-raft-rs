@@ -40,7 +40,7 @@ impl MemStore {
 
     pub fn new() -> MemStore {
         MemStore {
-            current_term: Term(0),
+            current_term: 0,
             voted_for: None,
             entries: Vec::new(),
         }
@@ -75,13 +75,13 @@ impl Store for MemStore {
     }
 
     fn latest_log_index(&self) -> result::Result<LogIndex, Error> {
-        Ok(LogIndex(self.entries.len() as u64))
+        Ok(self.entries.len() as LogIndex)
     }
 
     fn latest_log_term(&self) -> result::Result<Term, Error> {
         let len = self.entries.len();
         if len == 0 {
-            Ok(Term::from(0))
+            Ok(0)
         } else {
             Ok(self.entries[len - 1].0)
         }
@@ -114,13 +114,13 @@ mod test {
     #[test]
     fn test_current_term() {
         let mut store = MemStore::new();
-        assert_eq!(Term(0), store.current_term().unwrap());
+        assert_eq!(0, store.current_term().unwrap());
         store.set_voted_for(ServerId::from(0)).unwrap();
-        store.set_current_term(Term(42)).unwrap();
+        store.set_current_term(42).unwrap();
         assert_eq!(None, store.voted_for().unwrap());
-        assert_eq!(Term(42), store.current_term().unwrap());
+        assert_eq!(42, store.current_term().unwrap());
         store.inc_current_term().unwrap();
-        assert_eq!(Term(43), store.current_term().unwrap());
+        assert_eq!(43, store.current_term().unwrap());
     }
 
     #[test]
@@ -135,33 +135,33 @@ mod test {
     #[test]
     fn test_append_entries() {
         let mut store = MemStore::new();
-        assert_eq!(LogIndex::from(0), store.latest_log_index().unwrap());
-        assert_eq!(Term::from(0), store.latest_log_term().unwrap());
+        assert_eq!(0, store.latest_log_index().unwrap());
+        assert_eq!(0, store.latest_log_term().unwrap());
 
-        store.append_entries(LogIndex(1), &[(Term::from(0), &[1]),
-                                            (Term::from(0), &[2]),
-                                            (Term::from(0), &[3]),
-                                            (Term::from(1), &[4])]).unwrap();
-        assert_eq!(LogIndex::from(4), store.latest_log_index().unwrap());
-        assert_eq!(Term::from(1), store.latest_log_term().unwrap());
-        assert_eq!((Term::from(0), &*vec![1u8]), store.entry(LogIndex::from(1)).unwrap());
-        assert_eq!((Term::from(0), &*vec![2u8]), store.entry(LogIndex::from(2)).unwrap());
-        assert_eq!((Term::from(0), &*vec![3u8]), store.entry(LogIndex::from(3)).unwrap());
-        assert_eq!((Term::from(1), &*vec![4u8]), store.entry(LogIndex::from(4)).unwrap());
+        store.append_entries(1, &[(0, &[1]),
+                                  (0, &[2]),
+                                  (0, &[3]),
+                                  (0, &[4])]).unwrap();
+        assert_eq!(4, store.latest_log_index().unwrap());
+        assert_eq!(0, store.latest_log_term().unwrap());
+        assert_eq!((0, &*vec![1u8]), store.entry(1).unwrap());
+        assert_eq!((0, &*vec![2u8]), store.entry(2).unwrap());
+        assert_eq!((0, &*vec![3u8]), store.entry(3).unwrap());
+        assert_eq!((0, &*vec![4u8]), store.entry(4).unwrap());
 
-        store.append_entries(LogIndex::from(4), &[]).unwrap();
-        assert_eq!(LogIndex(3), store.latest_log_index().unwrap());
-        assert_eq!(Term::from(0), store.latest_log_term().unwrap());
-        assert_eq!((Term::from(0), &*vec![1u8]), store.entry(LogIndex::from(1)).unwrap());
-        assert_eq!((Term::from(0), &*vec![2u8]), store.entry(LogIndex::from(2)).unwrap());
-        assert_eq!((Term::from(0), &*vec![3u8]), store.entry(LogIndex::from(3)).unwrap());
+        store.append_entries(4, &[]).unwrap();
+        assert_eq!(3, store.latest_log_index().unwrap());
+        assert_eq!(0, store.latest_log_term().unwrap());
+        assert_eq!((0, &*vec![1u8]), store.entry(1).unwrap());
+        assert_eq!((0, &*vec![2u8]), store.entry(2).unwrap());
+        assert_eq!((0, &*vec![3u8]), store.entry(3).unwrap());
 
-        store.append_entries(LogIndex::from(3), &[(Term(2), &[3]), (Term(3), &[4])]).unwrap();
-        assert_eq!(LogIndex(4), store.latest_log_index().unwrap());
-        assert_eq!(Term::from(3), store.latest_log_term().unwrap());
-        assert_eq!((Term::from(0), &*vec![1u8]), store.entry(LogIndex::from(1)).unwrap());
-        assert_eq!((Term::from(0), &*vec![2u8]), store.entry(LogIndex::from(2)).unwrap());
-        assert_eq!((Term::from(2), &*vec![3u8]), store.entry(LogIndex::from(3)).unwrap());
-        assert_eq!((Term::from(3), &*vec![4u8]), store.entry(LogIndex::from(4)).unwrap());
+        store.append_entries(3, &[(2, &[3]), (3, &[4])]).unwrap();
+        assert_eq!(4, store.latest_log_index().unwrap());
+        assert_eq!(0, store.latest_log_term().unwrap());
+        assert_eq!((0, &*vec![1u8]), store.entry(1).unwrap());
+        assert_eq!((0, &*vec![2u8]), store.entry(2).unwrap());
+        assert_eq!((0, &*vec![3u8]), store.entry(3).unwrap());
+        assert_eq!((0, &*vec![4u8]), store.entry(4).unwrap());
     }
 }

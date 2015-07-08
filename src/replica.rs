@@ -115,8 +115,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             peers: peers,
             store: store,
             state_machine: state_machine,
-            commit_index: LogIndex(0),
-            last_applied: LogIndex(0),
+            commit_index: 0,
+            last_applied: 0,
             state: ReplicaState::Follower,
             leader_state: leader_state,
             candidate_state: CandidateState::new(),
@@ -178,7 +178,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                               actions: &mut Actions) {
         debug!("{:?}: AppendEntriesRequest from Replica({})", self, &from);
 
-        let leader_term = Term(request.get_term());
+        let leader_term = request.get_term();
         let current_term = self.current_term();
 
         if leader_term < current_term {
@@ -187,7 +187,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             return;
         }
 
-        let leader_commit_index = LogIndex::from(request.get_leader_commit());
+        let leader_commit_index = request.get_leader_commit();
         assert!(self.commit_index <= leader_commit_index);
 
         match self.state {
@@ -198,14 +198,14 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                         self.follower_state.set_leader(from);
                     }
 
-                    let leader_prev_log_index = LogIndex(request.get_prev_log_index());
-                    let leader_prev_log_term = Term(request.get_prev_log_term());
+                    let leader_prev_log_index = request.get_prev_log_index();
+                    let leader_prev_log_term = request.get_prev_log_term();
 
                     let latest_log_index = self.latest_log_index();
                     if latest_log_index < leader_prev_log_index {
                         messages::append_entries_response_inconsistent_prev_entry(self.current_term())
                     } else {
-                        let existing_term = if leader_prev_log_index == LogIndex::from(0) {
+                        let existing_term = if leader_prev_log_index == 0 {
                             Term::from(0)
                         } else {
                             self.store.entry(leader_prev_log_index).unwrap().0
@@ -269,7 +269,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         debug!("{:?}: AppendEntriesResponse from Replica({})", self, from);
 
         let local_term = self.current_term();
-        let responder_term = Term::from(response.get_term());
+        let responder_term = response.get_term();
         let local_latest_log_index = self.latest_log_index();
 
         if local_term < responder_term {
@@ -299,7 +299,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
         match response.which() {
             Ok(append_entries_response::Which::Success(follower_latest_log_index)) => {
-                let follower_latest_log_index = LogIndex::from(follower_latest_log_index);
+                let follower_latest_log_index = follower_latest_log_index;
                 assert!(follower_latest_log_index <= local_latest_log_index);
                 self.leader_state.set_match_index(from, follower_latest_log_index);
                 self.advance_commit_index();
@@ -347,7 +347,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 let until_index = Into::<u64>::into(local_latest_log_index) + 1;
                 let mut entries = request.init_entries((until_index - from_index) as u32);
                 for (n, index) in (from_index..until_index).enumerate() {
-                    entries.set(n as u32, self.store.entry(LogIndex::from(index)).unwrap().1);
+                    entries.set(n as u32, self.store.entry(index).unwrap().1);
                 }
             }
             self.leader_state.set_next_index(from, local_latest_log_index + 1);
@@ -364,9 +364,9 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                             candidate: ServerId,
                             request: request_vote_request::Reader,
                             actions: &mut Actions) {
-        let candidate_term = Term(request.get_term());
-        let candidate_log_term = Term(request.get_last_log_term());
-        let candidate_log_index = LogIndex(request.get_last_log_index());
+        let candidate_term = request.get_term();
+        let candidate_log_term = request.get_last_log_term();
+        let candidate_log_index = request.get_last_log_index();
         debug!("{:?}: RequestVoteRequest from Replica {{ id: {}, term: {}, latest_log_term: {}, latest_log_index: {} }}",
                 self, &candidate, candidate_term, candidate_log_term, candidate_log_index);
         let local_term = self.current_term();
@@ -410,7 +410,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         debug!("{:?}: RequestVoteResponse from Replica({})", self, from);
 
         let local_term = self.current_term();
-        let voter_term = Term::from(response.get_term());
+        let voter_term = response.get_term();
 
         let majority = self.majority();
         if local_term < voter_term {
@@ -620,7 +620,9 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// Get the cluster quorum majority size.
     fn majority(&self) -> usize {
         let peers = self.peers.len();
-        let cluster_members = peers.checked_add(1).expect(&format!("unable to support {} cluster members", peers));
+        let cluster_members = peers.checked_add(1)
+                                   .expect(&format!("unable to support {} cluster members",
+                                                    peers));
         (cluster_members >> 1) + 1
     }
 }
