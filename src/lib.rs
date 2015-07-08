@@ -50,6 +50,7 @@ extern crate mio;
 extern crate rand;
 extern crate uuid;
 #[macro_use] extern crate log;
+#[macro_use] extern crate wrapped_enum;
 
 pub mod state_machine;
 pub mod store;
@@ -82,44 +83,30 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// With the exception of the `Raft` variant these are generated from `try!()` macros invoking
 /// on `io::Error` or `capnp::Error` by using
 /// [`FromError`](https://doc.rust-lang.org/std/error/#the-fromerror-trait).
-#[derive(Debug)]
-pub enum Error {
-    CapnProto(capnp::Error),
-    SchemaError(capnp::NotInSchema),
-    Io(io::Error),
-    Raft(ErrorKind),
+wrapped_enum!{
+    #[derive(Debug)]
+    ///
+    pub enum Error {
+        ///
+        CapnProto(capnp::Error),
+        ///
+        SchemaError(capnp::NotInSchema),
+        ///
+        Io(io::Error),
+        ///
+        Raft(ErrorKind),
+    }
 }
 
-/// Currently, this can only be:
+#[derive(Debug)]
 ///
-/// * `ConnectionLimitReached` - The server tried to open a new connection (to a peer or a client),
-///                              but the maximum number of connections was already open.
-/// * `InvalidClientId` - A client reported an invalid client id.
-/// * `InvalidConnectionType` - A remote connection attempted to use an unknown connection type in
-///                             the connection preamble.
-#[derive(Debug)]
 pub enum ErrorKind {
+    /// The server ran out of slots in the slab for new connections
     ConnectionLimitReached,
+    /// A client reported an invalid client id
     InvalidClientId,
+    /// A remote connection attemtped to use an unknown connection type in the connection preamble
     UnknownConnectionType,
-}
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Error {
-        Error::Io(err)
-    }
-}
-
-impl From<capnp::Error> for Error {
-    fn from(err: capnp::Error) -> Error {
-        Error::CapnProto(err)
-    }
-}
-
-impl From<capnp::NotInSchema> for Error {
-    fn from(err: capnp::NotInSchema) -> Error {
-        Error::SchemaError(err)
-    }
 }
 
 impl fmt::Display for Error {

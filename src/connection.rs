@@ -56,7 +56,6 @@ impl ConnectionKind {
 pub struct Connection {
     kind: ConnectionKind,
     addr: SocketAddr,
-    token: Token,
     stream: TcpStream,
     backoff: Backoff,
     interest: Interest,
@@ -79,7 +78,6 @@ impl Connection {
         Ok(Connection {
             kind: ConnectionKind::Unknown,
             addr: addr,
-            token: Token(0),
             stream: socket,
             backoff: Backoff::with_duration_range(8, 10000),
             interest: Interest::hup() | Interest::readable(),
@@ -91,15 +89,11 @@ impl Connection {
     }
 
     /// Creates a new peer connection.
-    ///
-    /// Note: the caller must manually set the token field after inserting the
-    /// connection into a slab.
     pub fn peer(id: ServerId, addr: SocketAddr) -> Result<Connection> {
         let stream = try!(TcpStream::connect(&addr));
         Ok(Connection {
             kind: ConnectionKind::Peer(id),
             addr: addr,
-            token: Token(0),
             stream: stream,
             backoff: Backoff::with_duration_range(1, 10000),
             interest: Interest::hup() | Interest::readable(),
@@ -116,10 +110,6 @@ impl Connection {
 
     pub fn set_kind(&mut self, kind: ConnectionKind) {
         self.kind = kind;
-    }
-
-    pub fn set_token(&mut self, token: Token) {
-        self.token = token;
     }
 
     /// Writes queued messages to the socket.
@@ -191,16 +181,16 @@ impl Connection {
     }
 
     /// Registers the connection with the event loop.
-    pub fn register<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>) -> Result<()>
+    pub fn register<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()>
     where S: Store, M: StateMachine {
-        event_loop.register_opt(&self.stream, self.token, self.interest, poll_opt())
+        event_loop.register_opt(&self.stream, token, self.interest, poll_opt())
                   .map_err(From::from)
     }
 
     /// Reregisters the connection with the event loop.
-    pub fn reregister<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>) -> Result<()>
+    pub fn reregister<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()>
     where S: Store, M: StateMachine {
-        event_loop.reregister(&self.stream, self.token, self.interest, poll_opt())
+        event_loop.reregister(&self.stream, token, self.interest, poll_opt())
                   .map_err(From::from)
     }
 
@@ -216,8 +206,9 @@ impl Connection {
 
     /// Resets a peer connection.
     pub fn reset_peer<S, M>(&mut self,
-                            event_loop: &mut EventLoop<Server<S, M>>)
-                            -> Result<(u64, ServerTimeout, TimeoutHandle)>
+                            event_loop: &mut EventLoop<Server<S, M>>,
+                            token: Token)
+                            -> Result<(ServerTimeout, TimeoutHandle)>
     where S: Store, M: StateMachine {
         assert!(self.kind.is_peer());
         let duration = self.backoff.next_backoff_ms();
@@ -225,9 +216,12 @@ impl Connection {
         self.write_continuation = None;
         self.write_queue.clear();
         self.is_connected = false;
-        let timeout = ServerTimeout::Reconnect(self.token);
+        let timeout = ServerTimeout::Reconnect(token);
         let handle = event_loop.timeout_ms(timeout, duration).unwrap();
-        Ok((duration, timeout, handle))
+
+        info!("{:?}: {:?} reset, will attempt to reconnect in {}ms", self,
+              self, duration);
+        Ok((timeout, handle))
     }
 }
 
