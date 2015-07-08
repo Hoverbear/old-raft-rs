@@ -214,7 +214,8 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         match kind {
             ConnectionKind::Peer(..) => {
                 // Crash if reseting the connection fails.
-                let (duration, timeout, handle) = self.connections[token].reset_peer(event_loop)
+                let (duration, timeout, handle) = self.connections[token]
+                                                      .reset_peer(event_loop)
                                                       .unwrap();
 
                 info!("{:?}: {:?} reset, will attempt to reconnect in {}ms", self,
@@ -389,6 +390,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     .unwrap_or_else(|error| {
                         warn!("{:?}: unable to reconnect connection {:?}: {}",
                               self, &self.connections[token], error);
+                        self.reset_connection(event_loop, token);
                     });
                 // TODO: add reconnect messages from replica
             },
