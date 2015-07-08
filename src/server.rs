@@ -7,8 +7,8 @@ use mio::tcp::TcpListener;
 use mio::util::Slab;
 use mio::{
     EventLoop,
+    EventSet,
     Handler,
-    Interest,
     Token,
 };
 use mio::Timeout as TimeoutHandle;
@@ -303,7 +303,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
     type Message = ();
     type Timeout = ServerTimeout;
 
-    fn ready(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token, events: Interest) {
+    fn ready(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token, events: EventSet) {
         trace!("{:?}: ready; token: {:?}; events: {:?}", self, token, events);
 
         if events.is_error() {

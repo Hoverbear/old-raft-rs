@@ -18,7 +18,8 @@ git = "https://github.com/danburkert/capnproto-rust"
 branch = "async"
 
 [dependencies.mio]
-git = "https://github.com/danburkert/mio"
+git = "https://github.com/carllerche/mio"
+branch = "coalesce-events"
 
 [dev-dependencies]
 env_logger = "*"
