@@ -106,9 +106,8 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             assert!(server.peer_tokens.insert(peer_id, token).is_none());
 
             let mut connection = &mut server.connections[token];
-            connection.set_token(token);
             connection.send_message(messages::server_connection_preamble(id));
-            try!(connection.register(&mut event_loop));
+            try!(connection.register(&mut event_loop, token));
         }
 
         Ok((server, event_loop))
@@ -214,11 +213,10 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         match kind {
             ConnectionKind::Peer(..) => {
                 // Crash if reseting the connection fails.
-                let (duration, timeout, handle) = self.connections[token].reset_peer(event_loop)
-                                                      .unwrap();
+                let (timeout, handle) = self.connections[token]
+                                            .reset_peer(event_loop, token)
+                                            .unwrap();
 
-                info!("{:?}: {:?} reset, will attempt to reconnect in {}ms", self,
-                      &self.connections[token], duration);
                 assert!(self.reconnection_timeouts.insert(token, handle).is_none(),
                         "raft::{:?}: timeout already registered: {:?}", self, timeout);
             },
@@ -350,8 +348,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     })
                     .and_then(|token| {
                         let mut connection = &mut self.connections[token];
-                        connection.set_token(token);
-                        connection.register(event_loop)
+                        connection.register(event_loop, token)
                     })
                     .unwrap_or_else(|error| warn!("{:?}: unable to accept connection: {}",
                                                   self, error));
@@ -359,7 +356,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                 self.readable(event_loop, token)
                     // Only reregister the connection with the event loop if no
                     // error occurs and the connection is *not* reset.
-                    .and_then(|_| self.connections[token].reregister(event_loop))
+                    .and_then(|_| self.connections[token].reregister(event_loop, token))
                     .unwrap_or_else(|error| {
                         warn!("{:?}: unable to read message from connection {:?}: {}",
                               self, self.connections[token], error);
@@ -385,7 +382,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                         "raft::{:?}: missing timeout: {:?}", self, timeout);
                 self.connections[token]
                     .reconnect_peer(self.id)
-                    .and_then(|_| self.connections[token].reregister(event_loop))
+                    .and_then(|_| self.connections[token].reregister(event_loop, token))
                     .unwrap_or_else(|error| {
                         warn!("{:?}: unable to reconnect connection {:?}: {}",
                               self, &self.connections[token], error);
@@ -398,7 +395,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
 impl <S, M> fmt::Debug for Server<S, M> where S: Store, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "Server({})", self.id)
+        fmt::Debug::fmt(&self.id, fmt)
     }
 }
 
@@ -423,6 +420,8 @@ mod test {
     use state_machine::NullStateMachine;
     use store::MemStore;
     use super::*;
+
+    use uuid::Uuid;
 
     type TestServer = Server<MemStore, NullStateMachine>;
 
@@ -572,7 +571,7 @@ mod test {
         let mut stream = TcpStream::connect(server_addr).unwrap();
         event_loop.run_once(&mut server).unwrap();
 
-        let client_id = ClientId::new();
+        let client_id = ClientId(Uuid::new_v4());
 
         // Send the client preamble message to the server.
         serialize::write_message(&mut stream, &*messages::client_connection_preamble(client_id))
@@ -652,7 +651,7 @@ mod test {
         let mut stream = TcpStream::connect(server_addr).unwrap();
         event_loop.run_once(&mut server).unwrap();
 
-        let client_id = ClientId::new();
+        let client_id = ClientId(Uuid::new_v4());
 
         // Send the client preamble message to the server.
         serialize::write_message(&mut stream, &*messages::client_connection_preamble(client_id))

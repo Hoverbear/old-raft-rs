@@ -50,6 +50,7 @@ extern crate mio;
 extern crate rand;
 extern crate uuid;
 #[macro_use] extern crate log;
+#[macro_use] extern crate wrapped_enum;
 
 pub mod state_machine;
 pub mod store;
@@ -72,7 +73,7 @@ pub use state_machine::StateMachine;
 pub use store::Store;
 pub use client::Client;
 
-use std::{io, ops, fmt};
+use std::{io, fmt};
 
 use uuid::Uuid;
 
@@ -82,44 +83,30 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// With the exception of the `Raft` variant these are generated from `try!()` macros invoking
 /// on `io::Error` or `capnp::Error` by using
 /// [`FromError`](https://doc.rust-lang.org/std/error/#the-fromerror-trait).
-#[derive(Debug)]
-pub enum Error {
-    CapnProto(capnp::Error),
-    SchemaError(capnp::NotInSchema),
-    Io(io::Error),
-    Raft(ErrorKind),
+wrapped_enum!{
+    #[derive(Debug)]
+    ///
+    pub enum Error {
+        ///
+        : CapnProto(capnp::Error),
+        ///
+        : SchemaError(capnp::NotInSchema),
+        ///
+        : Io(io::Error),
+        ///
+        : Raft(ErrorKind),
+    }
 }
 
-/// Currently, this can only be:
+#[derive(Debug)]
 ///
-/// * `ConnectionLimitReached` - The server tried to open a new connection (to a peer or a client),
-///                              but the maximum number of connections was already open.
-/// * `InvalidClientId` - A client reported an invalid client id.
-/// * `InvalidConnectionType` - A remote connection attempted to use an unknown connection type in
-///                             the connection preamble.
-#[derive(Debug)]
 pub enum ErrorKind {
+    /// The server ran out of slots in the slab for new connections
     ConnectionLimitReached,
+    /// A client reported an invalid client id
     InvalidClientId,
+    /// A remote connection attemtped to use an unknown connection type in the connection preamble
     UnknownConnectionType,
-}
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Error {
-        Error::Io(err)
-    }
-}
-
-impl From<capnp::Error> for Error {
-    fn from(err: capnp::Error) -> Error {
-        Error::CapnProto(err)
-    }
-}
-
-impl From<capnp::NotInSchema> for Error {
-    fn from(err: capnp::NotInSchema) -> Error {
-        Error::SchemaError(err)
-    }
 }
 
 impl fmt::Display for Error {
@@ -133,87 +120,29 @@ impl fmt::Display for Error {
     }
 }
 
-/// The term of a log entry.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Term(u64);
-impl From<u64> for Term {
-    fn from(val: u64) -> Term {
-        Term(val)
-    }
-}
-impl Into<u64> for Term {
-    fn into(self) -> u64 {
-        self.0
-    }
-}
-impl ops::Add<u64> for Term {
-    type Output = Term;
-    fn add(self, rhs: u64) -> Term {
-        Term(self.0.checked_add(rhs).expect("overflow while incrementing Term"))
-    }
-}
-impl ops::Sub<u64> for Term {
-    type Output = Term;
-    fn sub(self, rhs: u64) -> Term {
-        Term(self.0.checked_sub(rhs).expect("underflow while decrementing Term"))
-    }
-}
-impl fmt::Display for Term {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
+/// The Term for the log entry.
+pub type Term = u64;
 
-/// The index of a log entry.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LogIndex(u64);
-impl From<u64> for LogIndex {
-    fn from(val: u64) -> LogIndex {
-        LogIndex(val)
-    }
-}
-impl Into<u64> for LogIndex {
-    fn into(self) -> u64 {
-        self.0
-    }
-}
-impl ops::Add<u64> for LogIndex {
-    type Output = LogIndex;
-    fn add(self, rhs: u64) -> LogIndex {
-        LogIndex(self.0.checked_add(rhs).expect("overflow while incrementing LogIndex"))
-    }
-}
-impl ops::Sub<u64> for LogIndex {
-    type Output = LogIndex;
-    fn sub(self, rhs: u64) -> LogIndex {
-        LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
-    }
-}
-impl fmt::Display for LogIndex {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
+/// The index for the log entry.
+pub type LogIndex = u64;
 
 /// The id of a Raft server. Must be unique among the participants in a
 /// consensus group.
-#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ServerId(u64);
+
 impl From<u64> for ServerId {
     fn from(val: u64) -> ServerId {
         ServerId(val)
     }
 }
-impl Into<u64> for ServerId {
-    fn into(self) -> u64 {
-        self.0
+
+impl From<ServerId> for u64 {
+    fn from(server_id: ServerId) -> Self {
+        server_id.0
     }
 }
-impl fmt::Debug for ServerId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ServerId({})", self.0)
-    }
-}
+
 impl fmt::Display for ServerId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
@@ -221,27 +150,22 @@ impl fmt::Display for ServerId {
 }
 
 /// The ID of a Raft client.
-#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ClientId(Uuid);
+
 impl ClientId {
-    fn new() -> ClientId {
-        ClientId(Uuid::new_v4())
-    }
-    fn as_bytes(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-    fn from_bytes(bytes: &[u8]) -> Result<ClientId> {
+    fn from_bytes(bytes: &[u8]) -> Result<Self> {
         match Uuid::from_bytes(bytes) {
             Some(uuid) => Ok(ClientId(uuid)),
             None => Err(Error::Raft(ErrorKind::InvalidClientId)),
         }
     }
-}
-impl fmt::Debug for ClientId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ClientId({})", self.0)
+
+    fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
+
 impl fmt::Display for ClientId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)

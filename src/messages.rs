@@ -23,7 +23,7 @@ pub fn server_connection_preamble(id: ServerId) -> Rc<MallocMessageBuilder> {
     {
         message.init_root::<connection_preamble::Builder>()
                .init_id()
-               .set_server(id.into());
+               .set_server(From::from(id));
     }
     Rc::new(message)
 }
