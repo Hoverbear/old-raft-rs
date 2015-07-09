@@ -31,6 +31,7 @@ use connection::{Connection, ConnectionKind};
 const LISTENER: Token = Token(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+
 pub enum ServerTimeout {
     Replica(ReplicaTimeout),
     Reconnect(Token),
@@ -77,12 +78,18 @@ pub struct Server<S, M> where S: Store, M: StateMachine {
 /// The implementation of the Server.
 impl<S, M> Server<S, M> where S: Store, M: StateMachine {
 
+    /// Creates a new instance of the server.
+    /// *Gotcha:* `peers` must not contain the local `id`.
     fn new(id: ServerId,
            addr: SocketAddr,
            peers: HashMap<ServerId, SocketAddr>,
            store: S,
            state_machine: M) -> Result<(Server<S, M>, EventLoop<Server<S, M>>)> {
-        assert!(!peers.contains_key(&id), "peer set must not contain the local server");
+
+        if peers.contains_key(&id) {
+            return Err(Error::Raft(ErrorKind::InvalidPeerSet))
+        }
+
         let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
         let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
         let listener = try!(TcpListener::bind(&addr));
