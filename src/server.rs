@@ -485,9 +485,9 @@ mod test {
 
     /// Tests that a Server will reject an invalid peer address on creation.
     #[test]
-    fn test_illegal_peer_address() {
+    fn test_illegal_peer_id() {
         let _ = env_logger::init();
-        let peer_id = ServerId::from(1);
+        let peer_id = ServerId::from(0);
         let mut peers = HashMap::new();
         peers.insert(peer_id, SocketAddr::from_str("127.0.0.1:0").unwrap());
         assert!(new_test_server(peers).is_err());
