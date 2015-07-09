@@ -462,6 +462,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Trigger a heartbeat timeout on the Raft replica.
+    /// `peer` is the ID of the peer which
     fn heartbeat_timeout(&mut self, peer: ServerId, actions: &mut Actions) {
         debug!("{:?}: HeartbeatTimeout", self);
         assert!(self.is_leader());
@@ -667,7 +668,7 @@ mod test {
 
     use ClientId;
     use ServerId;
-    use replica::{Actions, Replica};
+    use replica::{Actions, Replica, ReplicaTimeout};
     use state_machine::NullStateMachine;
     use store::MemStore;
 
@@ -763,6 +764,43 @@ mod test {
     /// leader.
     #[test]
     fn test_heartbeat() {
-        // TODO
+        let mut replicas = new_cluster(2);
+        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+        let leader_id = &replica_ids[0];
+        let follower_id = &replica_ids[1];
+        elect_leader(leader_id.clone(), &mut replicas);
+
+        // Leader pings with a heartbeat timeout.
+        let mut leader_append_entries = {
+            let mut actions = Actions::new();
+            let leader = replicas.get_mut(&leader_id).unwrap();
+            leader.heartbeat_timeout(follower_id.clone(), &mut actions);
+
+            let peer_message = actions.peer_messages.iter().next().unwrap();
+            assert_eq!(peer_message.0, follower_id.clone());
+            peer_message.1.clone()
+        };
+        let reader = into_reader(&*leader_append_entries);
+
+        // Follower
+        let follower_response = {
+            let mut actions = Actions::new();
+            let follower = replicas.get_mut(&follower_id).unwrap();
+            follower.apply_peer_message(leader_id.clone(), &reader, &mut actions);
+
+            let election_timeout = actions.timeouts.iter().next().unwrap();
+            assert_eq!(election_timeout, &ReplicaTimeout::Election);
+
+            let peer_message = actions.peer_messages.iter().next().unwrap();
+            assert_eq!(peer_message.0, leader_id.clone());
+            peer_message.1.clone()
+        };
+        let reader = into_reader(&*follower_response);
+
+        let leader = replicas.get_mut(&leader_id).unwrap();
+        let mut actions = Actions::new();
+        leader.apply_peer_message(follower_id.clone(), &reader, &mut actions);
+        let heartbeat_timeout = actions.timeouts.iter().next().unwrap();
+        assert_eq!(heartbeat_timeout, &ReplicaTimeout::Heartbeat(follower_id.clone()));
     }
 }
