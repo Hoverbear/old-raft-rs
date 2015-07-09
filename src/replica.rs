@@ -782,7 +782,7 @@ mod test {
         };
         let reader = into_reader(&*leader_append_entries);
 
-        // Follower
+        // Follower responds.
         let follower_response = {
             let mut actions = Actions::new();
             let follower = replicas.get_mut(&follower_id).unwrap();
@@ -797,6 +797,7 @@ mod test {
         };
         let reader = into_reader(&*follower_response);
 
+        // Leader applies and sends back a heartbeat to establish leadership.
         let leader = replicas.get_mut(&leader_id).unwrap();
         let mut actions = Actions::new();
         leader.apply_peer_message(follower_id.clone(), &reader, &mut actions);
