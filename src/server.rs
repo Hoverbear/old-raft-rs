@@ -412,7 +412,7 @@ mod test {
     use std::collections::HashMap;
     use std::net::{TcpListener, TcpStream, SocketAddr};
     use std::str::FromStr;
-    use std::io::{Read, Write};
+    use std::io::{self, Read, Write};
 
     use mio::EventLoop;
     use capnp::{serialize, MessageReader, ReaderOptions};
@@ -474,7 +474,13 @@ mod test {
     /// will block the thread indefinitely if the stream is not shutdown.
     fn stream_shutdown(stream: &mut TcpStream) -> bool {
         let mut buf = [0u8; 128];
-        stream.read(&mut buf).unwrap() == 0
+        let num_read = stream.read(&mut buf);
+        match num_read {
+            // The connection is already shut down.
+            Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => true,
+            Ok(0) => true,
+            _ => false,
+        }
     }
 
     /// Tests that a Server will reject an invalid peer address on creation.
