@@ -37,17 +37,29 @@ fn poll_opt() -> PollOpt {
     PollOpt::edge() | PollOpt::oneshot()
 }
 
+/// The type of a connection.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum ConnectionKind {
+    /// A peer in the cluster.
     Peer(ServerId),
+    /// A client which is asking the Raft cluster to do things.
     Client(ClientId),
+    /// Something else.
     Unknown,
 }
 
 impl ConnectionKind {
+    /// Returns if the `Connection` is a peer type.
     fn is_peer(&self) -> bool {
         match *self {
             ConnectionKind::Peer(..) => true,
+            _ => false,
+        }
+    }
+    /// Returns if the `Connection` is a client type.
+    fn is_Client(&self) -> bool {
+        match *self {
+            ConnectionKind::Client(..) => true,
             _ => false,
         }
     }
