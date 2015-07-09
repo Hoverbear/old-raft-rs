@@ -393,7 +393,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
 impl <S, M> fmt::Debug for Server<S, M> where S: Store, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(&self.id, fmt)
+        write!(fmt, "Server({})", self.id)
     }
 }
 
