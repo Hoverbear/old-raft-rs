@@ -27,13 +27,17 @@ const ELECTION_MIN: u64 = 1500;
 const ELECTION_MAX: u64 = 3000;
 const HEARTBEAT_DURATION: u64 = 500;
 
+/// Timeout types for Raft.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ReplicaTimeout {
+    // An election timeout. Randomized value.
     Election,
+    // A heartbeat timeout. Stable value.
     Heartbeat(ServerId),
 }
 
 impl ReplicaTimeout {
+    /// Returns how long the timeout period is.
     pub fn duration_ms(&self) -> u64 {
         match *self {
             ReplicaTimeout::Election => rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX),
@@ -42,10 +46,15 @@ impl ReplicaTimeout {
     }
 }
 
+/// The set of actions for the server to carry out after applying requests to the replica.
 pub struct Actions {
+    /// Messages to be sent to peers.
     pub peer_messages: Vec<(ServerId, Rc<MallocMessageBuilder>)>,
+    /// Messages to be send to clients.
     pub client_messages: Vec<(ClientId, Rc<MallocMessageBuilder>)>,
+    /// Whether or not to clear timeouts associated.
     pub clear_timeouts: bool,
+    /// Any new timeouts to create.
     pub timeouts: Vec<ReplicaTimeout>,
 }
 
@@ -64,6 +73,7 @@ impl fmt::Debug for Actions {
 }
 
 impl Actions {
+    /// Creates an empty `Actions` set.
     pub fn new() -> Actions {
         Actions {
             peer_messages: vec![],
@@ -103,7 +113,7 @@ pub struct Replica<S, M> {
 }
 
 impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
-
+    /// Creates a `Replica`.
     pub fn new(id: ServerId,
                peers: HashSet<ServerId>,
                store: S,
@@ -131,10 +141,13 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         actions
     }
 
+    /// Returns the peers (Id's only) of the replica.
     pub fn peers(&self) -> &HashSet<ServerId> {
         &self.peers
     }
 
+    /// Applies a peer message to the replica. This function dispatches a generic request to it's
+    /// appropriate handler.
     pub fn apply_peer_message<R>(&mut self, from: ServerId, message: &R, actions: &mut Actions)
     where R: MessageReader {
         let reader = message.get_root::<message::Reader>().unwrap().which().unwrap();
@@ -151,6 +164,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         };
     }
 
+    /// Applies a client message to the replica. This function dispatches a generic request to it's
+    /// appropriate handler. (Right now, only a `proposal_request` is valid.)
     pub fn apply_client_message<R>(&mut self,
                                    from: ClientId,
                                    message: &R,
@@ -164,6 +179,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
     }
 
+    /// Applies a timeout's actions to the `Replica`.
     pub fn apply_timeout(&mut self, timeout: ReplicaTimeout, actions: &mut Actions) {
         match timeout {
             ReplicaTimeout::Election => self.election_timeout(actions),
