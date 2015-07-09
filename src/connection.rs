@@ -7,7 +7,7 @@ use mio::tcp::TcpStream;
 use mio::Timeout as TimeoutHandle;
 use mio::{
     EventLoop,
-    Interest,
+    EventSet,
     PollOpt,
     Token,
 };
@@ -58,7 +58,7 @@ pub struct Connection {
     addr: SocketAddr,
     stream: TcpStream,
     backoff: Backoff,
-    interest: Interest,
+    events: EventSet,
     read_continuation: Option<ReadContinuation>,
     write_continuation: Option<WriteContinuation>,
     write_queue: VecDeque<Rc<MallocMessageBuilder>>,
@@ -80,7 +80,7 @@ impl Connection {
             addr: addr,
             stream: socket,
             backoff: Backoff::with_duration_range(8, 10000),
-            interest: Interest::hup() | Interest::readable(),
+            events: EventSet::hup() | EventSet::readable(),
             read_continuation: None,
             write_continuation: None,
             write_queue: VecDeque::new(),
@@ -96,7 +96,7 @@ impl Connection {
             addr: addr,
             stream: stream,
             backoff: Backoff::with_duration_range(1, 10000),
-            interest: Interest::hup() | Interest::readable(),
+            events: EventSet::hup() | EventSet::readable(),
             read_continuation: None,
             write_continuation: None,
             write_queue: VecDeque::new(),
@@ -137,7 +137,7 @@ impl Connection {
         }
 
         if self.write_queue.is_empty() {
-            self.interest.remove(Interest::writable());
+            self.events.remove(EventSet::writable());
         }
 
         self.backoff.reset();
@@ -174,7 +174,7 @@ impl Connection {
         trace!("{:?}: send_message", self);
         if self.is_connected {
             if self.write_queue.is_empty() {
-                self.interest.insert(Interest::writable());
+                self.events.insert(EventSet::writable());
             }
             self.write_queue.push_back(message);
         }
@@ -183,14 +183,14 @@ impl Connection {
     /// Registers the connection with the event loop.
     pub fn register<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()>
     where S: Store, M: StateMachine {
-        event_loop.register_opt(&self.stream, token, self.interest, poll_opt())
+        event_loop.register_opt(&self.stream, token, self.events, poll_opt())
                   .map_err(From::from)
     }
 
     /// Reregisters the connection with the event loop.
     pub fn reregister<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()>
     where S: Store, M: StateMachine {
-        event_loop.reregister(&self.stream, token, self.interest, poll_opt())
+        event_loop.reregister(&self.stream, token, self.events, poll_opt())
                   .map_err(From::from)
     }
 
