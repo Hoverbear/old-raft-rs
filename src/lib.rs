@@ -50,6 +50,7 @@ extern crate mio;
 extern crate rand;
 extern crate uuid;
 #[macro_use] extern crate log;
+#[macro_use] extern crate scoped_log;
 #[macro_use] extern crate wrapped_enum;
 
 pub mod state_machine;
