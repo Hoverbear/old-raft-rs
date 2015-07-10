@@ -10,8 +10,13 @@ use messages_capnp::{client_response, proposal_response};
 use messages;
 use Result;
 
+/// The representation of a Client connection to the cluster.
 pub struct Client {
+    /// The current connection to the current leader.
+    /// If it is none it may mean that there is no estabished leader or that there has been
+    /// a disconnection.
     leader_connection: Option<BufStream<TcpStream>>,
+    /// A lookup for the cluster's nodes.
     cluster: HashSet<SocketAddr>,
 }
 

@@ -31,6 +31,7 @@ use connection::{Connection, ConnectionKind};
 const LISTENER: Token = Token(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+
 pub enum ServerTimeout {
     Replica(ReplicaTimeout),
     Reconnect(Token),
@@ -77,12 +78,17 @@ pub struct Server<S, M> where S: Store, M: StateMachine {
 /// The implementation of the Server.
 impl<S, M> Server<S, M> where S: Store, M: StateMachine {
 
+    /// Creates a new instance of the server.
+    /// *Gotcha:* `peers` must not contain the local `id`.
     fn new(id: ServerId,
            addr: SocketAddr,
            peers: HashMap<ServerId, SocketAddr>,
            store: S,
            state_machine: M) -> Result<(Server<S, M>, EventLoop<Server<S, M>>)> {
-        scoped_assert!(!peers.contains_key(&id), "peer set must not contain the local server");
+        if peers.contains_key(&id) {
+            return Err(Error::Raft(ErrorKind::InvalidPeerSet))
+        }
+
         let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
         let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
         let listener = try!(TcpListener::bind(&addr));
@@ -407,7 +413,7 @@ mod test {
     use std::collections::HashMap;
     use std::net::{TcpListener, TcpStream, SocketAddr};
     use std::str::FromStr;
-    use std::io::{Read, Write};
+    use std::io::{self, Read, Write};
 
     use mio::EventLoop;
     use capnp::{serialize, MessageReader, ReaderOptions};
@@ -469,14 +475,20 @@ mod test {
     /// will block the thread indefinitely if the stream is not shutdown.
     fn stream_shutdown(stream: &mut TcpStream) -> bool {
         let mut buf = [0u8; 128];
-        stream.read(&mut buf).unwrap() == 0
+        let num_read = stream.read(&mut buf);
+        match num_read {
+            // The connection is already shut down.
+            Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => true,
+            Ok(0) => true,
+            _ => false,
+        }
     }
 
     /// Tests that a Server will reject an invalid peer address on creation.
     #[test]
-    fn test_illegal_peer_address() {
+    fn test_illegal_peer_id() {
         let _ = env_logger::init();
-        let peer_id = ServerId::from(1);
+        let peer_id = ServerId::from(0);
         let mut peers = HashMap::new();
         peers.insert(peer_id, SocketAddr::from_str("127.0.0.1:0").unwrap());
         scoped_assert!(new_test_server(peers).is_err());

@@ -106,8 +106,10 @@ pub enum ErrorKind {
     ConnectionLimitReached,
     /// A client reported an invalid client id
     InvalidClientId,
-    /// A remote connection attemtped to use an unknown connection type in the connection preamble
+    /// A remote connection attempted to use an unknown connection type in the connection preamble
     UnknownConnectionType,
+    /// An invalid peer in in the peer set. Returned Server::new().
+    InvalidPeerSet,
 }
 
 impl fmt::Display for Error {
