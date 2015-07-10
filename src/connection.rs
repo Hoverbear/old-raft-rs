@@ -197,7 +197,6 @@ impl Connection {
     }
 
     pub fn reconnect_peer(&mut self, id: ServerId) -> Result<()> {
-        push_log_scope!("{:?}", self);
         self.stream = try!(TcpStream::connect(&self.addr));
         self.is_connected = true;
         self.read_continuation = None;

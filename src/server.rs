@@ -377,9 +377,8 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
             },
 
             ServerTimeout::Reconnect(token) => {
-                push_log_scope!("{:?}", self.connections[token]);
                 scoped_assert!(self.reconnection_timeouts.remove(&token).is_some(),
-                               "missing timeout: {:?}", timeout);
+                               "{:?} missing timeout: {:?}", self.connections[token], timeout);
                 self.connections[token]
                     .reconnect_peer(self.id)
                     .and_then(|_| self.connections[token].reregister(event_loop, token))
