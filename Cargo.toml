@@ -1,9 +1,10 @@
 [package]
 name = "raft"
 version = "0.0.1"
-authors = [ "Andrew Hobden <andrew@hoverbear.org>"
-          , "James McGlashan <github@darkfox.id.au>"
-	  ]
+authors = [
+    "Andrew Hobden <andrew@hoverbear.org>",
+    "James McGlashan <github@darkfox.id.au>",
+]
 build = "build.rs"
 
 [build-dependencies.capnpc]
