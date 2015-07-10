@@ -126,8 +126,9 @@ impl Connection {
 
     /// Writes queued messages to the socket.
     pub fn writable(&mut self) -> Result<()> {
-        trace!("{:?}: writable; queued message count: {}", self, self.write_queue.len());
-        assert!(self.is_connected, "raft::{:?}: writable event while not connected", self);
+        push_log_scope!("{:?}", self);
+        scoped_trace!("writable; queued message count: {}", self.write_queue.len());
+        scoped_assert!(self.is_connected, "writable event while not connected");
 
         while let Some(message) = self.write_queue.pop_front() {
             let continuation = self.write_continuation.take();
@@ -162,8 +163,9 @@ impl Connection {
     /// Connections are edge-triggered, so the handler must continue calling
     /// until no more messages are returned.
     pub fn readable(&mut self) -> Result<Option<OwnedSpaceMessageReader>> {
-        trace!("{:?}: readable", self);
-        assert!(self.is_connected, "raft::{:?}: readable event while not connected", self);
+        push_log_scope!("{:?}", self);
+        scoped_trace!("readable");
+        scoped_assert!(self.is_connected, "readable event while not connected");
 
         let read = try!(read_message_async(&mut self.stream,
                                            ReaderOptions::new(),
@@ -183,7 +185,7 @@ impl Connection {
 
     /// Queues a message to be sent to this connection.
     pub fn send_message(&mut self, message: Rc<MallocMessageBuilder>) {
-        trace!("{:?}: send_message", self);
+        scoped_trace!("send_message");
         if self.is_connected {
             if self.write_queue.is_empty() {
                 self.events.insert(EventSet::writable());
@@ -222,7 +224,7 @@ impl Connection {
                             token: Token)
                             -> Result<(ServerTimeout, TimeoutHandle)>
     where S: Store, M: StateMachine {
-        assert!(self.kind.is_peer());
+        scoped_assert!(self.kind.is_peer());
         let duration = self.backoff.next_backoff_ms();
         self.read_continuation = None;
         self.write_continuation = None;
@@ -231,8 +233,7 @@ impl Connection {
         let timeout = ServerTimeout::Reconnect(token);
         let handle = event_loop.timeout_ms(timeout, duration).unwrap();
 
-        info!("{:?}: {:?} reset, will attempt to reconnect in {}ms", self,
-              self, duration);
+        scoped_info!("reset, will attempt to reconnect in {}ms", duration);
         Ok((timeout, handle))
     }
 }
