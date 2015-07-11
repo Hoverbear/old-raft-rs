@@ -752,7 +752,7 @@ mod test {
 
     /// A simple election test of a two-replica cluster.
     #[test]
-    fn test_election() {
+    fn test_election_2() {
         let mut replicas = new_cluster(2);
         let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
         let leader = &replica_ids[0];
@@ -761,6 +761,51 @@ mod test {
 
         scoped_assert!(replicas[leader].is_leader());
         scoped_assert!(replicas[follower].is_follower());
+    }
+
+    /// A simple election test of a three-replica cluster.
+    #[test]
+    fn test_election_3() {
+        let mut replicas = new_cluster(3);
+        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+        let leader = &replica_ids[0];
+        elect_leader(leader.clone(), &mut replicas);
+
+        scoped_assert!(replicas[leader].is_leader());
+        scoped_assert!(replicas[&replica_ids[1]].is_follower());
+        scoped_assert!(replicas[&replica_ids[2]].is_follower());
+    }
+
+    /// A simple election test of a five-replica cluster.
+    #[test]
+    fn test_election_5() {
+        let mut replicas = new_cluster(5);
+        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+        let leader = &replica_ids[0];
+        elect_leader(leader.clone(), &mut replicas);
+
+        scoped_assert!(replicas[leader].is_leader());
+        scoped_assert!(replicas[&replica_ids[1]].is_follower());
+        scoped_assert!(replicas[&replica_ids[2]].is_follower());
+        scoped_assert!(replicas[&replica_ids[3]].is_follower());
+        scoped_assert!(replicas[&replica_ids[4]].is_follower());
+    }
+
+    /// A simple election test of a seven-replica cluster.
+    #[test]
+    fn test_election_7() {
+        let mut replicas = new_cluster(7);
+        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+        let leader = &replica_ids[0];
+        elect_leader(leader.clone(), &mut replicas);
+
+        scoped_assert!(replicas[leader].is_leader());
+        scoped_assert!(replicas[&replica_ids[1]].is_follower());
+        scoped_assert!(replicas[&replica_ids[2]].is_follower());
+        scoped_assert!(replicas[&replica_ids[3]].is_follower());
+        scoped_assert!(replicas[&replica_ids[4]].is_follower());
+        scoped_assert!(replicas[&replica_ids[5]].is_follower());
+        scoped_assert!(replicas[&replica_ids[6]].is_follower());
     }
 
     /// Tests the Raft heartbeating mechanism. The leader receives a heartbeat
