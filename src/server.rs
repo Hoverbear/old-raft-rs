@@ -109,7 +109,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             let token: Token = try!(server.connections
                                           .insert(try!(Connection::peer(peer_id, peer_addr)))
                                           .map_err(|_| Error::Raft(ErrorKind::ConnectionLimitReached)));
-            scoped_assert!(server.peer_tokens.insert(peer_id, token).is_none());
+            assert!(server.peer_tokens.insert(peer_id, token).is_none());
 
             let mut connection = &mut server.connections[token];
             connection.send_message(messages::server_connection_preamble(id));
@@ -188,7 +188,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         }
         if clear_timeouts {
             for (timeout, &handle) in &self.replica_timeouts {
-                scoped_assert!(event_loop.clear_timeout(handle),
+                assert!(event_loop.clear_timeout(handle),
                                "unable to clear timeout: {:?}", timeout);
             }
             self.replica_timeouts.clear();
@@ -505,7 +505,7 @@ mod test {
         let peer_id = ServerId::from(0);
         let mut peers = HashMap::new();
         peers.insert(peer_id, SocketAddr::from_str("127.0.0.1:0").unwrap());
-        scoped_assert!(new_test_server(peers).is_err());
+        assert!(new_test_server(peers).is_err());
     }
 
     /// Tests that a Server connects to peer at startup, and reconnects when the
@@ -527,23 +527,23 @@ mod test {
         // Check that the server sends a valid preamble.
         event_loop.run_once(&mut server).unwrap();
         assert_eq!(ServerId::from(0), read_server_preamble(&mut stream));
-        scoped_assert!(peer_connected(&server, peer_id));
+        assert!(peer_connected(&server, peer_id));
 
         // Drop the connection.
         drop(stream);
         event_loop.run_once(&mut server).unwrap();
-        scoped_assert!(!peer_connected(&server, peer_id));
+        assert!(!peer_connected(&server, peer_id));
 
         // Check that the server reconnects after a timeout.
         event_loop.run_once(&mut server).unwrap();
-        scoped_assert!(peer_connected(&server, peer_id));
+        assert!(peer_connected(&server, peer_id));
         let (mut stream, _)  = peer_listener.accept().unwrap();
 
         // Check that the server sends a valid preamble after the connection is
         // established.
         event_loop.run_once(&mut server).unwrap();
         assert_eq!(ServerId::from(0), read_server_preamble(&mut stream));
-        scoped_assert!(peer_connected(&server, peer_id));
+        assert!(peer_connected(&server, peer_id));
     }
 
     /// Tests that a Server will replace a peer's TCP connection if the peer
@@ -565,7 +565,7 @@ mod test {
         // Check that the server sends a valid preamble.
         event_loop.run_once(&mut server).unwrap();
         assert_eq!(ServerId::from(0), read_server_preamble(&mut in_stream));
-        scoped_assert!(peer_connected(&server, peer_id));
+        assert!(peer_connected(&server, peer_id));
 
         let server_addr = server.listener.local_addr().unwrap();
 
@@ -579,7 +579,7 @@ mod test {
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server has closed the old connection.
-        scoped_assert!(stream_shutdown(&mut in_stream));
+        assert!(stream_shutdown(&mut in_stream));
     }
 
     /// Tests that the server will accept a client connection, then dispose of
@@ -603,13 +603,13 @@ mod test {
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server holds on to the client connection.
-        scoped_assert!(client_connected(&server, client_id));
+        assert!(client_connected(&server, client_id));
 
         // Check that the server disposes of the client connection when the TCP
         // stream is dropped.
         drop(stream);
         event_loop.run_once(&mut server).unwrap();
-        scoped_assert!(!client_connected(&server, client_id));
+        assert!(!client_connected(&server, client_id));
     }
 
     /// Tests that the server will throw away connections that do not properly
@@ -630,7 +630,7 @@ mod test {
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server disposes of the connection.
-        scoped_assert!(stream_shutdown(&mut stream));
+        assert!(stream_shutdown(&mut stream));
     }
 
     /// Tests that the server will reset a peer connection when an invalid
@@ -655,11 +655,11 @@ mod test {
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server resets the connection.
-        scoped_assert!(!peer_connected(&server, peer_id));
+        assert!(!peer_connected(&server, peer_id));
 
         // Check that the server reconnects after a timeout.
         event_loop.run_once(&mut server).unwrap();
-        scoped_assert!(peer_connected(&server, peer_id));
+        assert!(peer_connected(&server, peer_id));
     }
 
     /// Tests that the server will reset a client connection when an invalid
@@ -683,14 +683,14 @@ mod test {
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server holds on to the client connection.
-        scoped_assert!(client_connected(&server, client_id));
+        assert!(client_connected(&server, client_id));
 
         // Send an invalid client message to the server.
         stream.write(b"foo bar baz").unwrap();
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server disposes of the client connection.
-        scoped_assert!(!client_connected(&server, client_id));
+        assert!(!client_connected(&server, client_id));
     }
 
     /// Tests that a Server will attempt to reconnect to an unreachable peer
@@ -707,14 +707,14 @@ mod test {
 
         // Error event for the peer connection; connection is reset.
         event_loop.run_once(&mut server).unwrap();
-        scoped_assert!(!peer_connected(&mut server, peer_id));
+        assert!(!peer_connected(&mut server, peer_id));
 
         // Reconnection timeout fires and connection stream is recreated.
         event_loop.run_once(&mut server).unwrap();
-        scoped_assert!(peer_connected(&mut server, peer_id));
+        assert!(peer_connected(&mut server, peer_id));
 
         // Error event for the new peer connection; connection is reset.
         event_loop.run_once(&mut server).unwrap();
-        scoped_assert!(!peer_connected(&mut server, peer_id));
+        assert!(!peer_connected(&mut server, peer_id));
     }
 }

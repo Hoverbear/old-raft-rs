@@ -730,8 +730,8 @@ mod test {
         let mut actions = Actions::new();
         replicas.get_mut(&leader).unwrap().election_timeout(&mut actions);
         let client_messages = apply_actions(leader, actions, replicas);
-        scoped_assert!(client_messages.is_empty());
-        scoped_assert!(replicas[&leader].is_leader());
+        assert!(client_messages.is_empty());
+        assert!(replicas[&leader].is_leader());
     }
 
     /// Tests that a single-replica cluster will behave appropriately.
@@ -740,14 +740,14 @@ mod test {
     #[test]
     fn test_solitary_replica_transition_to_leader() {
         let (_, mut replica) = new_cluster(1).into_iter().next().unwrap();
-        scoped_assert!(replica.is_follower());
+        assert!(replica.is_follower());
 
         let mut actions = Actions::new();
         replica.election_timeout(&mut actions);
-        scoped_assert!(replica.is_leader());
-        scoped_assert!(actions.peer_messages.is_empty());
-        scoped_assert!(actions.client_messages.is_empty());
-        scoped_assert!(actions.timeouts.is_empty());
+        assert!(replica.is_leader());
+        assert!(actions.peer_messages.is_empty());
+        assert!(actions.client_messages.is_empty());
+        assert!(actions.timeouts.is_empty());
     }
 
     /// A simple election test of a two-replica cluster.
@@ -759,8 +759,8 @@ mod test {
         let follower = &replica_ids[1];
         elect_leader(leader.clone(), &mut replicas);
 
-        scoped_assert!(replicas[leader].is_leader());
-        scoped_assert!(replicas[follower].is_follower());
+        assert!(replicas[leader].is_leader());
+        assert!(replicas[follower].is_follower());
     }
 
     /// A simple election test of a three-replica cluster.
@@ -771,9 +771,9 @@ mod test {
         let leader = &replica_ids[0];
         elect_leader(leader.clone(), &mut replicas);
 
-        scoped_assert!(replicas[leader].is_leader());
-        scoped_assert!(replicas[&replica_ids[1]].is_follower());
-        scoped_assert!(replicas[&replica_ids[2]].is_follower());
+        assert!(replicas[leader].is_leader());
+        assert!(replicas[&replica_ids[1]].is_follower());
+        assert!(replicas[&replica_ids[2]].is_follower());
     }
 
     /// A simple election test of a five-replica cluster.
@@ -784,11 +784,11 @@ mod test {
         let leader = &replica_ids[0];
         elect_leader(leader.clone(), &mut replicas);
 
-        scoped_assert!(replicas[leader].is_leader());
-        scoped_assert!(replicas[&replica_ids[1]].is_follower());
-        scoped_assert!(replicas[&replica_ids[2]].is_follower());
-        scoped_assert!(replicas[&replica_ids[3]].is_follower());
-        scoped_assert!(replicas[&replica_ids[4]].is_follower());
+        assert!(replicas[leader].is_leader());
+        assert!(replicas[&replica_ids[1]].is_follower());
+        assert!(replicas[&replica_ids[2]].is_follower());
+        assert!(replicas[&replica_ids[3]].is_follower());
+        assert!(replicas[&replica_ids[4]].is_follower());
     }
 
     /// A simple election test of a six-replica cluster.
@@ -799,12 +799,12 @@ mod test {
         let leader = &replica_ids[0];
         elect_leader(leader.clone(), &mut replicas);
 
-        scoped_assert!(replicas[leader].is_leader());
-        scoped_assert!(replicas[&replica_ids[1]].is_follower());
-        scoped_assert!(replicas[&replica_ids[2]].is_follower());
-        scoped_assert!(replicas[&replica_ids[3]].is_follower());
-        scoped_assert!(replicas[&replica_ids[4]].is_follower());
-        scoped_assert!(replicas[&replica_ids[5]].is_follower());
+        assert!(replicas[leader].is_leader());
+        assert!(replicas[&replica_ids[1]].is_follower());
+        assert!(replicas[&replica_ids[2]].is_follower());
+        assert!(replicas[&replica_ids[3]].is_follower());
+        assert!(replicas[&replica_ids[4]].is_follower());
+        assert!(replicas[&replica_ids[5]].is_follower());
     }
 
     /// A simple election test of a seven-replica cluster.
@@ -815,13 +815,13 @@ mod test {
         let leader = &replica_ids[0];
         elect_leader(leader.clone(), &mut replicas);
 
-        scoped_assert!(replicas[leader].is_leader());
-        scoped_assert!(replicas[&replica_ids[1]].is_follower());
-        scoped_assert!(replicas[&replica_ids[2]].is_follower());
-        scoped_assert!(replicas[&replica_ids[3]].is_follower());
-        scoped_assert!(replicas[&replica_ids[4]].is_follower());
-        scoped_assert!(replicas[&replica_ids[5]].is_follower());
-        scoped_assert!(replicas[&replica_ids[6]].is_follower());
+        assert!(replicas[leader].is_leader());
+        assert!(replicas[&replica_ids[1]].is_follower());
+        assert!(replicas[&replica_ids[2]].is_follower());
+        assert!(replicas[&replica_ids[3]].is_follower());
+        assert!(replicas[&replica_ids[4]].is_follower());
+        assert!(replicas[&replica_ids[5]].is_follower());
+        assert!(replicas[&replica_ids[6]].is_follower());
     }
 
     /// Tests the Raft heartbeating mechanism. The leader receives a heartbeat
