@@ -204,7 +204,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             self.replica_timeouts
                 .insert(timeout, handle)
                 .map(|handle| scoped_assert!(event_loop.clear_timeout(handle),
-                                      "raft::{:?}: unable to clear timeout: {:?}", self, timeout));
+                                             "unable to clear timeout: {:?}", timeout));
         }
     }
 
@@ -225,7 +225,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                                             .unwrap();
 
                 scoped_assert!(self.reconnection_timeouts.insert(token, handle).is_none(),
-                              "timeout already registered: {:?}", timeout);
+                               "timeout already registered: {:?}", timeout);
             },
             ConnectionKind::Client(ref id) => {
                 self.connections.remove(token).expect("unable to find client connection");
@@ -301,6 +301,35 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         }
         Ok(())
     }
+
+    /// Accepts a new TCP connection, adds it to the connection slab, and registers it with the
+    /// event loop.
+    fn accept_connection(&mut self, event_loop: &mut EventLoop<Server<S, M>>) -> Result<()> {
+        scoped_trace!("accept_connection");
+        let stream_opt = try!(self.listener.accept());
+        let stream = try!(stream_opt.ok_or(Error::Io(
+                    io::Error::new(io::ErrorKind::WouldBlock, "listener.accept() returned None"))));
+        let connection = try!(Connection::unknown(stream));
+        let token = try!(self.connections
+                             .insert(connection)
+                             .map_err(|_| Error::Raft(ErrorKind::ConnectionLimitReached)));
+        scoped_debug!("new connection accepted: {:?}", self.connections[token]);
+
+        // Until this point if any failures occur the connection is simply dropped. From this point
+        // down, the connection is stored in the slab, so dropping it would result in a leaked TCP
+        // stream and slab entry. Instead of dropping the connection, it will be reset if an error
+        // occurs.
+
+        self.connections[token]
+            .register(event_loop, token)
+            .unwrap_or_else(|error| {
+                scoped_warn!("unable to register connection {:?}: {}",
+                             self.connections[token], error);
+                self.reset_connection(event_loop, token);
+            });
+
+        Ok(())
+    }
 }
 
 impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
@@ -338,28 +367,17 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
         if events.is_readable() {
             if token == LISTENER {
-                self.listener
-                    .accept().map_err(From::from)
-                    .and_then(|stream_opt| stream_opt.ok_or(
-                         Error::Io(io::Error::new(io::ErrorKind::WouldBlock,
-                                                  "listener.accept() returned None"))))
-                    .and_then(|stream| Connection::unknown(stream))
-                    .and_then(|connection| {
-                        scoped_debug!("new connection received: {:?}", connection);
-                        self.connections
-                            .insert(connection)
-                            .map_err(|_| Error::Raft(ErrorKind::ConnectionLimitReached))
-                    })
-                    .and_then(|token| self.connections[token].register(event_loop, token))
+                self.accept_connection(event_loop)
                     .unwrap_or_else(|error| scoped_warn!("unable to accept connection: {}", error));
+
             } else {
                 self.readable(event_loop, token)
-                    // Only reregister the connection with the event loop if no
-                    // error occurs and the connection is *not* reset.
-                    .and_then(|_| self.connections[token].reregister(event_loop, token))
+                    // Only reregister the connection with the event loop if no error occurs and
+                    // the connection is *not* reset.
+                    .and_then(|_| self.connections[token].register(event_loop, token))
                     .unwrap_or_else(|error| {
                         scoped_warn!("unable to read message from connection {:?}: {}",
-                                     self.connections[token], error);
+                                      self.connections[token], error);
                         self.reset_connection(event_loop, token);
                     });
             }
