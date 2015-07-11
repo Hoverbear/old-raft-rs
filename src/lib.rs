@@ -53,6 +53,21 @@ extern crate uuid;
 #[macro_use] extern crate scoped_log;
 #[macro_use] extern crate wrapped_enum;
 
+#[cfg(test)]
+extern crate env_logger;
+
+/// Prepares the environment testing. Should be called as the first line of every test with the
+/// name of the test as the only argument.
+///
+/// TODO: Make this an annotation like #[rust_test] instead of a macro.
+#[cfg(test)]
+macro_rules! setup_test {
+    ($test_name:expr) => (
+        let _ = env_logger::init();
+        push_log_scope!($test_name);
+    );
+}
+
 pub mod state_machine;
 pub mod store;
 
