@@ -383,7 +383,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                                "{:?} missing timeout: {:?}", self.connections[token], timeout);
                 self.connections[token]
                     .reconnect_peer(self.id)
-                    .and_then(|_| self.connections[token].reregister(event_loop, token))
+                    .and_then(|_| self.connections[token].register(event_loop, token))
                     .unwrap_or_else(|error| {
                         scoped_warn!("unable to reconnect connection {:?}: {}", 
                                      self.connections[token], error);
@@ -407,12 +407,12 @@ mod test {
     extern crate env_logger;
 
     use std::collections::HashMap;
-    use std::net::{TcpListener, TcpStream, SocketAddr};
-    use std::str::FromStr;
     use std::io::{self, Read, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::str::FromStr;
 
-    use mio::EventLoop;
     use capnp::{serialize, MessageReader, ReaderOptions};
+    use mio::EventLoop;
 
     use ClientId;
     use Result;
@@ -471,18 +471,18 @@ mod test {
     /// will block the thread indefinitely if the stream is not shutdown.
     fn stream_shutdown(stream: &mut TcpStream) -> bool {
         let mut buf = [0u8; 128];
-        let num_read = stream.read(&mut buf);
-        match num_read {
-            // The connection is already shut down.
-            Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => true,
+        // OS X returns a read of 0 length for closed sockets.
+        // Linux returns an errcode 104: Connection reset by peer.
+        match stream.read(&mut buf) {
             Ok(0) => true,
+            Err(ref error) if error.kind() == io::ErrorKind::ConnectionReset => true,
             _ => false,
         }
     }
 
-    /// Tests that a Server will reject an invalid peer address on creation.
+    /// Tests that a Server will reject an invalid peer configuration set.
     #[test]
-    fn test_illegal_peer_id() {
+    fn test_illegal_peer_set() {
         let _ = env_logger::init();
         let peer_id = ServerId::from(0);
         let mut peers = HashMap::new();

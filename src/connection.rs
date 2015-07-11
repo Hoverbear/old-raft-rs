@@ -197,6 +197,7 @@ impl Connection {
     /// Registers the connection with the event loop.
     pub fn register<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()>
     where S: Store, M: StateMachine {
+        scoped_trace!("{:?}: register", self);
         event_loop.register_opt(&self.stream, token, self.events, poll_opt())
                   .map_err(From::from)
     }
@@ -204,11 +205,13 @@ impl Connection {
     /// Reregisters the connection with the event loop.
     pub fn reregister<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()>
     where S: Store, M: StateMachine {
+        scoped_trace!("{:?}: reregister", self);
         event_loop.reregister(&self.stream, token, self.events, poll_opt())
                   .map_err(From::from)
     }
 
     pub fn reconnect_peer(&mut self, id: ServerId) -> Result<()> {
+        scoped_trace!("{:?}: reconnect", self);
         self.stream = try!(TcpStream::connect(&self.addr));
         self.is_connected = true;
         self.read_continuation = None;
