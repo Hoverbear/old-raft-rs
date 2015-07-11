@@ -202,14 +202,6 @@ impl Connection {
                   .map_err(From::from)
     }
 
-    /// Reregisters the connection with the event loop.
-    pub fn reregister<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()>
-    where S: Store, M: StateMachine {
-        scoped_trace!("{:?}: reregister", self);
-        event_loop.reregister(&self.stream, token, self.events, poll_opt())
-                  .map_err(From::from)
-    }
-
     pub fn reconnect_peer(&mut self, id: ServerId) -> Result<()> {
         scoped_trace!("{:?}: reconnect", self);
         self.stream = try!(TcpStream::connect(&self.addr));
