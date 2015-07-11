@@ -340,14 +340,10 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
             if token == LISTENER {
                 self.listener
                     .accept().map_err(From::from)
-                    .and_then(|stream_opt| {
-                        match stream_opt {
-                            Some(stream) => Connection::unknown(stream),
-                            None => Err(Error::Io(io::Error::new(
-                                        io::ErrorKind::WouldBlock,
-                                        "listener.accept() returned None"))),
-                        }
-                    })
+                    .and_then(|stream_opt| stream_opt.ok_or(
+                         Error::Io(io::Error::new(io::ErrorKind::WouldBlock,
+                                                  "listener.accept() returned None"))))
+                    .and_then(|stream| Connection::unknown(stream))
                     .and_then(|connection| {
                         scoped_debug!("new connection received: {:?}", connection);
                         self.connections
