@@ -791,6 +791,22 @@ mod test {
         scoped_assert!(replicas[&replica_ids[4]].is_follower());
     }
 
+    /// A simple election test of a six-replica cluster.
+    #[test]
+    fn test_election_6() {
+        let mut replicas = new_cluster(6);
+        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+        let leader = &replica_ids[0];
+        elect_leader(leader.clone(), &mut replicas);
+
+        scoped_assert!(replicas[leader].is_leader());
+        scoped_assert!(replicas[&replica_ids[1]].is_follower());
+        scoped_assert!(replicas[&replica_ids[2]].is_follower());
+        scoped_assert!(replicas[&replica_ids[3]].is_follower());
+        scoped_assert!(replicas[&replica_ids[4]].is_follower());
+        scoped_assert!(replicas[&replica_ids[5]].is_follower());
+    }
+
     /// A simple election test of a seven-replica cluster.
     #[test]
     fn test_election_7() {
