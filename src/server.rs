@@ -501,7 +501,7 @@ mod test {
     /// Tests that a Server will reject an invalid peer configuration set.
     #[test]
     fn test_illegal_peer_set() {
-        let _ = env_logger::init();
+        setup_test!("test_illegal_peer_set");
         let peer_id = ServerId::from(0);
         let mut peers = HashMap::new();
         peers.insert(peer_id, SocketAddr::from_str("127.0.0.1:0").unwrap());
@@ -512,7 +512,7 @@ mod test {
     /// connection is droped.
     #[test]
     fn test_peer_connect() {
-        let _ = env_logger::init();
+        setup_test!("test_peer_connect");
         let peer_id = ServerId::from(1);
 
         let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -550,7 +550,7 @@ mod test {
     /// connects through another TCP connection.
     #[test]
     fn test_peer_accept() {
-        let _ = env_logger::init();
+        setup_test!("test_peer_accept");
         let peer_id = ServerId::from(1);
 
         let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -586,7 +586,7 @@ mod test {
     /// it when the client disconnects.
     #[test]
     fn test_client_accept() {
-        let _ = env_logger::init();
+        setup_test!("test_client_accept");
 
         let (mut server, mut event_loop) = new_test_server(HashMap::new()).unwrap();
 
@@ -616,7 +616,7 @@ mod test {
     /// send a preamble.
     #[test]
     fn test_invalid_accept() {
-        let _ = env_logger::init();
+        setup_test!("test_invalid_accept");
 
         let (mut server, mut event_loop) = new_test_server(HashMap::new()).unwrap();
 
@@ -637,7 +637,7 @@ mod test {
     /// message is received.
     #[test]
     fn test_invalid_peer_message() {
-        let _ = env_logger::init();
+        setup_test!("test_invalid_peer_message");
 
         let peer_id = ServerId::from(1);
 
@@ -666,7 +666,7 @@ mod test {
     /// message is received.
     #[test]
     fn test_invalid_client_message() {
-        let _ = env_logger::init();
+        setup_test!("test_invalid_client_message");
 
         let (mut server, mut event_loop) = new_test_server(HashMap::new()).unwrap();
 
@@ -697,7 +697,7 @@ mod test {
     /// after failing to connect at startup.
     #[test]
     fn test_unreachable_peer_reconnect() {
-        let _ = env_logger::init();
+        setup_test!("test_unreachable_peer_reconnect");
         let peer_id = ServerId::from(1);
         let mut peers = HashMap::new();
         peers.insert(peer_id, get_unbound_address());

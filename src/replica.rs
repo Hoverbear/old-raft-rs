@@ -664,6 +664,8 @@ impl <S, M> fmt::Debug for Replica<S, M> where S: Store, M: StateMachine {
 #[cfg(test)]
 mod test {
 
+    extern crate env_logger;
+
     use std::collections::{HashSet, HashMap};
     use std::io::Cursor;
     use std::rc::Rc;
@@ -739,6 +741,7 @@ mod test {
     /// The single replica should transition straight to the Leader state upon the first timeout.
     #[test]
     fn test_solitary_replica_transition_to_leader() {
+        setup_test!("test_solitary_replica_transition_to_leader");
         let (_, mut replica) = new_cluster(1).into_iter().next().unwrap();
         assert!(replica.is_follower());
 
@@ -753,6 +756,7 @@ mod test {
     /// A simple election test of a two-replica cluster.
     #[test]
     fn test_election_2() {
+        setup_test!("test_election_2");
         let mut replicas = new_cluster(2);
         let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
         let leader = &replica_ids[0];
@@ -766,6 +770,7 @@ mod test {
     /// A simple election test of a three-replica cluster.
     #[test]
     fn test_election_3() {
+        setup_test!("test_election_3");
         let mut replicas = new_cluster(3);
         let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
         let leader = &replica_ids[0];
@@ -779,6 +784,7 @@ mod test {
     /// A simple election test of a five-replica cluster.
     #[test]
     fn test_election_5() {
+        setup_test!("test_election_5");
         let mut replicas = new_cluster(5);
         let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
         let leader = &replica_ids[0];
@@ -794,6 +800,7 @@ mod test {
     /// A simple election test of a six-replica cluster.
     #[test]
     fn test_election_6() {
+        setup_test!("test_election_6");
         let mut replicas = new_cluster(6);
         let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
         let leader = &replica_ids[0];
@@ -810,6 +817,7 @@ mod test {
     /// A simple election test of a seven-replica cluster.
     #[test]
     fn test_election_7() {
+        setup_test!("test_election_7");
         let mut replicas = new_cluster(7);
         let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
         let leader = &replica_ids[0];
@@ -830,6 +838,7 @@ mod test {
     /// leader.
     #[test]
     fn test_heartbeat() {
+        setup_test!("test_heartbeat");
         let mut replicas = new_cluster(2);
         let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
         let leader_id = &replica_ids[0];
