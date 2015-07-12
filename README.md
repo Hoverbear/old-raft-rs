@@ -1,10 +1,10 @@
 # Raft #
 
-> Note: This project is **incomplete** and the code is of **pre-alpha** quality. **Only some specific, basic functionality is available, and I need your help defining an API!**
+> Note: This project is **incomplete** and the code is of **pre-alpha** quality. **Only some specific, basic functionality is available.** A stable version will be released when we feel it is ready.
 
 [![Build Status](https://travis-ci.org/Hoverbear/raft.svg)](https://travis-ci.org/Hoverbear/raft)
 
-**[Blog Updates](http://www.hoverbear.org/tag/raft/)**
+**[Development Updates](http://www.hoverbear.org/tag/raft/)**
 
 ## Problem and Importance ##
 
@@ -16,7 +16,7 @@ Two well known Distributed Consensus Algorithms are Paxos and Raft. Paxos is use
 
 ## Compiling ##
 
-> For Linux or Mac, with root! Windows users are, unfortunately, on their own.
+> For Linux, BSD, or Mac. Windows is not supported at this time.
 
 You will need the [Rust](http://rust-lang.org/) compiler:
 
@@ -45,7 +45,7 @@ cd raft && \
 cargo build
 ```
 
-> Note this is a library, so building won't necessarily produce anything useful for you.
+> Note this is a library, so building won't necessarily produce anything useful for you unless you're developing.
 
 ## Documentation ##
 
@@ -63,12 +63,8 @@ You can run `raft`'s full bank of tests with all debug output like so:
 RUST_LOG=raft=debug cargo test -- --nocapture
 ```
 
-> Due to the nature of this library's pre-alpha state, some tests may occasionally fail. I'm working on this.
+> Due to the nature of this library's pre-alpha state testing is not complete.
 
 For something more terse use `cargo test`.
 
-The `tests/lib.rs` file currently hosts a working example of using the library. *Before you say anything, yes, I know it's not nice. Let's talk about how to make that much nicer!*
-
-## Project Website ##
-
-I'll keep track of my progress both on my blog through the [Raft](http://www.hoverbear.org/tag/raft/) tag, and via Github.
+The `examples/dummy.rs` file currently hosts a working example of using the library. We'll add more as we go!
