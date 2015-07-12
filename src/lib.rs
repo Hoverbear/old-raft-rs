@@ -110,13 +110,13 @@ wrapped_enum!{
         ///
         Io(io::Error),
         ///
-        Raft(ErrorKind),
+        Raft(RaftError),
     }
 }
 
 #[derive(Debug)]
 ///
-pub enum ErrorKind {
+pub enum RaftError {
     /// The server ran out of slots in the slab for new connections
     ConnectionLimitReached,
     /// A client reported an invalid client id
@@ -125,6 +125,8 @@ pub enum ErrorKind {
     UnknownConnectionType,
     /// An invalid peer in in the peer set. Returned Server::new().
     InvalidPeerSet,
+    /// Registering a connection failed
+    ConnectionRegisterFailed,
 }
 
 impl fmt::Display for Error {
@@ -238,7 +240,7 @@ impl ClientId {
     fn from_bytes(bytes: &[u8]) -> Result<ClientId> {
         match Uuid::from_bytes(bytes) {
             Some(uuid) => Ok(ClientId(uuid)),
-            None => Err(Error::Raft(ErrorKind::InvalidClientId)),
+            None => Err(Error::Raft(RaftError::InvalidClientId)),
         }
     }
 }

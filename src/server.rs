@@ -19,7 +19,7 @@ use capnp::{
 use ClientId;
 use Result;
 use Error;
-use ErrorKind;
+use RaftError;
 use ServerId;
 use messages;
 use messages_capnp::connection_preamble;
@@ -86,7 +86,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
            store: S,
            state_machine: M) -> Result<(Server<S, M>, EventLoop<Server<S, M>>)> {
         if peers.contains_key(&id) {
-            return Err(Error::Raft(ErrorKind::InvalidPeerSet))
+            return Err(Error::Raft(RaftError::InvalidPeerSet))
         }
 
         let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
@@ -108,8 +108,8 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         for (peer_id, peer_addr) in peers {
             let token: Token = try!(server.connections
                                           .insert(try!(Connection::peer(peer_id, peer_addr)))
-                                          .map_err(|_| Error::Raft(ErrorKind::ConnectionLimitReached)));
-            assert!(server.peer_tokens.insert(peer_id, token).is_none());
+                                          .map_err(|_| Error::Raft(RaftError::ConnectionLimitReached)));
+            scoped_assert!(server.peer_tokens.insert(peer_id, token).is_none());
 
             let mut connection = &mut server.connections[token];
             connection.send_message(messages::server_connection_preamble(id));
@@ -293,7 +293,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                                     self, client_id);
                         },
                         _ => {
-                            return Err(Error::Raft(ErrorKind::UnknownConnectionType));
+                            return Err(Error::Raft(RaftError::UnknownConnectionType));
                         }
                     }
                 }
@@ -306,29 +306,26 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     /// event loop.
     fn accept_connection(&mut self, event_loop: &mut EventLoop<Server<S, M>>) -> Result<()> {
         scoped_trace!("accept_connection");
-        let stream_opt = try!(self.listener.accept());
-        let stream = try!(stream_opt.ok_or(Error::Io(
-                    io::Error::new(io::ErrorKind::WouldBlock, "listener.accept() returned None"))));
-        let connection = try!(Connection::unknown(stream));
-        let token = try!(self.connections
-                             .insert(connection)
-                             .map_err(|_| Error::Raft(ErrorKind::ConnectionLimitReached)));
-        scoped_debug!("new connection accepted: {:?}", self.connections[token]);
-
-        // Until this point if any failures occur the connection is simply dropped. From this point
-        // down, the connection is stored in the slab, so dropping it would result in a leaked TCP
-        // stream and slab entry. Instead of dropping the connection, it will be reset if an error
-        // occurs.
-
-        self.connections[token]
-            .register(event_loop, token)
-            .unwrap_or_else(|error| {
-                scoped_warn!("unable to register connection {:?}: {}",
-                             self.connections[token], error);
-                self.reset_connection(event_loop, token);
-            });
-
-        Ok(())
+        self.listener.accept().map_err(From::from)
+            .and_then(|stream_opt| stream_opt.ok_or(Error::Io(
+                    io::Error::new(io::ErrorKind::WouldBlock, "listener.accept() returned None"))))
+            .and_then(|stream| Connection::unknown(stream))
+            .and_then(|conn| self.connections.insert(conn)
+                                 .map_err(|_| Error::Raft(RaftError::ConnectionLimitReached)))
+            .and_then(|token|
+                // Until this point if any failures occur the connection is simply dropped. From
+                // this point down, the connection is stored in the slab, so dropping it would
+                // result in a leaked TCP stream and slab entry. Instead of dropping the
+                // connection, it will be reset if an error occurs.
+                self.connections[token]
+                    .register(event_loop, token)
+                    .or_else(|error| {
+                        self.reset_connection(event_loop, token);
+                        Err(Error::Raft(RaftError::ConnectionRegisterFailed))
+                    })
+                    .map(|_|
+                        scoped_debug!("new connection accepted: {:?}", self.connections[token]))
+            )
     }
 }
 
@@ -369,7 +366,6 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
             if token == LISTENER {
                 self.accept_connection(event_loop)
                     .unwrap_or_else(|error| scoped_warn!("unable to accept connection: {}", error));
-
             } else {
                 self.readable(event_loop, token)
                     // Only reregister the connection with the event loop if no error occurs and
