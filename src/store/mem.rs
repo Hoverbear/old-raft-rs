@@ -1,7 +1,6 @@
 use std::{error, fmt, result};
 
 use store::Store;
-
 use LogIndex;
 use ServerId;
 use Term;

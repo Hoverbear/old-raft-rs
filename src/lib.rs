@@ -52,9 +52,7 @@ extern crate uuid;
 #[macro_use] extern crate log;
 #[macro_use] extern crate scoped_log;
 #[macro_use] extern crate wrapped_enum;
-
-#[cfg(test)]
-extern crate env_logger;
+#[cfg(test)] extern crate env_logger;
 
 /// Prepares the environment testing. Should be called as the first line of every test with the
 /// name of the test as the only argument.
@@ -70,6 +68,10 @@ macro_rules! setup_test {
 
 pub mod state_machine;
 pub mod store;
+pub mod messages_capnp {
+    #![allow(dead_code)]
+    include!(concat!(env!("OUT_DIR"), "/messages_capnp.rs"));
+}
 
 mod backoff;
 mod client;
@@ -78,11 +80,6 @@ mod messages;
 mod replica;
 mod server;
 mod state;
-
-pub mod messages_capnp {
-    #![allow(dead_code)]
-    include!(concat!(env!("OUT_DIR"), "/messages_capnp.rs"));
-}
 
 pub use server::Server;
 pub use state_machine::StateMachine;
@@ -93,29 +90,31 @@ use std::{io, ops, fmt};
 
 use uuid::Uuid;
 
+/// A simple convienence type.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// raft::Errors are the composed variety of errors that can originate from the various libraries.
-/// With the exception of the `Raft` variant these are generated from `try!()` macros invoking
-/// on `io::Error` or `capnp::Error` by using
-/// [`FromError`](https://doc.rust-lang.org/std/error/#the-fromerror-trait).
 wrapped_enum!{
+    /// The generic `raft::Error` is composed of one of the errors that can originate from the
+    /// various libraries consumed by the library.
+    /// With the exception of the `Raft` variant these are generated from `try!()` macros invoking
+    /// on `io::Error` or `capnp::Error` by using
+    /// [`FromError`](https://doc.rust-lang.org/std/error/#the-fromerror-trait).
     #[derive(Debug)]
-    ///
     pub enum Error {
-        ///
+        /// An error originating from the [Cap'n Proto](https://github.com/dwrensha/capnproto-rust) library.
         CapnProto(capnp::Error),
-        ///
+        /// A specific error produced when a bad Cap'n proto message is discovered.
         SchemaError(capnp::NotInSchema),
-        ///
+        /// Errors originating from `std::io`.
         Io(io::Error),
-        ///
+        /// Raft specific errors.
         Raft(RaftError),
     }
 }
 
+/// A Raft Error represents a Raft specific error that consuming code is expected to handle
+/// gracefully.
 #[derive(Debug)]
-///
 pub enum RaftError {
     /// The server ran out of slots in the slab for new connections
     ConnectionLimitReached,

@@ -1,3 +1,8 @@
+//! `Server` is a Rust type which is responsible for coordinating with other remote `Server`
+//! instances, responding to commands from the `Client`, and applying commands to a local
+//! `StateMachine` replica. A `Server` may be a `Leader`, `Follower`, or `Candidate` at any given
+//! time as described by the Raft Consensus Algorithm.
+
 use std::{fmt, io};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -37,17 +42,17 @@ pub enum ServerTimeout {
     Reconnect(Token),
 }
 
-/// The Raft Distributed Consensus Algorithm requires two RPC calls to be available:
+/// The `Server` is responsible for receiving events from remote `Server` or `Client` instances,
+/// as well as setting election and heartbeat timeouts.  When an event is received, it is applied
+/// to the local `Replica`. The `Replica` may optionally return a new event which must be
+/// dispatched to either the `Server` or `Client` which sent the original event, or to all
+/// `Server` instances.
 ///
-///   * `append_entries` which is used as both a heartbeat (with no payload) and the primary
-///     interface for requests.
-///   * `request_vote` which is used by candidates during campaigns to obtain a vote.
-///
-/// A `Server` acts as a replicated state machine. The server's role in the cluster depends on it's
-/// own status. It will maintain both volatile state (which can be safely lost) and persistent
-/// state (which must be carefully stored and kept safe).
-///
-/// Currently, the `Server` API is not well defined. **We are looking for feedback and suggestions.**
+/// Because messages are passed asyncronously between `Server` instances, a `Server` could get
+/// into a situation where multiple events are ready to be dispatched to a single remote `Server`.
+/// In this situation, the `Server` will replace the existing event with the new event, except in
+/// one special circumstance: if the new and existing messages are both `AppendEntryRequest`s with
+/// the same `term`, then the new message will be dropped.
 pub struct Server<S, M> where S: Store, M: StateMachine {
 
     /// Id of this server.

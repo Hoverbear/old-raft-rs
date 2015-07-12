@@ -1,3 +1,6 @@
+//! The `Client` allows users of the `raft` library to connect to remote `Server` instances and
+//! issue commands to be applied to the `StateMachine`.
+
 use std::collections::HashSet;
 use std::io::Write;
 use std::net::SocketAddr;
