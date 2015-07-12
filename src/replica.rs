@@ -846,7 +846,7 @@ mod test {
         elect_leader(leader_id.clone(), &mut replicas);
 
         // Leader pings with a heartbeat timeout.
-        let mut leader_append_entries = {
+        let leader_append_entries = {
             let mut actions = Actions::new();
             let leader = replicas.get_mut(&leader_id).unwrap();
             leader.heartbeat_timeout(follower_id.clone(), &mut actions);

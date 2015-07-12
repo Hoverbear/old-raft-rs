@@ -319,7 +319,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                 // connection, it will be reset if an error occurs.
                 self.connections[token]
                     .register(event_loop, token)
-                    .or_else(|error| {
+                    .or_else(|_| {
                         self.reset_connection(event_loop, token);
                         Err(Error::Raft(RaftError::ConnectionRegisterFailed))
                     })
@@ -399,7 +399,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     .reconnect_peer(self.id)
                     .and_then(|_| self.connections[token].register(event_loop, token))
                     .unwrap_or_else(|error| {
-                        scoped_warn!("unable to reconnect connection {:?}: {}", 
+                        scoped_warn!("unable to reconnect connection {:?}: {}",
                                      self.connections[token], error);
                         self.reset_connection(event_loop, token);
                     });
