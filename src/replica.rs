@@ -2,12 +2,12 @@
 //!  implements the logic of the Raft Protocol. A `Replica` receives events from the local
 //!  `Server`.  The set of possible events is specified by the Raft Protocol:
 //!
-//! ````
+//! ```text
 //! Event = AppendEntriesRequest | AppendEntriesResponse
 //!       | RequestVoteRequest | RequestVoteResponse
 //!       | ElectionTimeout | HeartbeatTimeout
 //!       | ClientCommand
-//! ````
+//! ```
 //! In response to receiving an event, the `Replica` may mutate its own state, apply a command to
 //!  the local `StateMachine`, or return an event to be sent to one or more remote `Server` or
 //!  `Client` instances.
