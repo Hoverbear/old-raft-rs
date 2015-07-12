@@ -47,6 +47,14 @@ cargo build
 
 > Note this is a library, so building won't necessarily produce anything useful for you unless you're developing.
 
+## Examples ##
+
+You can run the examples like so:
+
+```bash
+RUST_LOG=raft=debug cargo run --example dummy 1 127.0.0.1:8080
+```
+
 ## Documentation ##
 
 * [Raft Crate Documentation](https://hoverbear.github.io/raft/raft/)
