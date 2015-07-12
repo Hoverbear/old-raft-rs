@@ -23,7 +23,6 @@ branch = "async"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio"
-branch = "coalesce-events"
 
 [dependencies.scoped_log]
 git = "https://github.com/james-darkfox/rs-scoped_log"
