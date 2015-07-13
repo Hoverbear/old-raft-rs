@@ -1,26 +1,41 @@
+sudo: false
 language: rust
+rust:
+  - nightly
 env:
   global:
-    secure: eotueXoyGdW2TIser1HAj5I1l5KAmRww5tW5uMNWA7ytVrwibQ4qVCUhMZ3ZUBXWJsMvsebdXnmfqKwyZ84FqjPmsYv9WTfzatYyMcMUlzkPITfsUoJ03fcUcKc4gVyV5SifIuDWCWBMX+LG6eU3I/CqjgOFw6NrBoHhLTwh4yc=
+    - secure: eotueXoyGdW2TIser1HAj5I1l5KAmRww5tW5uMNWA7ytVrwibQ4qVCUhMZ3ZUBXWJsMvsebdXnmfqKwyZ84FqjPmsYv9WTfzatYyMcMUlzkPITfsUoJ03fcUcKc4gVyV5SifIuDWCWBMX+LG6eU3I/CqjgOFw6NrBoHhLTwh4yc=
+    - CC=gcc-4.8
+    - CXX=g++-4.8
+    - RUST_LOG=raft=debug
+    - RUST_BACKTRACE=1
 # From https://github.com/dwrensha/capnp-rpc-rust/blob/master/.travis.yml
-before_install:
-  - yes | sudo add-apt-repository ppa:ubuntu-toolchain-r/test
-  - sudo apt-get update
+addons:
+  apt:
+    sources:
+      - ubuntu-toolchain-r-test
+    packages:
+      - gcc-4.8
+      - g++-4.8
+      - python-virtualenv
 install:
-  - sudo apt-get install g++-4.8 gcc-4.8 git
   - git clone https://github.com/kentonv/capnproto.git
-  - export CC=gcc-4.8
-  - export CXX=g++-4.8
   - cd capnproto/c++
   - ./setup-autotools.sh
   - autoreconf -i
-  - ./configure && make -j5 && sudo make install && cd ../..
+  - ./configure --disable-shared
+  - make -j5
+  - export PATH="$PATH:$(pwd)"
+  - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$(pwd)"
+  -  cd ../..
 # Generate Docs
 after_success: |
   [ $TRAVIS_BRANCH = master ] &&
   [ $TRAVIS_PULL_REQUEST = false ] &&
   cargo doc &&
   echo '<meta http-equiv=refresh content=0;url=raft/index.html>' > target/doc/index.html &&
-  sudo pip install ghp-import &&
+  virtualenv ghp &&
+  source ghp/bin/activate &
+  pip install ghp-import &&
   ghp-import -n target/doc &&
   git push -fq https://${GH_TOKEN}@github.com/${TRAVIS_REPO_SLUG}.git gh-pages
