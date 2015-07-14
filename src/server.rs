@@ -193,7 +193,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         }
         if clear_timeouts {
             for (timeout, &handle) in &self.replica_timeouts {
-                assert!(event_loop.clear_timeout(handle),
+                scoped_assert!(event_loop.clear_timeout(handle),
                                "unable to clear timeout: {:?}", timeout);
             }
             self.replica_timeouts.clear();
@@ -365,6 +365,15 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                 self.reset_connection(event_loop, token);
                 return;
             }
+            if !events.is_readable() {
+                self.connections[token]
+                    .reregister(event_loop, token)
+                    .unwrap_or_else(|error| {
+                        scoped_warn!("unable to reregister connection {:?}: {}",
+                                     self.connections[token], error);
+                        self.reset_connection(event_loop, token);
+                    });
+            }
         }
 
         if events.is_readable() {
@@ -375,7 +384,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                 self.readable(event_loop, token)
                     // Only reregister the connection with the event loop if no error occurs and
                     // the connection is *not* reset.
-                    .and_then(|_| self.connections[token].register(event_loop, token))
+                    .and_then(|_| self.connections[token].reregister(event_loop, token))
                     .unwrap_or_else(|error| {
                         scoped_warn!("unable to read message from connection {:?}: {}",
                                       self.connections[token], error);
@@ -511,9 +520,6 @@ mod test {
 
     /// Tests that a Server connects to peer at startup, and reconnects when the
     /// connection is droped.
-    ///
-    /// TODO: reenable on linux
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn test_peer_connect() {
         setup_test!("test_peer_connect");
@@ -588,9 +594,6 @@ mod test {
 
     /// Tests that the server will accept a client connection, then dispose of
     /// it when the client disconnects.
-    ///
-    /// TODO: reenable on linux
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn test_client_accept() {
         setup_test!("test_client_accept");
@@ -671,9 +674,6 @@ mod test {
 
     /// Tests that the server will reset a client connection when an invalid
     /// message is received.
-    ///
-    /// TODO: reenable on linux
-    #[cfg(not(target_os = "linux"))]
     #[test]
     fn test_invalid_client_message() {
         setup_test!("test_invalid_client_message");
