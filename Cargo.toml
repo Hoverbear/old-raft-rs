@@ -3,6 +3,7 @@ name = "raft"
 version = "0.0.1"
 authors = [
     "Andrew Hobden <andrew@hoverbear.org>",
+    "Dan Burkert <dan@danburkert.com>",
     "James McGlashan <github@darkfox.id.au>",
 ]
 build = "build.rs"
