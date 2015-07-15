@@ -386,7 +386,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     // the connection is *not* reset.
                     .and_then(|_| self.connections[token].reregister(event_loop, token))
                     .unwrap_or_else(|error| {
-                        scoped_warn!("unable to read message from connection {:?}: {}",
+                        scoped_warn!("failed to read from {:?}: {}",
                                       self.connections[token], error);
                         self.reset_connection(event_loop, token);
                     });
