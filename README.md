@@ -2,7 +2,8 @@
 
 > Note: This project is **incomplete** and the code is of **pre-alpha** quality. **Only some specific, basic functionality is available.** A stable version will be released when we feel it is ready.
 
-[![Build Status](https://travis-ci.org/Hoverbear/raft.svg)](https://travis-ci.org/Hoverbear/raft)
+[![Build Status](https://img.shields.io/travis/Hoverbear/raft/master.svg)](https://travis-ci.org/Hoverbear/raft)
+[![Coverage Status](https://img.shields.io/coveralls/Hoverbear/raft/master.svg)](https://coveralls.io/github/Hoverbear/raft)
 
 **[Development Updates](http://www.hoverbear.org/tag/raft/)**
 

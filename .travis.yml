@@ -1,7 +1,13 @@
+# Use containers
 sudo: false
+
+# Yup we use rust.
 language: rust
+
+# Test only on nightly for now.
 rust:
   - nightly
+
 env:
   global:
     - secure: eotueXoyGdW2TIser1HAj5I1l5KAmRww5tW5uMNWA7ytVrwibQ4qVCUhMZ3ZUBXWJsMvsebdXnmfqKwyZ84FqjPmsYv9WTfzatYyMcMUlzkPITfsUoJ03fcUcKc4gVyV5SifIuDWCWBMX+LG6eU3I/CqjgOFw6NrBoHhLTwh4yc=
@@ -9,33 +15,46 @@ env:
     - CXX=g++-4.8
     - RUST_LOG=raft=debug
     - RUST_BACKTRACE=1
-# From https://github.com/dwrensha/capnp-rpc-rust/blob/master/.travis.yml
+    - TRAVIS_CARGO_NIGHTLY_FEATURE=""
+
+# `sudo`-less apt install.
 addons:
   apt:
     sources:
       - ubuntu-toolchain-r-test
     packages:
+        # Needed for building Cap'n Proto.
       - gcc-4.8
       - g++-4.8
-      - python-virtualenv
+        # Needed for `travis-cargo coveralls --no-sudo`
+      - libcurl4-openssl-dev
+      - libelf-dev
+      - libdw-dev
+
+# We need to install Cap'n Proto.
 install:
-  - git clone https://github.com/kentonv/capnproto.git
-  - cd capnproto/c++
-  - ./setup-autotools.sh
-  - autoreconf -i
-  - ./configure --disable-shared
-  - make -j5
-  - export PATH="$PATH:$(pwd)"
-  - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$(pwd)"
-  -  cd ../..
-# Generate Docs
-after_success: |
-  [ $TRAVIS_BRANCH = master ] &&
-  [ $TRAVIS_PULL_REQUEST = false ] &&
-  cargo doc &&
-  echo '<meta http-equiv=refresh content=0;url=raft/index.html>' > target/doc/index.html &&
-  virtualenv ghp &&
-  source ghp/bin/activate &&
-  pip install ghp-import &&
-  ghp-import -n target/doc &&
-  git push -fq https://${GH_TOKEN}@github.com/${TRAVIS_REPO_SLUG}.git gh-pages
+    - git clone https://github.com/kentonv/capnproto.git
+    - cd capnproto/c++
+    - ./setup-autotools.sh
+    - autoreconf -i
+    - ./configure --disable-shared
+    - make -j5
+    - export PATH="$PATH:$(pwd)"
+    - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$(pwd)"
+    -  cd ../..
+
+# Load `travis-cargo`
+before_script:
+    - pip install 'travis-cargo' --user
+    - export PATH=$HOME/.local/bin:$PATH
+
+script:
+    - travis-cargo build
+    - travis-cargo test
+    - travis-cargo bench
+    - travis-cargo doc
+
+# Generate Docs and coverage
+after_success:
+    - travis-cargo doc-upload
+    - travis-cargo coveralls --no-sudo
