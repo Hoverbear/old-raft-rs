@@ -386,7 +386,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     // the connection is *not* reset.
                     .and_then(|_| self.connections[token].reregister(event_loop, token))
                     .unwrap_or_else(|error| {
-                        scoped_warn!("unable to read message from connection {:?}: {}",
+                        scoped_warn!("failed to read from {:?}: {}",
                                       self.connections[token], error);
                         self.reset_connection(event_loop, token);
                     });
@@ -489,6 +489,7 @@ mod test {
         server.reconnection_timeouts.get(&token).is_none()
     }
 
+    /// Returns true if the server has an open connection with the client.
     fn client_connected(server: &TestServer, client: ClientId) -> bool {
         server.client_tokens.contains_key(&client)
     }
@@ -504,6 +505,7 @@ mod test {
         match stream.read(&mut buf) {
             Ok(0) => true,
             Err(ref error) if error.kind() == io::ErrorKind::ConnectionReset => true,
+            Err(ref error) => panic!("unexpected error: {}", error),
             _ => false,
         }
     }
@@ -586,6 +588,7 @@ mod test {
         // Send server the preamble message to the server.
         serialize::write_message(&mut out_stream, &*messages::server_connection_preamble(peer_id))
                  .unwrap();
+        out_stream.flush().unwrap();
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server has closed the old connection.
@@ -610,6 +613,7 @@ mod test {
         // Send the client preamble message to the server.
         serialize::write_message(&mut stream, &*messages::client_connection_preamble(client_id))
                  .unwrap();
+        stream.flush().unwrap();
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server holds on to the client connection.
@@ -637,6 +641,7 @@ mod test {
 
         // Send an invalid preamble.
         stream.write(b"foo bar baz").unwrap();
+        stream.flush().unwrap();
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server disposes of the connection.
@@ -660,8 +665,13 @@ mod test {
         // Accept the server's connection.
         let (mut stream_a, _)  = peer_listener.accept().unwrap();
 
+        // Read the server's preamble.
+        event_loop.run_once(&mut server).unwrap();
+        assert_eq!(ServerId::from(0), read_server_preamble(&mut stream_a));
+
         // Send an invalid message.
         stream_a.write(b"foo bar baz").unwrap();
+        stream_a.flush().unwrap();
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server resets the connection.
@@ -690,6 +700,7 @@ mod test {
         // Send the client preamble message to the server.
         serialize::write_message(&mut stream, &*messages::client_connection_preamble(client_id))
                  .unwrap();
+        stream.flush().unwrap();
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server holds on to the client connection.
@@ -697,6 +708,7 @@ mod test {
 
         // Send an invalid client message to the server.
         stream.write(b"foo bar baz").unwrap();
+        stream.flush().unwrap();
         event_loop.run_once(&mut server).unwrap();
 
         // Check that the server disposes of the client connection.
