@@ -14,6 +14,15 @@ Distributed Consensus Algorithms often take the form of a replicated state machi
 
 Two well known Distributed Consensus Algorithms are Paxos and Raft. Paxos is used in systems like [Chubby](http://research.google.com/archive/chubby.html) by Google, and Raft is used in things like [`etcd`](https://github.com/coreos/etcd/tree/master/raft). Raft is generally seen as a more understandable and simpler to implement than Paxos, and was chosen for this project for this reason.
 
+
+## Documentation ##
+
+* [Raft Crate Documentation](https://hoverbear.github.io/raft/raft/)
+* [The Raft site](https://raftconsensus.github.io/)
+* [The Secret Lives of Data - Raft](http://thesecretlivesofdata.com/raft/)
+* [Raft Paper](http://ramcloud.stanford.edu/raft.pdf)
+* [Raft Dissertation](https://github.com/ongardie/dissertation#readme)
+
 ## Compiling ##
 
 > For Linux, BSD, or Mac. Windows is not supported at this time.
@@ -21,8 +30,12 @@ Two well known Distributed Consensus Algorithms are Paxos and Raft. Paxos is use
 You will need the [Rust](http://rust-lang.org/) compiler:
 
 ```bash
-curl -L https://static.rust-lang.org/rustup.sh | sudo sh
+curl -L https://static.rust-lang.org/rustup.sh > rustup
+chmod +x rustup
+./rustup --channel=nightly
 ```
+
+> We require the `nightly` channel for now.
 
 This should install `cargo` and `rustc`. Next, you'll need `capnp` to build the
 `messages.canpnp` file . It is suggested to use the [git method](https://capnproto.org/install.html#installation-unix)
@@ -55,13 +68,7 @@ You can run the examples like so:
 RUST_LOG=raft=debug cargo run --example dummy 1 127.0.0.1:8080
 ```
 
-## Documentation ##
-
-* [Raft Crate Documentation](https://hoverbear.github.io/raft/raft/)
-* [The Raft site](https://raftconsensus.github.io/)
-* [The Secret Lives of Data - Raft](http://thesecretlivesofdata.com/raft/)
-* [Raft Paper](http://ramcloud.stanford.edu/raft.pdf)
-* [Raft Dissertation](https://github.com/ongardie/dissertation#readme)
+The `examples/dummy.rs` file currently hosts a working example of using the library. We'll add more as we go!
 
 ## Testing ##
 
@@ -71,8 +78,13 @@ You can run `raft`'s full bank of tests with all debug output like so:
 RUST_LOG=raft=debug cargo test -- --nocapture
 ```
 
-> Due to the nature of this library's pre-alpha state testing is not complete.
-
 For something more terse use `cargo test`.
 
-The `examples/dummy.rs` file currently hosts a working example of using the library. We'll add more as we go!
+> Due to the nature of this library's pre-alpha state testing is not complete,
+> we're working on it!
+
+## Contributing ##
+
+**First timer with Git?** Check [this](https://github.com/hoverbear/rust-rosetta#contributing-1) out for some help!!
+
+We use [Homu](http://homu.io/q/Hoverbear/raft) for merging requests. **This means we cannot merge your code unless it passes tests!**.
