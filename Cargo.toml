@@ -27,4 +27,6 @@ branch = "async"
 git = "https://github.com/carllerche/mio"
 
 [dev-dependencies]
+docopt = "*"
 env_logger = "*"
+rustc-serialize = "*"
