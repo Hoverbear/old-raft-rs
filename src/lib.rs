@@ -126,6 +126,8 @@ pub enum RaftError {
     InvalidPeerSet,
     /// Registering a connection failed
     ConnectionRegisterFailed,
+    /// Failed to find a leader in the cluster. Try again later.
+    LeaderSearchExhausted,
 }
 
 impl fmt::Display for Error {
