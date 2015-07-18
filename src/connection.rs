@@ -181,15 +181,19 @@ impl Connection {
         }
     }
 
-    /// Queues a message to be sent to this connection.
-    pub fn send_message(&mut self, message: Rc<MallocMessageBuilder>) {
+    /// Queues a message to send to the connection. Returns `true` if the connection should be
+    /// reregistered with the event loop.
+    pub fn send_message(&mut self, message: Rc<MallocMessageBuilder>) -> bool {
         scoped_trace!("{:?}: send_message", self);
+        let mut reregister = false;
         if self.is_connected {
             if self.write_queue.is_empty() {
                 self.events.insert(EventSet::writable());
+                reregister = true;
             }
             self.write_queue.push_back(message);
         }
+        reregister
     }
 
     /// Registers the connection with the event loop.
