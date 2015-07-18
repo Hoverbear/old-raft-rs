@@ -6,6 +6,7 @@ use std::fmt;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::net::TcpStream;
+use std::str::FromStr;
 
 use bufstream::BufStream;
 use capnp::{serialize, MessageReader, ReaderOptions};
@@ -81,7 +82,12 @@ impl Client {
                         },
                         proposal_response::Which::NotLeader(leader) => {
                             scoped_debug!("received response NotLeader");
-                            let mut connection: TcpStream = try!(TcpStream::connect(try!(leader)));
+                            let leader_str = try!(leader);
+                            if !self.cluster.contains(&try!(SocketAddr::from_str(leader_str))) {
+                                scoped_debug!("cluster violation detected");
+                                return Err(RaftError::ClusterViolation.into())
+                            }
+                            let mut connection: TcpStream = try!(TcpStream::connect(leader_str));
                             let preamble = messages::client_connection_preamble(self.id);
                             try!(serialize::write_message(&mut connection, &*preamble));
                             self.leader_connection = Some(BufStream::new(connection));
@@ -114,6 +120,7 @@ mod test {
     use uuid::Uuid;
     use capnp::{serialize, ReaderOptions};
     use capnp::message::MessageReader;
+    use bufstream::BufStream;
 
     use {Client, ClientId, messages, Result};
     use messages_capnp::{connection_preamble, client_request};
@@ -141,17 +148,85 @@ mod test {
     }
 
     #[test]
-    fn test_proposal_standalone() {
-        setup_test!("test_proposal_standalone");
+    fn test_proposal_success() {
+        setup_test!("test_proposal_success");
+        // Start up the cluster and get what we need.
         let mut cluster = HashSet::new();
         let test_server = TcpListener::bind("127.0.0.1:0").unwrap();
         let test_addr = test_server.local_addr().unwrap();
         cluster.insert(test_addr);
 
-        // TODO: Test if the second server is not in the set.
+        let mut client = Client::new(cluster);
+        let client_id = client.id.0.clone();
+        let to_propose = b"Bears";
+
+        // The client connects on the proposal.
+        // Wait for it.
+        let child = thread::spawn(move || {
+            let (mut connection, _)  = test_server.accept().unwrap();
+
+            // Proposal should be fine, no errors.
+            scoped_debug!("Should get preamble and proposal. Responds Success");
+            expect_preamble(&mut connection, client_id).unwrap();
+            expect_proposal(&mut connection, to_propose).unwrap();
+            // Send response! (success!)
+            let response = messages::proposal_response_success();
+            serialize::write_message(&mut connection, &*response).unwrap();
+            connection.flush();
+        });
+
+        // Propose. It's a marriage made in heaven! :)
+        // Should be ok
+        client.propose(to_propose).unwrap();
+        assert!(client.leader_connection.is_some());
+
+        child.join().unwrap();
+    }
+
+    #[test]
+    fn test_proposal_unknown_leader() {
+        setup_test!("test_proposal_unknown_leader");
+        // Start up the cluster and get what we need.
+        let mut cluster = HashSet::new();
+        let test_server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let test_addr = test_server.local_addr().unwrap();
+        cluster.insert(test_addr);
+
+        let mut client = Client::new(cluster);
+        let client_id = client.id.0.clone();
+        let to_propose = b"Bears";
+
+        // The client connects on the proposal.
+        // Wait for it.
+        let child = thread::spawn(move || {
+            let (mut connection, _)  = test_server.accept().unwrap();
+
+            // Proposal should report unknown leader, and have the client return error.
+            scoped_debug!("Should get proposal. Responds UnknownLeader");
+            expect_proposal(&mut connection, to_propose).unwrap();
+            // Send response! (unknown leader!) Client should drop connection.
+            let response = messages::proposal_response_unknown_leader();
+            serialize::write_message(&mut connection, &*response).unwrap();
+            connection.flush();
+        });
+
+        // Propose. It's a marriage made in heaven! :)
+        assert!(client.propose(to_propose).is_err());
+
+        child.join().unwrap();
+    }
+
+    #[test]
+    fn test_proposal_not_leader() {
+        setup_test!("test_proposal_not_leader");
+        let mut cluster = HashSet::new();
+        let test_server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let test_addr = test_server.local_addr().unwrap();
+        cluster.insert(test_addr);
+
         let second_server = TcpListener::bind("127.0.0.1:0").unwrap();
         let second_addr = second_server.local_addr().unwrap();
-        // cluster.insert(second_addr);
+        cluster.insert(second_addr);
 
         let mut client = Client::new(cluster);
         let client_id = client.id.0.clone();
@@ -160,30 +235,7 @@ mod test {
         // The client connects on the first proposal.
         // Wait for it.
         let child = thread::spawn(move || {
-            let (mut connection, _)  = test_server.accept().unwrap();
-
-            // First proposal should be fine, no errors.
-            scoped_debug!("Should get preamble and proposal. Responds Success");
-            expect_preamble(&mut connection, client_id).unwrap();
-            expect_proposal(&mut connection, to_propose).unwrap();
-            // Send first response! (success!)
-            let response = messages::proposal_response_success();
-            serialize::write_message(&mut connection, &*response).unwrap();
-            connection.flush();
-
-            // Second proposal should report unknown leader, and have the client return error.
-            scoped_debug!("Should get proposal. Responds UnknownLeader");
-            expect_proposal(&mut connection, to_propose).unwrap();
-            // Send response! (unknown leader!) Client should drop connection.
-            let response = messages::proposal_response_unknown_leader();
-            serialize::write_message(&mut connection, &*response).unwrap();
-            connection.flush();
-            // Since the client will iter over the members, we need to accept and drop again.
-            let (mut connection, _)  = test_server.accept().unwrap();
-            serialize::write_message(&mut connection, &*response).unwrap();
-            connection.flush();
-
-            // Third Proposal should report NotLeader. Client should choose the server we direct it to.
+            // Proposal should report NotLeader. Client should choose the server we direct it to.
             scoped_debug!("Should get preamble and proposal. Responds NotLeader.");
             let (mut connection, _)  = test_server.accept().unwrap();
             expect_preamble(&mut connection, client_id).unwrap();
@@ -203,17 +255,69 @@ mod test {
             // Send final response! (Success!)
             let response = messages::proposal_response_success();
             serialize::write_message(&mut connection, &*response).unwrap();
-
         });
-        // Propose. It's a marriage made in heaven! :)
-        // Should be ok
-        client.propose(to_propose).unwrap();
-        assert!(client.leader_connection.is_some());
-        // Should be err
-        assert!(client.propose(to_propose).is_err());
+
+        // Workaround to set up rigged selection of servers.
+        client.leader_connection = {
+            let preamble = messages::client_connection_preamble(client.id);
+            let mut stream = BufStream::new(TcpStream::connect(test_addr).unwrap());
+            serialize::write_message(&mut stream, &*preamble).unwrap();
+            Some(stream)
+        };
+
         // Should be ok, change leader connection.
         client.propose(to_propose).unwrap();
         assert!(client.leader_connection.is_some());
+
+        child.join().unwrap();
+    }
+
+    /// This test makes sure that the client cannot be redirected to a leader which exists outside
+    /// the cluster. This is a necessary test since it would introduce error into the cluster.
+    #[test]
+    fn test_proposal_leader_not_in_cluster() {
+        setup_test!("test_proposal_leader_not_in_cluster");
+        let mut cluster = HashSet::new();
+        let test_server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let test_addr = test_server.local_addr().unwrap();
+        cluster.insert(test_addr);
+
+        let second_server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let second_addr = second_server.local_addr().unwrap();
+        // cluster.insert(second_addr); <--- NOT in cluster.
+
+        let mut client = Client::new(cluster);
+        let client_id = client.id.0.clone();
+        let to_propose = b"Bears";
+
+        // The client connects on the first proposal.
+        // Wait for it.
+        let child = thread::spawn(move || {
+            // Proposal should report NotLeader. Client should choose the server we direct it to.
+            scoped_debug!("Should get preamble and proposal. Responds NotLeader.");
+            let (mut connection, _)  = test_server.accept().unwrap();
+            expect_preamble(&mut connection, client_id).unwrap();
+            expect_proposal(&mut connection, to_propose).unwrap();
+
+            // Send response! (not leader!)
+            let response = messages::proposal_response_not_leader(&format!("{}", second_addr));
+            serialize::write_message(&mut connection, &*response).unwrap();
+            connection.flush();
+
+            // No more...
+        });
+
+        // Workaround to set up rigged selection of servers.
+        client.leader_connection = {
+            let preamble = messages::client_connection_preamble(client.id);
+            let mut stream = BufStream::new(TcpStream::connect(test_addr).unwrap());
+            serialize::write_message(&mut stream, &*preamble).unwrap();
+            Some(stream)
+        };
+
+        // Should be err, change leader connectio but to wrong ip..
+        assert!(client.propose(to_propose).is_err());
+        assert!(client.leader_connection.is_none());
 
         child.join().unwrap();
     }

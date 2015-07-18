@@ -86,7 +86,7 @@ pub use state_machine::StateMachine;
 pub use store::Store;
 pub use client::Client;
 
-use std::{io, ops, fmt};
+use std::{io, net, ops, fmt};
 
 use uuid::Uuid;
 
@@ -109,6 +109,8 @@ wrapped_enum!{
         Io(io::Error),
         /// Raft specific errors.
         Raft(RaftError),
+        /// Errors related to parsing addresses.
+        AddrParse(net::AddrParseError),
     }
 }
 
@@ -120,6 +122,8 @@ pub enum RaftError {
     ConnectionLimitReached,
     /// A client reported an invalid client id
     InvalidClientId,
+    /// A replica reported back a leader not in the cluster.
+    ClusterViolation,
     /// A remote connection attempted to use an unknown connection type in the connection preamble
     UnknownConnectionType,
     /// An invalid peer in in the peer set. Returned Server::new().
@@ -137,6 +141,7 @@ impl fmt::Display for Error {
             Error::SchemaError(ref error) => fmt::Display::fmt(error, f),
             Error::Io(ref error) => fmt::Display::fmt(error, f),
             Error::Raft(ref error) => fmt::Debug::fmt(error, f),
+            Error::AddrParse(ref error) => fmt::Debug::fmt(error, f),
         }
     }
 }
