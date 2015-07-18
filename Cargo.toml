@@ -17,6 +17,7 @@ rand = "*"
 uuid = "*"
 bufstream = "*"
 wrapped_enum = "*"
+scoped_log = "*"
 
 [dependencies.capnp]
 git = "https://github.com/danburkert/capnproto-rust"
@@ -24,9 +25,6 @@ branch = "async"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio"
-
-[dependencies.scoped_log]
-git = "https://github.com/james-darkfox/rs-scoped_log"
 
 [dev-dependencies]
 env_logger = "*"
