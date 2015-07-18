@@ -220,7 +220,6 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     ///
     /// If the connection is to a client or unknown it will be closed.
     fn reset_connection(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) {
-        push_log_scope!("{:?}", self.connections[token]);
         let kind = *self.connections[token].kind();
         match kind {
             ConnectionKind::Peer(..) => {
@@ -248,7 +247,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     /// If the connection returns an error on any operation, or any message fails to be
     /// deserialized, an error result is returned.
     fn readable(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()> {
-        scoped_trace!("connection readable: {:?}", self.connections[token]);
+        scoped_trace!("{:?}: readable event", self.connections[token]);
         // Read messages from the connection until there are no more.
         while let Some(message) = try!(self.connections[token].readable()) {
             match *self.connections[token].kind() {
@@ -345,14 +344,14 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
         if events.is_error() {
             scoped_assert!(token != LISTENER, "unexpected error event from LISTENER");
-            scoped_warn!("error event on connection {:?}", self.connections[token]);
+            scoped_warn!("{:?}: error event", self.connections[token]);
             self.reset_connection(event_loop, token);
             return;
         }
 
         if events.is_hup() {
             scoped_assert!(token != LISTENER, "unexpected hup event from LISTENER");
-            scoped_trace!("hup event on connection {:?}", self.connections[token]);
+            scoped_trace!("{:?}: hup event", self.connections[token]);
             self.reset_connection(event_loop, token);
             return;
         }
@@ -360,7 +359,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
         if events.is_writable() {
             scoped_assert!(token != LISTENER, "unexpected writeable event for LISTENER");
             if let Err(error) = self.connections[token].writable() {
-                scoped_warn!("unable to write message to conection {:?}: {}",
+                scoped_warn!("{:?}: failed write: {}",
                              self.connections[token], error);
                 self.reset_connection(event_loop, token);
                 return;
@@ -368,11 +367,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
             if !events.is_readable() {
                 self.connections[token]
                     .reregister(event_loop, token)
-                    .unwrap_or_else(|error| {
-                        scoped_warn!("unable to reregister connection {:?}: {}",
-                                     self.connections[token], error);
-                        self.reset_connection(event_loop, token);
-                    });
+                    .unwrap_or_else(|_| self.reset_connection(event_loop, token));
             }
         }
 
@@ -386,8 +381,8 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     // the connection is *not* reset.
                     .and_then(|_| self.connections[token].reregister(event_loop, token))
                     .unwrap_or_else(|error| {
-                        scoped_warn!("failed to read from {:?}: {}",
-                                      self.connections[token], error);
+                        scoped_warn!("{:?}: failed read: {}",
+                                     self.connections[token], error);
                         self.reset_connection(event_loop, token);
                     });
             }

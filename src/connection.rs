@@ -126,9 +126,8 @@ impl Connection {
 
     /// Writes queued messages to the socket.
     pub fn writable(&mut self) -> Result<()> {
-        push_log_scope!("{:?}", self);
-        scoped_trace!("writable; queued message count: {}", self.write_queue.len());
-        scoped_assert!(self.is_connected, "writable event while not connected");
+        scoped_trace!("{:?}: writable; queued message count: {}", self, self.write_queue.len());
+        scoped_assert!(self.is_connected, "{:?}: writable event while not connected", self);
 
         while let Some(message) = self.write_queue.pop_front() {
             let continuation = self.write_continuation.take();
@@ -163,9 +162,8 @@ impl Connection {
     /// Connections are edge-triggered, so the handler must continue calling
     /// until no more messages are returned.
     pub fn readable(&mut self) -> Result<Option<OwnedSpaceMessageReader>> {
-        push_log_scope!("{:?}", self);
-        scoped_trace!("readable");
-        scoped_assert!(self.is_connected, "readable event while not connected");
+        scoped_trace!("{:?}: readable", self);
+        scoped_assert!(self.is_connected, "{:?}: readable event while not connected", self);
 
         let read = try!(read_message_async(&mut self.stream,
                                            ReaderOptions::new(),
@@ -185,7 +183,7 @@ impl Connection {
 
     /// Queues a message to be sent to this connection.
     pub fn send_message(&mut self, message: Rc<MallocMessageBuilder>) {
-        scoped_trace!("send_message");
+        scoped_trace!("{:?}: send_message", self);
         if self.is_connected {
             if self.write_queue.is_empty() {
                 self.events.insert(EventSet::writable());
@@ -199,7 +197,10 @@ impl Connection {
     where S: Store, M: StateMachine {
         scoped_trace!("{:?}: register", self);
         event_loop.register_opt(&self.stream, token, self.events, poll_opt())
-                  .map_err(From::from)
+                  .map_err(|error| {
+                      scoped_warn!("{:?}: reregister failed: {}", self, error);
+                      From::from(error)
+                  })
     }
 
     /// Reregisters the connection with the event loop.
@@ -207,7 +208,10 @@ impl Connection {
     where S: Store, M: StateMachine {
         scoped_trace!("{:?}: reregister", self);
         event_loop.reregister(&self.stream, token, self.events, poll_opt())
-                  .map_err(From::from)
+                  .map_err(|error| {
+                      scoped_warn!("{:?}: register failed: {}", self, error);
+                      From::from(error)
+                  })
     }
 
     pub fn reconnect_peer(&mut self, id: ServerId) -> Result<()> {
@@ -236,7 +240,7 @@ impl Connection {
         let timeout = ServerTimeout::Reconnect(token);
         let handle = event_loop.timeout_ms(timeout, duration).unwrap();
 
-        scoped_info!("reset, will attempt to reconnect in {}ms", duration);
+        scoped_info!("{:?}: reset, will attempt to reconnect in {}ms", self, duration);
         Ok((timeout, handle))
     }
 }

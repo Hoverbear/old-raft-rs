@@ -164,6 +164,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// appropriate handler.
     pub fn apply_peer_message<R>(&mut self, from: ServerId, message: &R, actions: &mut Actions)
     where R: MessageReader {
+        push_log_scope!("{:?}", self);
         let reader = message.get_root::<message::Reader>().unwrap().which().unwrap();
         match reader {
             message::Which::AppendEntriesRequest(Ok(request)) =>
@@ -185,6 +186,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                    message: &R,
                                    actions: &mut Actions)
     where R: MessageReader {
+        push_log_scope!("{:?}", self);
         let reader = message.get_root::<client_request::Reader>().unwrap().which().unwrap();
         match reader {
             client_request::Which::Proposal(Ok(request)) =>
@@ -207,7 +209,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                               from: ServerId,
                               request: append_entries_request::Reader,
                               actions: &mut Actions) {
-        push_log_scope!("{:?}", self);
         scoped_debug!("AppendEntriesRequest from Replica({})", &from);
 
         let leader_term = Term(request.get_term());
@@ -298,7 +299,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                from: ServerId,
                                response: append_entries_response::Reader,
                                actions: &mut Actions) {
-        push_log_scope!("{:?}", self);
         scoped_debug!("AppendEntriesResponse from Replica({})", from);
 
         let local_term = self.current_term();
@@ -397,7 +397,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                             candidate: ServerId,
                             request: request_vote_request::Reader,
                             actions: &mut Actions) {
-        push_log_scope!("{:?}", self);
         let candidate_term = Term(request.get_term());
         let candidate_log_term = Term(request.get_last_log_term());
         let candidate_log_index = LogIndex(request.get_last_log_index());
@@ -663,15 +662,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
 impl <S, M> fmt::Debug for Replica<S, M> where S: Store, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(fmt, "Replica {{ id: "));
-        try!(fmt::Display::fmt(&self.id, fmt));
-        try!(write!(fmt, ", state: "));
-        try!(fmt::Debug::fmt(&self.state, fmt));
-        try!(write!(fmt, ", term: "));
-        try!(fmt::Display::fmt(&self.current_term(), fmt));
-        try!(write!(fmt, ", index: "));
-        try!(fmt::Display::fmt(&self.latest_log_index(), fmt));
-        write!(fmt, " }}")
+        write!(fmt, "Replica {{ state: {:?}, term: {}, index: {} }}",
+               self.state, self.current_term(), self.latest_log_index())
     }
 }
 
