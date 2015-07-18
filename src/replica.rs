@@ -759,83 +759,20 @@ mod test {
         assert!(actions.timeouts.is_empty());
     }
 
-    /// A simple election test of a two-replica cluster.
-    #[test]
-    fn test_election_2() {
-        setup_test!("test_election_2");
-        let mut replicas = new_cluster(2);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = &replica_ids[0];
-        let follower = &replica_ids[1];
-        elect_leader(leader.clone(), &mut replicas);
+    /// A simple election test over multiple group sizes.
+    fn test_election() {
+        setup_test!("test_election");
 
-        assert!(replicas[leader].is_leader());
-        assert!(replicas[follower].is_follower());
-    }
-
-    /// A simple election test of a three-replica cluster.
-    #[test]
-    fn test_election_3() {
-        setup_test!("test_election_3");
-        let mut replicas = new_cluster(3);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = &replica_ids[0];
-        elect_leader(leader.clone(), &mut replicas);
-
-        assert!(replicas[leader].is_leader());
-        assert!(replicas[&replica_ids[1]].is_follower());
-        assert!(replicas[&replica_ids[2]].is_follower());
-    }
-
-    /// A simple election test of a five-replica cluster.
-    #[test]
-    fn test_election_5() {
-        setup_test!("test_election_5");
-        let mut replicas = new_cluster(5);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = &replica_ids[0];
-        elect_leader(leader.clone(), &mut replicas);
-
-        assert!(replicas[leader].is_leader());
-        assert!(replicas[&replica_ids[1]].is_follower());
-        assert!(replicas[&replica_ids[2]].is_follower());
-        assert!(replicas[&replica_ids[3]].is_follower());
-        assert!(replicas[&replica_ids[4]].is_follower());
-    }
-
-    /// A simple election test of a six-replica cluster.
-    #[test]
-    fn test_election_6() {
-        setup_test!("test_election_6");
-        let mut replicas = new_cluster(6);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = &replica_ids[0];
-        elect_leader(leader.clone(), &mut replicas);
-
-        assert!(replicas[leader].is_leader());
-        assert!(replicas[&replica_ids[1]].is_follower());
-        assert!(replicas[&replica_ids[2]].is_follower());
-        assert!(replicas[&replica_ids[3]].is_follower());
-        assert!(replicas[&replica_ids[4]].is_follower());
-        assert!(replicas[&replica_ids[5]].is_follower());
-    }
-
-    /// A simple election test of a seven-replica cluster.
-    #[test]
-    fn test_election_7() {
-        setup_test!("test_election_7");
-        let mut replicas = new_cluster(7);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = &replica_ids[0];
-        elect_leader(leader.clone(), &mut replicas);
-
-        assert!(replicas[leader].is_leader());
-        assert!(replicas[&replica_ids[1]].is_follower());
-        assert!(replicas[&replica_ids[2]].is_follower());
-        assert!(replicas[&replica_ids[3]].is_follower());
-        assert!(replicas[&replica_ids[4]].is_follower());
-        assert!(replicas[&replica_ids[5]].is_follower());
-        assert!(replicas[&replica_ids[6]].is_follower());
+        for group_size in 1..10 {
+            let mut replicas = new_cluster(group_size);
+            let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+            let leader = &replica_ids[0];
+            elect_leader(leader.clone(), &mut replicas);
+            assert!(replicas[leader].is_leader());
+            for follower in replica_ids.iter().skip(1) {
+                assert!(replicas[follower].is_follower());
+            }
+        }
     }
 
     /// Tests the Raft heartbeating mechanism. The leader receives a heartbeat
