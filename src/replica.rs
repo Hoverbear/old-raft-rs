@@ -39,7 +39,7 @@ use store::Store;
 
 const ELECTION_MIN: u64 = 1500;
 const ELECTION_MAX: u64 = 3000;
-const HEARTBEAT_DURATION: u64 = 500;
+const HEARTBEAT_DURATION: u64 = 1000;
 
 /// Timeout types for Raft.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
