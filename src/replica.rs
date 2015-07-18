@@ -321,32 +321,24 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             return;
         }
 
-        // At this point we must be the Leader, since we only send AppendEntries
-        // requests while in the Leader state, so we should never receive AppendEntries
-        // responses from the current term while not the Leader (It's impossible to go
-        // from Leader to Candidate or Follower states without increasing the term, and
-        // we have already checked that local_term == responder_term).
-        scoped_assert!(self.is_leader(),
-                      "received AppendEntries response from Replica({}) for the \
-                      current term while in state {:?}.", from, self.state);
-
         match response.which() {
             Ok(append_entries_response::Which::Success(follower_latest_log_index)) => {
+                scoped_assert!(self.is_leader());
                 let follower_latest_log_index = LogIndex::from(follower_latest_log_index);
                 scoped_assert!(follower_latest_log_index <= local_latest_log_index);
                 self.leader_state.set_match_index(from, follower_latest_log_index);
                 self.advance_commit_index();
             }
             Ok(append_entries_response::Which::InconsistentPrevEntry(..)) => {
+                scoped_assert!(self.is_leader());
                 let next_index = self.leader_state.next_index(&from) - 1;
                 self.leader_state.set_next_index(from, next_index);
             }
             Ok(append_entries_response::Which::StaleTerm(..)) => {
-                // This case is handled above by checking local_term against
-                // responder_term.
-                unreachable!("{:?}: AppendEntries.StaleTerm response from \
-                             Replica({}). local term: {:?}, responder term: {:?}.",
-                             self, from, local_term, responder_term);
+                // The peer is reporting a stale term, but the term number matches the local term.
+                // Ignore the response, since it is to a message from a prior term, and this server
+                // has already been transitioned to the new term.
+                return;
             }
             Ok(append_entries_response::Which::InternalError(error_result)) => {
                 let error = error_result.unwrap_or("[unable to decode internal error]");
@@ -821,5 +813,44 @@ mod test {
         leader.apply_peer_message(follower_id.clone(), &reader, &mut actions);
         let heartbeat_timeout = actions.timeouts.iter().next().unwrap();
         assert_eq!(heartbeat_timeout, &ReplicaTimeout::Heartbeat(follower_id.clone()));
+    }
+
+    /// Emulates a slow heartbeat message in a two-node cluster.
+    ///
+    /// The initial leader (Replica 0) sends a heartbeat, but before it is received by the follower
+    /// (Replica 1), Replica 1's election timeout fires. Replica 1 transitions to candidate state
+    /// and attempts to send a RequestVote to Replica 0. When the partition is fixed, the
+    /// RequestVote should prompt Replica 0 to step down. Replica 1 should send a stale term
+    /// message in response to the heartbeat from Replica 0.
+    #[test]
+    fn test_slow_heartbeat() {
+        setup_test!("test_heartbeat");
+        let mut replicas = new_cluster(2);
+        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+        let replica0 = &replica_ids[0];
+        let replica1 = &replica_ids[1];
+        elect_leader(replica0.clone(), &mut replicas);
+
+        let mut replica0_actions = Actions::new();
+        replicas.get_mut(replica0)
+                .unwrap()
+                .apply_timeout(ReplicaTimeout::Heartbeat(*replica1), &mut replica0_actions);
+        assert!(replicas[replica0].is_leader());
+
+        let mut replica1_actions = Actions::new();
+        replicas.get_mut(replica1)
+                .unwrap()
+                .apply_timeout(ReplicaTimeout::Election, &mut replica1_actions);
+        assert!(replicas[replica1].is_candidate());
+
+        // Apply candidate messages.
+        assert!(apply_actions(*replica1, replica1_actions, &mut replicas).is_empty());
+        assert!(replicas[replica0].is_follower());
+        assert!(replicas[replica1].is_leader());
+
+        // Apply stale heartbeat.
+        assert!(apply_actions(*replica0, replica0_actions, &mut replicas).is_empty());
+        assert!(replicas[replica0].is_follower());
+        assert!(replicas[replica1].is_leader());
     }
 }
