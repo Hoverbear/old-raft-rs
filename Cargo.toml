@@ -12,19 +12,17 @@ build = "build.rs"
 git = "https://github.com/dwrensha/capnpc-rust"
 
 [dependencies]
-log = "*"
-rand = "*"
-uuid = "*"
 bufstream = "*"
-wrapped_enum = "*"
+log = "*"
+mio = "*"
+rand = "*"
 scoped_log = "*"
+uuid = "*"
+wrapped_enum = "*"
 
 [dependencies.capnp]
 git = "https://github.com/danburkert/capnproto-rust"
 branch = "async"
-
-[dependencies.mio]
-git = "https://github.com/carllerche/mio"
 
 [dev-dependencies]
 docopt = "*"
