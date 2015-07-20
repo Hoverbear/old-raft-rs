@@ -1,6 +1,7 @@
 //! Utility functions for working with Cap'n Proto Raft messages.
 #![allow(dead_code)]
 
+use std::net::SocketAddr;
 use std::rc::Rc;
 
 use capnp::{
@@ -224,12 +225,12 @@ pub fn proposal_response_unknown_leader() -> Rc<MallocMessageBuilder> {
     Rc::new(message)
 }
 
-pub fn proposal_response_not_leader(leader_hint: &str) -> Rc<MallocMessageBuilder> {
+pub fn proposal_response_not_leader(leader_hint: &SocketAddr) -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
         message.init_root::<client_response::Builder>()
                .init_proposal()
-               .set_not_leader(leader_hint);
+               .set_not_leader(&format!("{}", leader_hint));
     }
     Rc::new(message)
 }

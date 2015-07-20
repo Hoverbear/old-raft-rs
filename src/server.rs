@@ -94,7 +94,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             return Err(Error::Raft(RaftError::InvalidPeerSet))
         }
 
-        let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
+        let replica = Replica::new(id, peers.clone(), store, state_machine);
         let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
         let listener = try!(TcpListener::bind(&addr));
         try!(event_loop.register(&listener, LISTENER));
