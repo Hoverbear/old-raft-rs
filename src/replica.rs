@@ -12,8 +12,9 @@
 //!  the local `StateMachine`, or return an event to be sent to one or more remote `Server` or
 //!  `Client` instances.
 
-use std::collections::HashSet;
 use std::{cmp, fmt};
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::rc::Rc;
 
 use capnp::{
@@ -39,7 +40,7 @@ use store::Store;
 
 const ELECTION_MIN: u64 = 1500;
 const ELECTION_MAX: u64 = 3000;
-const HEARTBEAT_DURATION: u64 = 500;
+const HEARTBEAT_DURATION: u64 = 1000;
 
 /// Timeout types for Raft.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -104,7 +105,7 @@ pub struct Replica<S, M> {
     /// The ID of this replica.
     id: ServerId,
     /// The IDs of the other replicas in the cluster.
-    peers: HashSet<ServerId>,
+    peers: HashMap<ServerId, SocketAddr>,
 
     /// The persistent log store.
     store: S,
@@ -129,11 +130,12 @@ pub struct Replica<S, M> {
 impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// Creates a `Replica`.
     pub fn new(id: ServerId,
-               peers: HashSet<ServerId>,
+               peers: HashMap<ServerId, SocketAddr>,
                store: S,
                state_machine: M)
                -> Replica<S, M> {
-        let leader_state = LeaderState::new(store.latest_log_index().unwrap(), &peers);
+        let leader_state = LeaderState::new(store.latest_log_index().unwrap(),
+                                            &peers.keys().cloned().collect());
         Replica {
             id: id,
             peers: peers,
@@ -156,7 +158,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Returns the peers (Id's only) of the replica.
-    pub fn peers(&self) -> &HashSet<ServerId> {
+    pub fn peers(&self) -> &HashMap<ServerId, SocketAddr> {
         &self.peers
     }
 
@@ -164,6 +166,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// appropriate handler.
     pub fn apply_peer_message<R>(&mut self, from: ServerId, message: &R, actions: &mut Actions)
     where R: MessageReader {
+        push_log_scope!("{:?}", self);
         let reader = message.get_root::<message::Reader>().unwrap().which().unwrap();
         match reader {
             message::Which::AppendEntriesRequest(Ok(request)) =>
@@ -185,6 +188,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                    message: &R,
                                    actions: &mut Actions)
     where R: MessageReader {
+        push_log_scope!("{:?}", self);
         let reader = message.get_root::<client_request::Reader>().unwrap().which().unwrap();
         match reader {
             client_request::Which::Proposal(Ok(request)) =>
@@ -207,7 +211,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                               from: ServerId,
                               request: append_entries_request::Reader,
                               actions: &mut Actions) {
-        push_log_scope!("{:?}", self);
         scoped_debug!("AppendEntriesRequest from Replica({})", &from);
 
         let leader_term = Term(request.get_term());
@@ -235,6 +238,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
                     let latest_log_index = self.latest_log_index();
                     if latest_log_index < leader_prev_log_index {
+                        scoped_debug!("AppendEntriesRequest: inconsistent previous log index: leader: {}, local: {}",
+                                      leader_prev_log_index, latest_log_index);
                         messages::append_entries_response_inconsistent_prev_entry(self.current_term())
                     } else {
                         let existing_term = if leader_prev_log_index == LogIndex::from(0) {
@@ -244,6 +249,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                         };
 
                         if existing_term != leader_prev_log_term {
+                            scoped_debug!("AppendEntriesRequest: inconsistent previous log term: leader: {}, local: {}",
+                                          leader_prev_log_term, existing_term);
                             messages::append_entries_response_inconsistent_prev_entry(self.current_term())
                         } else {
                             let entries = request.get_entries().unwrap();
@@ -257,8 +264,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                             }
                             let latest_log_index = leader_prev_log_index + num_entries as u64;
                             // We are matching the leaders log up to and including `latest_log_index`.
-                            self.commit_index = leader_commit_index;
-                            self.apply_commits_until(latest_log_index);
+                            self.commit_index = cmp::min(leader_commit_index, latest_log_index);
+                            self.apply_commits();
                             messages::append_entries_response_success(self.current_term(), self.store.latest_log_index().unwrap())
                         }
                     }
@@ -298,7 +305,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                from: ServerId,
                                response: append_entries_response::Reader,
                                actions: &mut Actions) {
-        push_log_scope!("{:?}", self);
         scoped_debug!("AppendEntriesResponse from Replica({})", from);
 
         let local_term = self.current_term();
@@ -321,32 +327,24 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             return;
         }
 
-        // At this point we must be the Leader, since we only send AppendEntries
-        // requests while in the Leader state, so we should never receive AppendEntries
-        // responses from the current term while not the Leader (It's impossible to go
-        // from Leader to Candidate or Follower states without increasing the term, and
-        // we have already checked that local_term == responder_term).
-        scoped_assert!(self.is_leader(),
-                      "received AppendEntries response from Replica({}) for the \
-                      current term while in state {:?}.", from, self.state);
-
         match response.which() {
             Ok(append_entries_response::Which::Success(follower_latest_log_index)) => {
+                scoped_assert!(self.is_leader());
                 let follower_latest_log_index = LogIndex::from(follower_latest_log_index);
                 scoped_assert!(follower_latest_log_index <= local_latest_log_index);
                 self.leader_state.set_match_index(from, follower_latest_log_index);
-                self.advance_commit_index();
+                self.advance_commit_index(actions);
             }
             Ok(append_entries_response::Which::InconsistentPrevEntry(..)) => {
+                scoped_assert!(self.is_leader());
                 let next_index = self.leader_state.next_index(&from) - 1;
                 self.leader_state.set_next_index(from, next_index);
             }
             Ok(append_entries_response::Which::StaleTerm(..)) => {
-                // This case is handled above by checking local_term against
-                // responder_term.
-                unreachable!("{:?}: AppendEntries.StaleTerm response from \
-                             Replica({}). local term: {:?}, responder term: {:?}.",
-                             self, from, local_term, responder_term);
+                // The peer is reporting a stale term, but the term number matches the local term.
+                // Ignore the response, since it is to a message from a prior term, and this server
+                // has already transitioned to the new term.
+                return;
             }
             Ok(append_entries_response::Which::InternalError(error_result)) => {
                 let error = error_result.unwrap_or("[unable to decode internal error]");
@@ -365,7 +363,12 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         if next_index <= local_latest_log_index {
             // If the replica is behind, send it entries to catch up.
             let prev_log_index = next_index - 1;
-            let (prev_log_term, _) = self.store.entry(prev_log_index).unwrap();
+            let prev_log_term =
+                if prev_log_index == LogIndex(0) {
+                    Term(0)
+                } else {
+                    self.store.entry(prev_log_index).unwrap().0
+                };
 
             let mut message = MallocMessageBuilder::new_default();
             {
@@ -397,7 +400,6 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                             candidate: ServerId,
                             request: request_vote_request::Reader,
                             actions: &mut Actions) {
-        push_log_scope!("{:?}", self);
         let candidate_term = Term(request.get_term());
         let candidate_log_term = Term(request.get_last_log_term());
         let candidate_log_index = LogIndex(request.get_last_log_index());
@@ -474,10 +476,37 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// Apply a client proposal to the Raft replica.
     fn proposal_request(&mut self,
                         from: ClientId,
-                        _request: proposal_request::Reader,
-                        _actions: &mut Actions) {
-        scoped_debug!("Proposal from Client({})", from);
-        unimplemented!()
+                        request: proposal_request::Reader,
+                        actions: &mut Actions) {
+        scoped_debug!("proposal from Client({})", from);
+
+        if self.is_candidate() || (self.is_follower() && self.follower_state.leader.is_none()) {
+            actions.client_messages.push((from.into(), messages::proposal_response_unknown_leader()));
+        } else if self.is_follower() {
+            let message =
+                messages::proposal_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
+            actions.client_messages.push((from, message));
+        } else {
+            let prev_log_index = self.latest_log_index();
+            let prev_log_term = self.latest_log_term();
+            let term = self.current_term();
+            let log_index = prev_log_index + 1;
+            self.store.append_entries(log_index,
+                                      &[(term, request.get_entry().unwrap())]).unwrap();
+            self.leader_state.proposals.push_back((from, log_index));
+
+            let message = messages::append_entries_request(term,
+                                                           prev_log_index,
+                                                           prev_log_term,
+                                                           &[],
+                                                           self.commit_index);
+
+            for &peer in self.peers.keys() {
+                if self.leader_state.next_index(&peer) == prev_log_index + 1 {
+                    actions.peer_messages.push((peer, message.clone()));
+                }
+            }
+        }
     }
 
     /// Trigger a heartbeat timeout on the Raft replica.
@@ -532,19 +561,13 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         self.state = ReplicaState::Leader;
         self.leader_state.reinitialize(latest_log_index);
 
-        let mut message = MallocMessageBuilder::new_default();
-        {
-            let mut request = message.init_root::<message::Builder>()
-                                     .init_append_entries_request();
-            request.set_term(current_term.into());
-            request.set_prev_log_index(latest_log_index.into());
-            request.set_prev_log_term(latest_log_term.into());
-            request.set_leader_commit(self.commit_index.into());
-        }
-
-        let message_rc = Rc::new(message);
-        for &peer in self.peers() {
-            actions.peer_messages.push((peer, message_rc.clone()));
+        let message = messages::append_entries_request(current_term,
+                                                       latest_log_index,
+                                                       latest_log_term,
+                                                       &[],
+                                                       self.commit_index);
+        for &peer in self.peers().keys() {
+            actions.peer_messages.push((peer, message.clone()));
         }
 
         actions.clear_timeouts = true;
@@ -576,35 +599,40 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
 
         let message_rc = Rc::new(message);
-        for &peer in self.peers() {
+        for &peer in self.peers().keys() {
             actions.peer_messages.push((peer, message_rc.clone()));
         }
         actions.timeouts.push(ReplicaTimeout::Election);
     }
 
     /// Advance the commit index and apply committed entries to the state machine, if possible.
-    fn advance_commit_index(&mut self) {
+    fn advance_commit_index(&mut self, actions: &mut Actions) {
         scoped_assert!(self.is_leader());
         let majority = self.majority();
         while self.leader_state.count_match_indexes(self.commit_index + 1) >= majority {
             self.commit_index = self.commit_index + 1;
         }
 
-        // Apply all committed but unapplied entries
-        while self.last_applied < self.commit_index {
-            let (_, entry) = self.store.entry(self.last_applied + 1).unwrap();
-            self.state_machine.apply(entry).unwrap();
-            self.last_applied = self.last_applied + 1;
+        self.apply_commits();
+
+        while let Some(&(client, index)) = self.leader_state.proposals.get(0) {
+            if index <= self.commit_index {
+                scoped_debug!("responding to client");
+                actions.client_messages.push((client, messages::proposal_response_success()));
+                self.leader_state.proposals.pop_front();
+            } else {
+                break;
+            }
         }
     }
 
-    /// Apply all committed but unapplied log entries up to and including the provided index.
-    fn apply_commits_until(&mut self, until: LogIndex) {
-        let index = cmp::min(self.commit_index, until);
-        if index == LogIndex::from(0) { return };
-        while self.last_applied <= index {
+    /// Apply all committed but unapplied log entries to the state machine.
+    fn apply_commits(&mut self) {
+        while self.last_applied < self.commit_index {
             let (_, entry) = self.store.entry(self.last_applied + 1).unwrap();
-            self.state_machine.apply(entry).unwrap();
+            if !entry.is_empty() {
+                self.state_machine.apply(entry).unwrap();
+            }
             self.last_applied = self.last_applied + 1;
         }
     }
@@ -663,15 +691,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
 impl <S, M> fmt::Debug for Replica<S, M> where S: Store, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(fmt, "Replica {{ id: "));
-        try!(fmt::Display::fmt(&self.id, fmt));
-        try!(write!(fmt, ", state: "));
-        try!(fmt::Debug::fmt(&self.state, fmt));
-        try!(write!(fmt, ", term: "));
-        try!(fmt::Display::fmt(&self.current_term(), fmt));
-        try!(write!(fmt, ", index: "));
-        try!(fmt::Display::fmt(&self.latest_log_index(), fmt));
-        write!(fmt, " }}")
+        write!(fmt, "Replica {{ id: {}, state: {:?}, term: {}, index: {} }}",
+               self.id, self.state, self.current_term(), self.latest_log_index())
     }
 }
 
@@ -680,15 +701,21 @@ mod test {
 
     extern crate env_logger;
 
-    use std::collections::{HashSet, HashMap};
+    use std::collections::{HashMap, VecDeque};
     use std::io::Cursor;
+    use std::net::SocketAddr;
     use std::rc::Rc;
+    use std::str::FromStr;
 
     use capnp::{MallocMessageBuilder, MessageBuilder, ReaderOptions};
     use capnp::serialize::{self, OwnedSpaceMessageReader};
 
     use ClientId;
+    use LogIndex;
     use ServerId;
+    use Store;
+    use Term;
+    use messages;
     use replica::{Actions, Replica, ReplicaTimeout};
     use state_machine::NullStateMachine;
     use store::MemStore;
@@ -696,8 +723,11 @@ mod test {
     type TestReplica = Replica<MemStore, NullStateMachine>;
 
     fn new_cluster(size: u64) -> HashMap<ServerId, TestReplica> {
-        let ids: HashSet<ServerId> = (0..size).map(Into::into).collect();
-        ids.iter().map(|&id| {
+        let ids: HashMap<ServerId, SocketAddr> =
+            (0..size).map(Into::into)
+                     .map(|id| (id, SocketAddr::from_str(&format!("127.0.0.1:{}", id)).unwrap()))
+                     .collect();
+        ids.iter().map(|(&id, _)| {
             let mut peers = ids.clone();
             peers.remove(&id);
             let store = MemStore::new();
@@ -716,26 +746,27 @@ mod test {
     /// Applies the actions to the replicas (and recursively applies any resulting actions), and
     /// returns any client messages.
     fn apply_actions(from: ServerId,
-                     actions: Actions,
+                     mut actions: Actions,
                      replicas: &mut HashMap<ServerId, TestReplica>)
                      -> Vec<(ClientId, Rc<MallocMessageBuilder>)> {
+        let mut queue: VecDeque<(ServerId, ServerId, Rc<MallocMessageBuilder>)> = VecDeque::new();
 
-        fn inner(from: ServerId,
-                 actions: Actions,
-                 replicas: &mut HashMap<ServerId, TestReplica>,
-                 client_messages: &mut Vec<(ClientId, Rc<MallocMessageBuilder>)>) {
+        for (to, message) in actions.peer_messages.iter().cloned() {
+            queue.push_back((from, to, message));
+        }
+        actions.peer_messages.clear();
 
-            for &(peer, ref message) in &actions.peer_messages {
-                let reader = into_reader(&**message);
-                let mut actions = Actions::new();
-                replicas.get_mut(&peer).unwrap().apply_peer_message(from, &reader, &mut actions);
-                inner(peer, actions, replicas, client_messages);
+        while let Some((from, to, message)) = queue.pop_front() {
+            let reader = into_reader(&*message);
+            replicas.get_mut(&to).unwrap().apply_peer_message(from, &reader, &mut actions);
+            let inner_from = to;
+            for (inner_to, message) in actions.peer_messages.iter().cloned() {
+                queue.push_back((inner_from, inner_to, message));
             }
-            client_messages.extend(actions.client_messages.into_iter());
+            actions.peer_messages.clear();
         }
 
-        let mut client_messages = vec![];
-        inner(from, actions, replicas, &mut client_messages);
+        let Actions { client_messages, .. } = actions;
         client_messages
     }
 
@@ -744,7 +775,7 @@ mod test {
     fn elect_leader(leader: ServerId,
                     replicas: &mut HashMap<ServerId, TestReplica>) {
         let mut actions = Actions::new();
-        replicas.get_mut(&leader).unwrap().election_timeout(&mut actions);
+        replicas.get_mut(&leader).unwrap().apply_timeout(ReplicaTimeout::Election, &mut actions);
         let client_messages = apply_actions(leader, actions, replicas);
         assert!(client_messages.is_empty());
         assert!(replicas[&leader].is_leader());
@@ -760,90 +791,28 @@ mod test {
         assert!(replica.is_follower());
 
         let mut actions = Actions::new();
-        replica.election_timeout(&mut actions);
+        replica.apply_timeout(ReplicaTimeout::Election, &mut actions);
         assert!(replica.is_leader());
         assert!(actions.peer_messages.is_empty());
         assert!(actions.client_messages.is_empty());
         assert!(actions.timeouts.is_empty());
     }
 
-    /// A simple election test of a two-replica cluster.
+    /// A simple election test over multiple group sizes.
     #[test]
-    fn test_election_2() {
-        setup_test!("test_election_2");
-        let mut replicas = new_cluster(2);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = &replica_ids[0];
-        let follower = &replica_ids[1];
-        elect_leader(leader.clone(), &mut replicas);
+    fn test_election() {
+        setup_test!("test_election");
 
-        assert!(replicas[leader].is_leader());
-        assert!(replicas[follower].is_follower());
-    }
-
-    /// A simple election test of a three-replica cluster.
-    #[test]
-    fn test_election_3() {
-        setup_test!("test_election_3");
-        let mut replicas = new_cluster(3);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = &replica_ids[0];
-        elect_leader(leader.clone(), &mut replicas);
-
-        assert!(replicas[leader].is_leader());
-        assert!(replicas[&replica_ids[1]].is_follower());
-        assert!(replicas[&replica_ids[2]].is_follower());
-    }
-
-    /// A simple election test of a five-replica cluster.
-    #[test]
-    fn test_election_5() {
-        setup_test!("test_election_5");
-        let mut replicas = new_cluster(5);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = &replica_ids[0];
-        elect_leader(leader.clone(), &mut replicas);
-
-        assert!(replicas[leader].is_leader());
-        assert!(replicas[&replica_ids[1]].is_follower());
-        assert!(replicas[&replica_ids[2]].is_follower());
-        assert!(replicas[&replica_ids[3]].is_follower());
-        assert!(replicas[&replica_ids[4]].is_follower());
-    }
-
-    /// A simple election test of a six-replica cluster.
-    #[test]
-    fn test_election_6() {
-        setup_test!("test_election_6");
-        let mut replicas = new_cluster(6);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = &replica_ids[0];
-        elect_leader(leader.clone(), &mut replicas);
-
-        assert!(replicas[leader].is_leader());
-        assert!(replicas[&replica_ids[1]].is_follower());
-        assert!(replicas[&replica_ids[2]].is_follower());
-        assert!(replicas[&replica_ids[3]].is_follower());
-        assert!(replicas[&replica_ids[4]].is_follower());
-        assert!(replicas[&replica_ids[5]].is_follower());
-    }
-
-    /// A simple election test of a seven-replica cluster.
-    #[test]
-    fn test_election_7() {
-        setup_test!("test_election_7");
-        let mut replicas = new_cluster(7);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = &replica_ids[0];
-        elect_leader(leader.clone(), &mut replicas);
-
-        assert!(replicas[leader].is_leader());
-        assert!(replicas[&replica_ids[1]].is_follower());
-        assert!(replicas[&replica_ids[2]].is_follower());
-        assert!(replicas[&replica_ids[3]].is_follower());
-        assert!(replicas[&replica_ids[4]].is_follower());
-        assert!(replicas[&replica_ids[5]].is_follower());
-        assert!(replicas[&replica_ids[6]].is_follower());
+        for group_size in 1..10 {
+            let mut replicas = new_cluster(group_size);
+            let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+            let leader = &replica_ids[0];
+            elect_leader(leader.clone(), &mut replicas);
+            assert!(replicas[leader].is_leader());
+            for follower in replica_ids.iter().skip(1) {
+                assert!(replicas[follower].is_follower());
+            }
+        }
     }
 
     /// Tests the Raft heartbeating mechanism. The leader receives a heartbeat
@@ -892,5 +861,71 @@ mod test {
         leader.apply_peer_message(follower_id.clone(), &reader, &mut actions);
         let heartbeat_timeout = actions.timeouts.iter().next().unwrap();
         assert_eq!(heartbeat_timeout, &ReplicaTimeout::Heartbeat(follower_id.clone()));
+    }
+
+    /// Emulates a slow heartbeat message in a two-node cluster.
+    ///
+    /// The initial leader (Replica 0) sends a heartbeat, but before it is received by the follower
+    /// (Replica 1), Replica 1's election timeout fires. Replica 1 transitions to candidate state
+    /// and attempts to send a RequestVote to Replica 0. When the partition is fixed, the
+    /// RequestVote should prompt Replica 0 to step down. Replica 1 should send a stale term
+    /// message in response to the heartbeat from Replica 0.
+    #[test]
+    fn test_slow_heartbeat() {
+        setup_test!("test_heartbeat");
+        let mut replicas = new_cluster(2);
+        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+        let replica0 = &replica_ids[0];
+        let replica1 = &replica_ids[1];
+        elect_leader(replica0.clone(), &mut replicas);
+
+        let mut replica0_actions = Actions::new();
+        replicas.get_mut(replica0)
+                .unwrap()
+                .apply_timeout(ReplicaTimeout::Heartbeat(*replica1), &mut replica0_actions);
+        assert!(replicas[replica0].is_leader());
+
+        let mut replica1_actions = Actions::new();
+        replicas.get_mut(replica1)
+                .unwrap()
+                .apply_timeout(ReplicaTimeout::Election, &mut replica1_actions);
+        assert!(replicas[replica1].is_candidate());
+
+        // Apply candidate messages.
+        assert!(apply_actions(*replica1, replica1_actions, &mut replicas).is_empty());
+        assert!(replicas[replica0].is_follower());
+        assert!(replicas[replica1].is_leader());
+
+        // Apply stale heartbeat.
+        assert!(apply_actions(*replica0, replica0_actions, &mut replicas).is_empty());
+        assert!(replicas[replica0].is_follower());
+        assert!(replicas[replica1].is_leader());
+    }
+
+    /// Tests that a client proposal is correctly replicated to peers, and the client is notified
+    /// of the success.
+    #[test]
+    fn test_proposal() {
+        setup_test!("test_proposal");
+        let mut replicas = new_cluster(3);
+        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+        let leader = replica_ids[0];
+        elect_leader(leader, &mut replicas);
+
+        let value: &[u8] = b"foo";
+        let proposal = into_reader(&messages::proposal_request(value));
+        let mut actions = Actions::new();
+
+        let client = ClientId::new();
+
+        replicas.get_mut(&leader)
+                .unwrap()
+                .apply_client_message(client, &proposal, &mut actions);
+
+        let client_messages = apply_actions(leader, actions, &mut replicas);
+        assert_eq!(1, client_messages.len());
+        for replica in replicas.values() {
+            assert_eq!((Term(1), value), replica.store.entry(LogIndex(1)).unwrap());
+        }
     }
 }

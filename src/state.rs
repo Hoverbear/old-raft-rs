@@ -1,5 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
+use ClientId;
 use LogIndex;
 use ServerId;
 
@@ -23,6 +24,8 @@ pub enum ReplicaState {
 pub struct LeaderState {
     next_index: HashMap<ServerId, LogIndex>,
     match_index: HashMap<ServerId, LogIndex>,
+    /// Stores in-flight client proposals.
+    pub proposals: VecDeque<(ClientId, LogIndex)>,
 }
 
 impl LeaderState {
@@ -41,6 +44,7 @@ impl LeaderState {
         LeaderState {
             next_index: next_index,
             match_index: match_index,
+            proposals: VecDeque::new(),
         }
     }
 
@@ -79,6 +83,7 @@ impl LeaderState {
         for (_, match_index) in self.match_index.iter_mut() {
             *match_index = LogIndex::from(0);
         }
+        self.proposals.clear();
     }
 }
 

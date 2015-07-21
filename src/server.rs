@@ -94,7 +94,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             return Err(Error::Raft(RaftError::InvalidPeerSet))
         }
 
-        let replica = Replica::new(id, peers.keys().cloned().collect(), store, state_machine);
+        let replica = Replica::new(id, peers.clone(), store, state_machine);
         let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
         let listener = try!(TcpListener::bind(&addr));
         try!(event_loop.register(&listener, LISTENER));
@@ -163,20 +163,6 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         }).map_err(From::from)
     }
 
-    /// Returns the connection to the peer.
-    fn peer_connection(&mut self, peer_id: &ServerId) -> &mut Connection {
-       let token = self.peer_tokens[peer_id];
-       &mut self.connections[token]
-    }
-
-    /// Finds an existing connection to a client.
-    fn client_connection<'a>(&'a mut self, client_id: ClientId) -> Option<&'a mut Connection> {
-        match self.client_tokens.get(&client_id) {
-            Some(&token) => self.connections.get_mut(token),
-            None => None
-        }
-    }
-
     fn execute_actions(&mut self,
                        event_loop: &mut EventLoop<Server<S, M>>,
                        actions: Actions) {
@@ -184,11 +170,20 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
         let Actions { peer_messages, client_messages, timeouts, clear_timeouts } = actions;
 
         for (peer, message) in peer_messages {
-            self.peer_connection(&peer).send_message(message);
+            let token = self.peer_tokens[&peer];
+            if self.connections[token].send_message(message) {
+                self.connections[token]
+                    .reregister(event_loop, token)
+                    .unwrap_or_else(|_| self.reset_connection(event_loop, token));
+            }
         }
         for (client, message) in client_messages {
-            if let Some(connection) = self.client_connection(client) {
-                connection.send_message(message);
+            if let Some(&token) = self.client_tokens.get(&client) {
+                if self.connections[token].send_message(message) {
+                    self.connections[token]
+                        .reregister(event_loop, token)
+                        .unwrap_or_else(|_| self.reset_connection(event_loop, token));
+                }
             }
         }
         if clear_timeouts {
@@ -220,7 +215,6 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     ///
     /// If the connection is to a client or unknown it will be closed.
     fn reset_connection(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) {
-        push_log_scope!("{:?}", self.connections[token]);
         let kind = *self.connections[token].kind();
         match kind {
             ConnectionKind::Peer(..) => {
@@ -248,7 +242,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     /// If the connection returns an error on any operation, or any message fails to be
     /// deserialized, an error result is returned.
     fn readable(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()> {
-        scoped_trace!("connection readable: {:?}", self.connections[token]);
+        scoped_trace!("{:?}: readable event", self.connections[token]);
         // Read messages from the connection until there are no more.
         while let Some(message) = try!(self.connections[token].readable()) {
             match *self.connections[token].kind() {
@@ -345,14 +339,14 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
 
         if events.is_error() {
             scoped_assert!(token != LISTENER, "unexpected error event from LISTENER");
-            scoped_warn!("error event on connection {:?}", self.connections[token]);
+            scoped_warn!("{:?}: error event", self.connections[token]);
             self.reset_connection(event_loop, token);
             return;
         }
 
         if events.is_hup() {
             scoped_assert!(token != LISTENER, "unexpected hup event from LISTENER");
-            scoped_trace!("hup event on connection {:?}", self.connections[token]);
+            scoped_trace!("{:?}: hup event", self.connections[token]);
             self.reset_connection(event_loop, token);
             return;
         }
@@ -360,7 +354,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
         if events.is_writable() {
             scoped_assert!(token != LISTENER, "unexpected writeable event for LISTENER");
             if let Err(error) = self.connections[token].writable() {
-                scoped_warn!("unable to write message to conection {:?}: {}",
+                scoped_warn!("{:?}: failed write: {}",
                              self.connections[token], error);
                 self.reset_connection(event_loop, token);
                 return;
@@ -368,11 +362,7 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
             if !events.is_readable() {
                 self.connections[token]
                     .reregister(event_loop, token)
-                    .unwrap_or_else(|error| {
-                        scoped_warn!("unable to reregister connection {:?}: {}",
-                                     self.connections[token], error);
-                        self.reset_connection(event_loop, token);
-                    });
+                    .unwrap_or_else(|_| self.reset_connection(event_loop, token));
             }
         }
 
@@ -386,8 +376,8 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                     // the connection is *not* reset.
                     .and_then(|_| self.connections[token].reregister(event_loop, token))
                     .unwrap_or_else(|error| {
-                        scoped_warn!("failed to read from {:?}: {}",
-                                      self.connections[token], error);
+                        scoped_warn!("{:?}: failed read: {}",
+                                     self.connections[token], error);
                         self.reset_connection(event_loop, token);
                     });
             }
@@ -447,6 +437,7 @@ mod test {
     use ServerId;
     use messages;
     use messages_capnp::connection_preamble;
+    use replica::Actions;
     use state_machine::NullStateMachine;
     use store::MemStore;
     use super::*;
@@ -738,5 +729,33 @@ mod test {
         // Error event for the new peer connection; connection is reset.
         event_loop.run_once(&mut server).unwrap();
         assert!(!peer_connected(&mut server, peer_id));
+    }
+
+    /// Tests that the server will send a message to a peer connection.
+    #[test]
+    fn test_connection_send() {
+        setup_test!("test_connection_send");
+        let peer_id = ServerId::from(1);
+
+        let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+
+        let mut peers = HashMap::new();
+        peers.insert(peer_id, peer_listener.local_addr().unwrap());
+        let (mut server, mut event_loop) = new_test_server(peers).unwrap();
+
+        // Accept the server's connection.
+        let (mut in_stream, _)  = peer_listener.accept().unwrap();
+
+        // Accept the preamble.
+        event_loop.run_once(&mut server).unwrap();
+        assert_eq!(ServerId::from(0), read_server_preamble(&mut in_stream));
+
+        // Send a test message (the type is not important).
+        let mut actions = Actions::new();
+        actions.peer_messages.push((peer_id, messages::server_connection_preamble(peer_id)));
+        server.execute_actions(&mut event_loop, actions);
+        event_loop.run_once(&mut server).unwrap();
+
+        assert_eq!(peer_id, read_server_preamble(&mut in_stream));
     }
 }

@@ -112,9 +112,8 @@ mod test {
     extern crate env_logger;
 
     use std::collections::HashSet;
-    use std::io::{Read, Write};
-    use std::net::{TcpStream, SocketAddr, TcpListener};
-    use std::str::FromStr;
+    use std::io::Write;
+    use std::net::{TcpStream, TcpListener};
     use std::thread;
 
     use uuid::Uuid;
@@ -122,7 +121,7 @@ mod test {
     use capnp::message::MessageReader;
     use bufstream::BufStream;
 
-    use {Client, ClientId, messages, Result};
+    use {Client, messages, Result};
     use messages_capnp::{connection_preamble, client_request};
 
     fn expect_preamble(connection: &mut TcpStream, client_id: Uuid) -> Result<bool> {
@@ -172,7 +171,7 @@ mod test {
             // Send response! (success!)
             let response = messages::proposal_response_success();
             serialize::write_message(&mut connection, &*response).unwrap();
-            connection.flush();
+            connection.flush().unwrap();
         });
 
         // Propose. It's a marriage made in heaven! :)
@@ -193,7 +192,6 @@ mod test {
         cluster.insert(test_addr);
 
         let mut client = Client::new(cluster);
-        let client_id = client.id.0.clone();
         let to_propose = b"Bears";
 
         // The client connects on the proposal.
@@ -207,7 +205,7 @@ mod test {
             // Send response! (unknown leader!) Client should drop connection.
             let response = messages::proposal_response_unknown_leader();
             serialize::write_message(&mut connection, &*response).unwrap();
-            connection.flush();
+            connection.flush().unwrap();
         });
 
         // Propose. It's a marriage made in heaven! :)
@@ -242,9 +240,9 @@ mod test {
             expect_proposal(&mut connection, to_propose).unwrap();
 
             // Send response! (not leader!)
-            let response = messages::proposal_response_not_leader(&format!("{}", second_addr));
+            let response = messages::proposal_response_not_leader(&second_addr);
             serialize::write_message(&mut connection, &*response).unwrap();
-            connection.flush();
+            connection.flush().unwrap();
 
             // Test that it seeks out other server and proposes.
             scoped_debug!("Second server should get preamble and proposal. Responds Success.");
@@ -300,9 +298,9 @@ mod test {
             expect_proposal(&mut connection, to_propose).unwrap();
 
             // Send response! (not leader!)
-            let response = messages::proposal_response_not_leader(&format!("{}", second_addr));
+            let response = messages::proposal_response_not_leader(&second_addr);
             serialize::write_message(&mut connection, &*response).unwrap();
-            connection.flush();
+            connection.flush().unwrap();
 
             // No more...
         });
