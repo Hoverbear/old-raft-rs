@@ -94,11 +94,11 @@ use uuid::Uuid;
 pub type Result<T> = std::result::Result<T, Error>;
 
 wrapped_enum!{
-    /// The generic `raft::Error` is composed of one of the errors that can originate from the
-    /// various libraries consumed by the library.
-    /// With the exception of the `Raft` variant these are generated from `try!()` macros invoking
-    /// on `io::Error` or `capnp::Error` by using
-    /// [`FromError`](https://doc.rust-lang.org/std/error/#the-fromerror-trait).
+    #[doc = "The generic `raft::Error` is composed of one of the errors that can originate from the"]
+    #[doc = "various libraries consumed by the library."]
+    #[doc = "With the exception of the `Raft` variant these are generated from `try!()` macros invoking"]
+    #[doc = "on `io::Error` or `capnp::Error` by using"]
+    #[doc = "[`FromError`](https://doc.rust-lang.org/std/error/#the-fromerror-trait)."]
     #[derive(Debug)]
     pub enum Error {
         /// An error originating from the [Cap'n Proto](https://github.com/dwrensha/capnproto-rust) library.
