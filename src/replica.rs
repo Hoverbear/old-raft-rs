@@ -30,6 +30,7 @@ use messages_capnp::{
     append_entries_response,
     client_request,
     proposal_request,
+    query_request,
     message,
     request_vote_request,
     request_vote_response,
@@ -193,6 +194,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         match reader {
             client_request::Which::Proposal(Ok(request)) =>
                 self.proposal_request(from, request, actions),
+            client_request::Which::Query(Ok(query)) =>
+                self.query_request(from, query, actions),
             _ => panic!("cannot handle message"),
         }
     }
@@ -491,6 +494,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             let prev_log_term = self.latest_log_term();
             let term = self.current_term();
             let log_index = prev_log_index + 1;
+            // TODO: This is probably not exactly safe.
             self.store.append_entries(log_index,
                                       &[(term, request.get_entry().unwrap())]).unwrap();
             self.leader_state.proposals.push_back((from, log_index));
@@ -506,6 +510,29 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                     actions.peer_messages.push((peer, message.clone()));
                 }
             }
+        }
+    }
+
+    /// Issue a client query to the Raft replica.
+    fn query_request(&mut self,
+                        from: ClientId,
+                        request: query_request::Reader,
+                        actions: &mut Actions) {
+        scoped_debug!("query from Client({})", from);
+
+        if self.is_candidate() || (self.is_follower() && self.follower_state.leader.is_none()) {
+            actions.client_messages.push((from.into(), messages::proposal_response_unknown_leader()));
+        } else if self.is_follower() {
+            let message =
+                messages::proposal_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
+            actions.client_messages.push((from, message));
+        } else {
+            // TODO: This is probably not exactly safe.
+            let query = request.get_query().unwrap();
+            // TODO: This is probably not exactly safe.
+            let result = self.state_machine.query(query).unwrap();
+            let message = messages::proposal_response_success(&result);
+            actions.client_messages.push((from, message));
         }
     }
 

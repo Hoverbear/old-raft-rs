@@ -72,12 +72,14 @@ impl Client {
                     // Send the preamble.
                     let preamble = messages::client_connection_preamble(self.id);
                     let mut stream = BufStream::new(try!(TcpStream::connect(leader)));
+                    scoped_debug!("connected");
                     try!(serialize::write_message(&mut stream, &*preamble));
                     stream
                 }
             };
             try!(serialize::write_message(&mut connection, message));
             try!(connection.flush());
+            scoped_debug!("awaiting response from connection");
             let response = try!(serialize::read_message(&mut connection, ReaderOptions::new()));
             match try!(response.get_root::<client_response::Reader>()).which().unwrap() {
                 client_response::Which::Proposal(Ok(response)) => {
@@ -182,14 +184,14 @@ mod test {
             expect_preamble(&mut connection, client_id).unwrap();
             expect_proposal(&mut connection, to_propose).unwrap();
             // Send response! (success!)
-            let response = messages::proposal_response_success();
+            let response = messages::proposal_response_success(b"Foxes");
             serialize::write_message(&mut connection, &*response).unwrap();
             connection.flush().unwrap();
         });
 
         // Propose. It's a marriage made in heaven! :)
         // Should be ok
-        client.propose(to_propose).unwrap();
+        assert_eq!(client.propose(to_propose).unwrap(), b"Foxes");
         assert!(client.leader_connection.is_some());
 
         child.join().unwrap();
@@ -264,7 +266,7 @@ mod test {
             expect_proposal(&mut connection, to_propose).unwrap();
 
             // Send final response! (Success!)
-            let response = messages::proposal_response_success();
+            let response = messages::proposal_response_success(b"Foxes");
             serialize::write_message(&mut connection, &*response).unwrap();
         });
 
@@ -277,7 +279,7 @@ mod test {
         };
 
         // Should be ok, change leader connection.
-        client.propose(to_propose).unwrap();
+        assert_eq!(client.propose(to_propose).unwrap(), b"Foxes");
         assert!(client.leader_connection.is_some());
 
         child.join().unwrap();
