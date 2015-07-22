@@ -182,7 +182,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         };
     }
 
-    /// Applies a client message to the replica. This function dispatches a generic request to it's
+    /// Applies a client message to the replica. This function dispatches a generic request to its
     /// appropriate handler.
     pub fn apply_client_message<R>(&mut self,
                                    from: ClientId,
@@ -945,25 +945,29 @@ mod test {
     #[test]
     fn test_proposal() {
         setup_test!("test_proposal");
-        let mut replicas = new_cluster(3);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader = replica_ids[0];
-        elect_leader(leader, &mut replicas);
+        // Test various sizes.
+        for i in 1..7 {
+            scoped_debug!("testing size {} cluster", i);
+            let mut replicas = new_cluster(i);
+            let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
+            let leader = replica_ids[0];
+            elect_leader(leader, &mut replicas);
 
-        let value: &[u8] = b"foo";
-        let proposal = into_reader(&messages::proposal_request(value));
-        let mut actions = Actions::new();
+            let value: &[u8] = b"foo";
+            let proposal = into_reader(&messages::proposal_request(value));
+            let mut actions = Actions::new();
 
-        let client = ClientId::new();
+            let client = ClientId::new();
 
-        replicas.get_mut(&leader)
-                .unwrap()
-                .apply_client_message(client, &proposal, &mut actions);
+            replicas.get_mut(&leader)
+                    .unwrap()
+                    .apply_client_message(client, &proposal, &mut actions);
 
-        let client_messages = apply_actions(leader, actions, &mut replicas);
-        assert_eq!(1, client_messages.len());
-        for replica in replicas.values() {
-            assert_eq!((Term(1), value), replica.store.entry(LogIndex(1)).unwrap());
+            let client_messages = apply_actions(leader, actions, &mut replicas);
+            assert_eq!(1, client_messages.len());
+            for replica in replicas.values() {
+                assert_eq!((Term(1), value), replica.store.entry(LogIndex(1)).unwrap());
+            }
         }
     }
 }
