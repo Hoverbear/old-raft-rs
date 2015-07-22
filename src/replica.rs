@@ -613,12 +613,16 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             self.commit_index = self.commit_index + 1;
         }
 
-        self.apply_commits();
+        let results = self.apply_commits();
 
         while let Some(&(client, index)) = self.leader_state.proposals.get(0) {
             if index <= self.commit_index {
                 scoped_debug!("responding to client");
-                actions.client_messages.push((client, messages::proposal_response_success()));
+                // We know that there will be an index here since it was commited and the index is
+                // less than that which has been commited.
+                let result = results.get(&index).unwrap();
+                let message = messages::proposal_response_success(result);
+                actions.client_messages.push((client, message));
                 self.leader_state.proposals.pop_front();
             } else {
                 break;
@@ -627,14 +631,21 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Apply all committed but unapplied log entries to the state machine.
-    fn apply_commits(&mut self) {
+    /// Returns the set of return values from the commits applied.
+    fn apply_commits(&mut self) -> HashMap<LogIndex, Vec<u8>> {
+        let mut results = HashMap::new();
         while self.last_applied < self.commit_index {
+            // Unwrap justified here since we know there is an entry here.
             let (_, entry) = self.store.entry(self.last_applied + 1).unwrap();
+
             if !entry.is_empty() {
-                self.state_machine.apply(entry).unwrap();
+                // Unwrap justified because we **just** checked to see if it was empty.
+                let result = self.state_machine.apply(entry).unwrap();
+                results.insert(self.last_applied + 1, result);
             }
             self.last_applied = self.last_applied + 1;
         }
+        results
     }
 
     /// Transition to follower state with the provided term. The `voted_for` field will be reset.

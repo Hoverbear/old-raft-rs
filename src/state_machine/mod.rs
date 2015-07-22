@@ -27,7 +27,13 @@ pub trait StateMachine: Debug + Send + 'static {
     type Error: Debug + error::Error + Send + 'static;
 
     /// Applies a command to the state machine.
-    fn apply(&mut self, command: &[u8]) -> result::Result<(), Self::Error>;
+    /// Returns an application-specific result value.
+    fn apply(&mut self, command: &[u8]) -> result::Result<Vec<u8>, Self::Error>;
+
+    /// Queries a value of the state machine. Does not go through the durable log, or mutate the
+    /// state machine.
+    /// Returns an application-specific result value.
+    fn query(&self, query: &[u8]) -> result::Result<Vec<u8>, Self::Error>;
 
     /// Take a snapshot of the state machine.
     fn snapshot(&self) -> result::Result<Vec<u8>, Self::Error>;

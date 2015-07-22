@@ -115,6 +115,7 @@ struct ClientRequest {
   union {
     ping @0 :PingRequest;
     proposal @1 :ProposalRequest;
+    query @2 :QueryRequest;
   }
 }
 
@@ -149,9 +150,14 @@ struct ProposalRequest {
   # An entry to append.
 }
 
+struct QueryRequest {
+    query @0 :Data;
+    # An query to issue to the state machine. 
+}
+
 struct ProposalResponse {
   union {
-    success @0 :Void;
+    success @0 :Data;
     # The proposal succeeded.
 
     unknownLeader @1 :Void;

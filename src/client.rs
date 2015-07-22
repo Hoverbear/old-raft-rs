@@ -9,7 +9,7 @@ use std::net::TcpStream;
 use std::str::FromStr;
 
 use bufstream::BufStream;
-use capnp::{serialize, MessageReader, ReaderOptions};
+use capnp::{serialize, MessageReader, ReaderOptions, MallocMessageBuilder};
 
 use messages_capnp::{client_response, proposal_response};
 use messages;
@@ -43,10 +43,21 @@ impl Client {
     /// Proposes an entry to be appended to the replicated log. This will only
     /// return once the entry has been durably committed.
     /// Returns `Error` when the entire cluster has an unknown leader. Try proposing again later.
-    pub fn propose(&mut self, entry: &[u8]) -> Result<()> {
+    pub fn propose(&mut self, entry: &[u8]) -> Result<Vec<u8>> {
         scoped_trace!("{:?}: propose", self);
         let mut message = messages::proposal_request(entry);
+        self.send_message(&mut message)
+    }
 
+    /// Queries an entry from the log. This is non-mutating and doesn't go through the durable log.
+    /// Like `.propose()` this will only communicate with the leader of the cluster.
+    pub fn query(&mut self, query: &[u8]) -> Result<Vec<u8>> {
+        scoped_trace!("{:?}: query", self);
+        let mut message = messages::query_request(query);
+        self.send_message(&mut message)
+    }
+
+    fn send_message(&mut self, message: &mut MallocMessageBuilder) -> Result<Vec<u8>> {
         let mut members = self.cluster.iter().cloned();
 
         loop {
@@ -65,27 +76,29 @@ impl Client {
                     stream
                 }
             };
-            try!(serialize::write_message(&mut connection, &mut message));
+            try!(serialize::write_message(&mut connection, message));
             try!(connection.flush());
             let response = try!(serialize::read_message(&mut connection, ReaderOptions::new()));
             match try!(response.get_root::<client_response::Reader>()).which().unwrap() {
                 client_response::Which::Proposal(Ok(response)) => {
                     match response.which().unwrap() {
-                        proposal_response::Which::Success(()) => {
+                        proposal_response::Which::Success(data) => {
                             scoped_debug!("received response Success");
                             self.leader_connection = Some(connection);
-                            return Ok(())
+                            return data
+                                .map(|v| Vec::from(v))
+                                .map_err(|e| e.into()) // Exit the function.
                         },
                         proposal_response::Which::UnknownLeader(()) => {
                             scoped_debug!("received response UnknownLeader");
-                            ()
+                            () // Keep looping.
                         },
                         proposal_response::Which::NotLeader(leader) => {
                             scoped_debug!("received response NotLeader");
                             let leader_str = try!(leader);
                             if !self.cluster.contains(&try!(SocketAddr::from_str(leader_str))) {
                                 scoped_debug!("cluster violation detected");
-                                return Err(RaftError::ClusterViolation.into())
+                                return Err(RaftError::ClusterViolation.into()) // Exit the function.
                             }
                             let mut connection: TcpStream = try!(TcpStream::connect(leader_str));
                             let preamble = messages::client_connection_preamble(self.id);

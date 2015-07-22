@@ -193,6 +193,19 @@ pub fn ping_request() -> MallocMessageBuilder {
     message
 }
 
+// Query (Piggybacks proposal responses right now.)
+
+pub fn query_request(entry: &[u8]) -> MallocMessageBuilder {
+    let mut message = MallocMessageBuilder::new_default();
+    {
+        message.init_root::<client_request::Builder>()
+               .init_query()
+               .set_query(entry);
+    }
+    message
+}
+
+
 // Proposal
 
 pub fn proposal_request(entry: &[u8]) -> MallocMessageBuilder {
@@ -205,12 +218,12 @@ pub fn proposal_request(entry: &[u8]) -> MallocMessageBuilder {
     message
 }
 
-pub fn proposal_response_success() -> Rc<MallocMessageBuilder> {
+pub fn proposal_response_success(data: &[u8]) -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
         message.init_root::<client_response::Builder>()
                .init_proposal()
-               .set_success(());
+               .set_success(data);
     }
     Rc::new(message)
 }

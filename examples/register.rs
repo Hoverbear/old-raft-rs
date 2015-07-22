@@ -12,7 +12,8 @@ use raft::{
     state_machine,
     store,
     ServerId,
-    Server
+    Server,
+    Client,
 };
 
 static USAGE: &'static str = "
@@ -42,7 +43,7 @@ Commands:
 
 Usage:
   register get (<server-address>)...
-  register put new-value (<server-address>)...
+  register put <new-value> (<server-address>)...
   register cas <expected-value> <new-value> (<server-address>)...
   register server <id> <address> [<peer-id> <peer-address>]...
   register (-h | --help)
@@ -58,7 +59,7 @@ struct Args {
     cmd_put: bool,
     cmd_cas: bool,
 
-    arg_id: u64,
+    arg_id: Option<u64>,
     arg_address: String,
     arg_peer_id: Vec<u64>,
     arg_peer_address: Vec<String>,
@@ -94,7 +95,7 @@ fn server(args: &Args) {
     let store = store::MemStore::new();
     let state_machine = state_machine::RegisterStateMachine::new();
 
-    let id = ServerId::from(args.arg_id);
+    let id = ServerId::from(args.arg_id.unwrap());
     let addr = parse_addr(&args.arg_address);
     let peers = args.arg_peer_id
                     .iter()
@@ -105,12 +106,30 @@ fn server(args: &Args) {
     Server::run(id, addr, peers, store, state_machine).unwrap();
 }
 
-fn get(_args: &Args) {
-    panic!("unimplemented: waiting on changes to the Raft Client and StateMachine APIs");
+fn get(args: &Args) {
+    let cluster = args.arg_server_address.iter()
+        .map(|v| {
+            println!("{:?}", v);
+            parse_addr(&v)
+        })
+        .collect();
+    println!("{:?}", cluster);
+    let mut client = Client::new(cluster);
+    let response = client.query(args.arg_new_value.as_bytes()).unwrap();
+    println!("{:?}", response)
 }
 
-fn put(_args: &Args) {
-    panic!("unimplemented: waiting on changes to the Raft Client and StateMachine APIs");
+fn put(args: &Args) {
+    let cluster = args.arg_server_address.iter()
+        .map(|v| {
+            println!("{:?}", v);
+            parse_addr(&v)
+        })
+        .collect();
+    println!("{:?}", cluster);
+    let mut client = Client::new(cluster);
+    let response = client.propose(args.arg_new_value.as_bytes()).unwrap();
+    println!("{:?}", response)
 }
 
 fn cas(_args: &Args) {
