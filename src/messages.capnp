@@ -122,7 +122,8 @@ struct ClientRequest {
 struct ClientResponse {
   union {
     ping @0 :PingResponse;
-    proposal @1 :ProposalResponse;
+    proposal @1 :CommandResponse;
+    query @2 :CommandResponse;
   }
 }
 
@@ -152,10 +153,10 @@ struct ProposalRequest {
 
 struct QueryRequest {
     query @0 :Data;
-    # An query to issue to the state machine. 
+    # An query to issue to the state machine.
 }
 
-struct ProposalResponse {
+struct CommandResponse {
   union {
     success @0 :Data;
     # The proposal succeeded.

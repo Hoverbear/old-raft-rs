@@ -183,7 +183,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 
     /// Applies a client message to the replica. This function dispatches a generic request to it's
-    /// appropriate handler. (Right now, only a `proposal_request` is valid.)
+    /// appropriate handler.
     pub fn apply_client_message<R>(&mut self,
                                    from: ClientId,
                                    message: &R,
@@ -484,10 +484,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         scoped_debug!("proposal from Client({})", from);
 
         if self.is_candidate() || (self.is_follower() && self.follower_state.leader.is_none()) {
-            actions.client_messages.push((from.into(), messages::proposal_response_unknown_leader()));
+            actions.client_messages.push((from.into(), messages::command_response_unknown_leader()));
         } else if self.is_follower() {
             let message =
-                messages::proposal_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
+                messages::command_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
             actions.client_messages.push((from, message));
         } else {
             let prev_log_index = self.latest_log_index();
@@ -521,17 +521,17 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         scoped_debug!("query from Client({})", from);
 
         if self.is_candidate() || (self.is_follower() && self.follower_state.leader.is_none()) {
-            actions.client_messages.push((from.into(), messages::proposal_response_unknown_leader()));
+            actions.client_messages.push((from.into(), messages::command_response_unknown_leader()));
         } else if self.is_follower() {
             let message =
-                messages::proposal_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
+                messages::command_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
             actions.client_messages.push((from, message));
         } else {
             // TODO: This is probably not exactly safe.
             let query = request.get_query().unwrap();
             // TODO: This is probably not exactly safe.
             let result = self.state_machine.query(query).unwrap();
-            let message = messages::proposal_response_success(&result);
+            let message = messages::command_response_success(&result);
             actions.client_messages.push((from, message));
         }
     }
@@ -648,7 +648,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 // We know that there will be an index here since it was commited and the index is
                 // less than that which has been commited.
                 let result = results.get(&index).unwrap();
-                let message = messages::proposal_response_success(result);
+                let message = messages::command_response_success(result);
                 actions.client_messages.push((client, message));
                 self.leader_state.proposals.pop_front();
             } else {

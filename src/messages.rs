@@ -193,7 +193,7 @@ pub fn ping_request() -> MallocMessageBuilder {
     message
 }
 
-// Query (Piggybacks proposal responses right now.)
+// Query
 
 pub fn query_request(entry: &[u8]) -> MallocMessageBuilder {
     let mut message = MallocMessageBuilder::new_default();
@@ -218,7 +218,9 @@ pub fn proposal_request(entry: &[u8]) -> MallocMessageBuilder {
     message
 }
 
-pub fn proposal_response_success(data: &[u8]) -> Rc<MallocMessageBuilder> {
+// Query / Proposal Response
+
+pub fn command_response_success(data: &[u8]) -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
         message.init_root::<client_response::Builder>()
@@ -228,7 +230,7 @@ pub fn proposal_response_success(data: &[u8]) -> Rc<MallocMessageBuilder> {
     Rc::new(message)
 }
 
-pub fn proposal_response_unknown_leader() -> Rc<MallocMessageBuilder> {
+pub fn command_response_unknown_leader() -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
         message.init_root::<client_response::Builder>()
@@ -238,7 +240,7 @@ pub fn proposal_response_unknown_leader() -> Rc<MallocMessageBuilder> {
     Rc::new(message)
 }
 
-pub fn proposal_response_not_leader(leader_hint: &SocketAddr) -> Rc<MallocMessageBuilder> {
+pub fn command_response_not_leader(leader_hint: &SocketAddr) -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
         message.init_root::<client_response::Builder>()

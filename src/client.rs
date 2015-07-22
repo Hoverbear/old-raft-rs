@@ -11,7 +11,7 @@ use std::str::FromStr;
 use bufstream::BufStream;
 use capnp::{serialize, MessageReader, ReaderOptions, MallocMessageBuilder};
 
-use messages_capnp::{client_response, proposal_response};
+use messages_capnp::{client_response, command_response};
 use messages;
 use ClientId;
 use Result;
@@ -84,18 +84,18 @@ impl Client {
             match try!(response.get_root::<client_response::Reader>()).which().unwrap() {
                 client_response::Which::Proposal(Ok(response)) => {
                     match response.which().unwrap() {
-                        proposal_response::Which::Success(data) => {
+                        command_response::Which::Success(data) => {
                             scoped_debug!("received response Success");
                             self.leader_connection = Some(connection);
                             return data
                                 .map(|v| Vec::from(v))
                                 .map_err(|e| e.into()) // Exit the function.
                         },
-                        proposal_response::Which::UnknownLeader(()) => {
+                        command_response::Which::UnknownLeader(()) => {
                             scoped_debug!("received response UnknownLeader");
                             () // Keep looping.
                         },
-                        proposal_response::Which::NotLeader(leader) => {
+                        command_response::Which::NotLeader(leader) => {
                             scoped_debug!("received response NotLeader");
                             let leader_str = try!(leader);
                             if !self.cluster.contains(&try!(SocketAddr::from_str(leader_str))) {
@@ -184,7 +184,7 @@ mod test {
             expect_preamble(&mut connection, client_id).unwrap();
             expect_proposal(&mut connection, to_propose).unwrap();
             // Send response! (success!)
-            let response = messages::proposal_response_success(b"Foxes");
+            let response = messages::command_response_success(b"Foxes");
             serialize::write_message(&mut connection, &*response).unwrap();
             connection.flush().unwrap();
         });
@@ -218,7 +218,7 @@ mod test {
             scoped_debug!("Should get proposal. Responds UnknownLeader");
             expect_proposal(&mut connection, to_propose).unwrap();
             // Send response! (unknown leader!) Client should drop connection.
-            let response = messages::proposal_response_unknown_leader();
+            let response = messages::command_response_unknown_leader();
             serialize::write_message(&mut connection, &*response).unwrap();
             connection.flush().unwrap();
         });
@@ -255,7 +255,7 @@ mod test {
             expect_proposal(&mut connection, to_propose).unwrap();
 
             // Send response! (not leader!)
-            let response = messages::proposal_response_not_leader(&second_addr);
+            let response = messages::command_response_not_leader(&second_addr);
             serialize::write_message(&mut connection, &*response).unwrap();
             connection.flush().unwrap();
 
@@ -266,7 +266,7 @@ mod test {
             expect_proposal(&mut connection, to_propose).unwrap();
 
             // Send final response! (Success!)
-            let response = messages::proposal_response_success(b"Foxes");
+            let response = messages::command_response_success(b"Foxes");
             serialize::write_message(&mut connection, &*response).unwrap();
         });
 
@@ -313,7 +313,7 @@ mod test {
             expect_proposal(&mut connection, to_propose).unwrap();
 
             // Send response! (not leader!)
-            let response = messages::proposal_response_not_leader(&second_addr);
+            let response = messages::command_response_not_leader(&second_addr);
             serialize::write_message(&mut connection, &*response).unwrap();
             connection.flush().unwrap();
 
