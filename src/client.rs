@@ -49,8 +49,8 @@ impl Client {
         self.send_message(&mut message)
     }
 
-    /// Queries an entry from the log. This is non-mutating and doesn't go through the durable log.
-    /// Like `.propose()` this will only communicate with the leader of the cluster.
+    /// Queries an entry from the state machine. This is non-mutating and doesn't go through the
+    /// durable log. Like `.propose()` this will only communicate with the leader of the cluster.
     pub fn query(&mut self, query: &[u8]) -> Result<Vec<u8>> {
         scoped_trace!("{:?}: query", self);
         let mut message = messages::query_request(query);

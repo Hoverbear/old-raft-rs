@@ -108,28 +108,20 @@ fn server(args: &Args) {
 
 fn get(args: &Args) {
     let cluster = args.arg_server_address.iter()
-        .map(|v| {
-            println!("{:?}", v);
-            parse_addr(&v)
-        })
+        .map(|v| parse_addr(&v))
         .collect();
-    println!("{:?}", cluster);
     let mut client = Client::new(cluster);
     let response = client.query(args.arg_new_value.as_bytes()).unwrap();
-    println!("{:?}", response)
+    println!("{}", String::from_utf8(response).unwrap())
 }
 
 fn put(args: &Args) {
     let cluster = args.arg_server_address.iter()
-        .map(|v| {
-            println!("{:?}", v);
-            parse_addr(&v)
-        })
+        .map(|v| parse_addr(&v))
         .collect();
-    println!("{:?}", cluster);
     let mut client = Client::new(cluster);
     let response = client.propose(args.arg_new_value.as_bytes()).unwrap();
-    println!("{:?}", response)
+    println!("{}", String::from_utf8(response).unwrap())
 }
 
 fn cas(_args: &Args) {
