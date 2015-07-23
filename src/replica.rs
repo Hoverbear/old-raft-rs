@@ -484,28 +484,33 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         scoped_debug!("proposal from Client({})", from);
 
         if self.is_candidate() || (self.is_follower() && self.follower_state.leader.is_none()) {
+            scoped_debug!("proposal recieved, but leader is not known");
             actions.client_messages.push((from.into(), messages::command_response_unknown_leader()));
         } else if self.is_follower() {
+            scoped_debug!("proposal recieved, but replica is not leader");
             let message =
                 messages::command_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
             actions.client_messages.push((from, message));
         } else {
+            scoped_debug!("proposal recieved, replica processing");
             let prev_log_index = self.latest_log_index();
             let prev_log_term = self.latest_log_term();
             let term = self.current_term();
             let log_index = prev_log_index + 1;
             // TODO: This is probably not exactly safe.
+            let entry = request.get_entry().unwrap();
             self.store.append_entries(log_index,
-                                      &[(term, request.get_entry().unwrap())]).unwrap();
+                                      &[(term, entry)]).unwrap();
             self.leader_state.proposals.push_back((from, log_index));
 
             let message = messages::append_entries_request(term,
                                                            prev_log_index,
                                                            prev_log_term,
-                                                           &[],
+                                                           &[entry],
                                                            self.commit_index);
 
             for &peer in self.peers.keys() {
+                scoped_debug!("replica queuing message for peer {}", peer);
                 if self.leader_state.next_index(&peer) == prev_log_index + 1 {
                     actions.peer_messages.push((peer, message.clone()));
                 }
@@ -638,6 +643,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         let majority = self.majority();
         while self.leader_state.count_match_indexes(self.commit_index + 1) >= majority {
             self.commit_index = self.commit_index + 1;
+            scoped_debug!("advanced commit index to {}", self.commit_index);
         }
 
         let results = self.apply_commits();
@@ -819,6 +825,22 @@ mod test {
         assert!(replicas[&leader].is_leader());
     }
 
+    /// Tests the majority function.
+    #[test]
+    fn test_majority () {
+        let (_, mut replica) = new_cluster(1).into_iter().next().unwrap();
+        assert_eq!(1, replica.majority());
+
+        let (_, mut replica) = new_cluster(2).into_iter().next().unwrap();
+        assert_eq!(2, replica.majority());
+
+        let (_, mut replica) = new_cluster(3).into_iter().next().unwrap();
+        assert_eq!(2, replica.majority());
+
+        let (_, mut replica) = new_cluster(4).into_iter().next().unwrap();
+        assert_eq!(3, replica.majority());
+    }
+
     /// Tests that a single-replica cluster will behave appropriately.
     ///
     /// The single replica should transition straight to the Leader state upon the first timeout.
@@ -946,7 +968,7 @@ mod test {
     fn test_proposal() {
         setup_test!("test_proposal");
         // Test various sizes.
-        for i in 1..7 {
+        for i in 2..7 {
             scoped_debug!("testing size {} cluster", i);
             let mut replicas = new_cluster(i);
             let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
