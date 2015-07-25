@@ -39,6 +39,12 @@ license = "MIT"
 # Builds Cap'n Proto messages
 build = "build.rs"
 
+[features]
+default = [ "hashmap", ]
+
+hashmap = [ "serde", "serde_macros", ]
+
+# Dependencies
 [build-dependencies.capnpc]
 git = "https://github.com/dwrensha/capnpc-rust"
 
@@ -54,6 +60,14 @@ wrapped_enum = "*"
 [dependencies.capnp]
 git = "https://github.com/danburkert/capnproto-rust"
 branch = "async"
+
+[dependencies.serde]
+version = "*"
+optional = true
+
+[dependencies.serde_macros]
+version = "*"
+optional = true
 
 [dev-dependencies]
 docopt = "*"

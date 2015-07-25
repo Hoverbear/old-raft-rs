@@ -13,6 +13,7 @@ use std::fmt::Debug;
 mod channel;
 mod null;
 mod register;
+#[cfg(feature="hashmap")] mod hashmap;
 
 pub use state_machine::channel::ChannelStateMachine;
 pub use state_machine::null::NullStateMachine;

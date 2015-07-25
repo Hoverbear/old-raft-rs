@@ -3,6 +3,10 @@
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Hoverbear/raft/master/raft.png")]
 #![doc(html_root_url = "https://hoverbear.github.io/raft/raft/")]
 
+#![cfg_attr(feature = "serde", feature(plugin))]
+#![cfg_attr(feature = "serde", feature(custom_derive))]
+#![cfg_attr(feature = "serde", plugin(serde_macros))]
+
 //! This is the Raft Distributed Consensus Protocol implemented for Rust.
 //! [Raft](http://raftconsensus.github.io/) is described as:
 //!
@@ -53,6 +57,7 @@ extern crate uuid;
 #[macro_use] extern crate scoped_log;
 #[macro_use] extern crate wrapped_enum;
 #[cfg(test)] extern crate env_logger;
+#[cfg(feature = "serde")] extern crate serde;
 
 /// Prepares the environment testing. Should be called as the first line of every test with the
 /// name of the test as the only argument.
