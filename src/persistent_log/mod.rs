@@ -11,14 +11,14 @@ use std::error;
 use std::fmt::Debug;
 use std::result;
 
-pub use store::mem::{MemStore, Error};
+pub use persistent_log::mem::{MemLog, Error};
 
 use LogIndex;
 use Term;
 use ServerId;
 
 /// A store of persistent Raft state.
-pub trait Store: Clone + Debug + Send + 'static {
+pub trait Log: Clone + Debug + Send + 'static {
 
     type Error: error::Error + Debug + Sized + 'static;
 

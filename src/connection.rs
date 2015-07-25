@@ -31,7 +31,7 @@ use backoff::Backoff;
 use messages;
 use server::{Server, ServerTimeout};
 use state_machine::StateMachine;
-use store::Store;
+use persistent_log::Log;
 
 fn poll_opt() -> PollOpt {
     PollOpt::edge() | PollOpt::oneshot()
@@ -197,8 +197,8 @@ impl Connection {
     }
 
     /// Registers the connection with the event loop.
-    pub fn register<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()>
-    where S: Store, M: StateMachine {
+    pub fn register<L, M>(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token) -> Result<()>
+    where L: Log, M: StateMachine {
         scoped_trace!("{:?}: register", self);
         event_loop.register_opt(&self.stream, token, self.events, poll_opt())
                   .map_err(|error| {
@@ -208,8 +208,8 @@ impl Connection {
     }
 
     /// Reregisters the connection with the event loop.
-    pub fn reregister<S, M>(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()>
-    where S: Store, M: StateMachine {
+    pub fn reregister<L, M>(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token) -> Result<()>
+    where L: Log, M: StateMachine {
         scoped_trace!("{:?}: reregister", self);
         event_loop.reregister(&self.stream, token, self.events, poll_opt())
                   .map_err(|error| {
@@ -230,11 +230,11 @@ impl Connection {
     }
 
     /// Resets a peer connection.
-    pub fn reset_peer<S, M>(&mut self,
-                            event_loop: &mut EventLoop<Server<S, M>>,
+    pub fn reset_peer<L, M>(&mut self,
+                            event_loop: &mut EventLoop<Server<L, M>>,
                             token: Token)
                             -> Result<(ServerTimeout, TimeoutHandle)>
-    where S: Store, M: StateMachine {
+    where L: Log, M: StateMachine {
         scoped_assert!(self.kind.is_peer());
         let duration = self.backoff.next_backoff_ms();
         self.read_continuation = None;

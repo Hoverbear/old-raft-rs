@@ -37,7 +37,7 @@ use messages_capnp::{
 };
 use state::{ConsensusState, LeaderState, CandidateState, FollowerState};
 use state_machine::StateMachine;
-use store::Store;
+use persistent_log::Log;
 
 const ELECTION_MIN: u64 = 1500;
 const ELECTION_MAX: u64 = 3000;
@@ -102,14 +102,14 @@ impl Actions {
 
 /// A Consensus Module of a Raft distributed state machine. A Raft Consensus Module controls a
 /// client state machine, to which it applies commands in a globally consistent order.
-pub struct Consensus<S, M> {
+pub struct Consensus<L, M> {
     /// The ID of this consensus module.
     id: ServerId,
     /// The IDs of the other consensus modules in the cluster.
     peers: HashMap<ServerId, SocketAddr>,
 
     /// The persistent log store.
-    store: S,
+    persistent_log: L,
     /// The client state machine to which client commands will be applied.
     state_machine: M,
 
@@ -128,19 +128,19 @@ pub struct Consensus<S, M> {
     follower_state: FollowerState,
 }
 
-impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
+impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
     /// Creates a `Consensus`.
     pub fn new(id: ServerId,
                peers: HashMap<ServerId, SocketAddr>,
-               store: S,
+               persistent_log: L,
                state_machine: M)
-               -> Consensus<S, M> {
-        let leader_state = LeaderState::new(store.latest_log_index().unwrap(),
+               -> Consensus<L, M> {
+        let leader_state = LeaderState::new(persistent_log.latest_log_index().unwrap(),
                                             &peers.keys().cloned().collect());
         Consensus {
             id: id,
             peers: peers,
-            store: store,
+            persistent_log: persistent_log,
             state_machine: state_machine,
             commit_index: LogIndex(0),
             last_applied: LogIndex(0),
@@ -232,7 +232,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
             ConsensusState::Follower => {
                 let message = {
                     if current_term < leader_term {
-                        self.store.set_current_term(leader_term).unwrap();
+                        self.persistent_log.set_current_term(leader_term).unwrap();
                         self.follower_state.set_leader(from);
                     }
 
@@ -248,7 +248,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
                         let existing_term = if leader_prev_log_index == LogIndex::from(0) {
                             Term::from(0)
                         } else {
-                            self.store.entry(leader_prev_log_index).unwrap().0
+                            self.persistent_log.entry(leader_prev_log_index).unwrap().0
                         };
 
                         if existing_term != leader_prev_log_term {
@@ -263,14 +263,14 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
                                 for i in 0..num_entries {
                                     entries_vec.push((leader_term, entries.get(i).unwrap()));
                                 }
-                                self.store.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
+                                self.persistent_log.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
                             }
                             let latest_log_index = leader_prev_log_index + num_entries as u64;
                             // We are matching the leaders log up to and including `latest_log_index`.
                             self.commit_index = cmp::min(leader_commit_index, latest_log_index);
                             self.apply_commits();
                             scoped_debug!("all looks fine, responding success to Leader");
-                            messages::append_entries_response_success(self.current_term(), self.store.latest_log_index().unwrap())
+                            messages::append_entries_response_success(self.current_term(), self.persistent_log.latest_log_index().unwrap())
                         }
                     }
                 };
@@ -375,7 +375,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
                 if prev_log_index == LogIndex(0) {
                     Term(0)
                 } else {
-                    self.store.entry(prev_log_index).unwrap().0
+                    self.persistent_log.entry(prev_log_index).unwrap().0
                 };
 
             let mut message = MallocMessageBuilder::new_default();
@@ -391,7 +391,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
                 let until_index = Into::<u64>::into(local_latest_log_index) + 1;
                 let mut entries = request.init_entries((until_index - from_index) as u32);
                 for (n, index) in (from_index..until_index).enumerate() {
-                    entries.set(n as u32, self.store.entry(LogIndex::from(index)).unwrap().1);
+                    entries.set(n as u32, self.persistent_log.entry(LogIndex::from(index)).unwrap().1);
                 }
             }
             self.leader_state.set_next_index(from, local_latest_log_index + 1);
@@ -432,9 +432,9 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
                || candidate_log_index < self.latest_log_index() {
             messages::request_vote_response_inconsistent_log(new_local_term)
         } else {
-            match self.store.voted_for().unwrap() {
+            match self.persistent_log.voted_for().unwrap() {
                 None => {
-                    self.store.set_voted_for(candidate).unwrap();
+                    self.persistent_log.set_voted_for(candidate).unwrap();
                     messages::request_vote_response_granted(new_local_term)
                 },
                 Some(voted_for) if voted_for == candidate => {
@@ -505,7 +505,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
             let log_index = prev_log_index + 1;
             // TODO: This is probably not exactly safe.
             let entry = request.get_entry().unwrap();
-            self.store.append_entries(log_index,
+            self.persistent_log.append_entries(log_index,
                                       &[(term, entry)]).unwrap();
             self.leader_state.proposals.push_back((from, log_index));
 
@@ -564,7 +564,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
                                      .init_append_entries_request();
             request.set_term(self.current_term().into());
             request.set_prev_log_index(self.latest_log_index().into());
-            request.set_prev_log_term(self.store.latest_log_term().unwrap().into());
+            request.set_prev_log_term(self.persistent_log.latest_log_term().unwrap().into());
             request.set_leader_commit(self.commit_index.into());
             request.init_entries(0);
         }
@@ -582,9 +582,9 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
             // Solitary consensus module special case; jump straight to leader status
             scoped_info!("transitioning to Leader");
             scoped_assert!(self.is_follower());
-            scoped_assert!(self.store.voted_for().unwrap().is_none());
-            self.store.inc_current_term().unwrap();
-            self.store.set_voted_for(self.id).unwrap();
+            scoped_assert!(self.persistent_log.voted_for().unwrap().is_none());
+            self.persistent_log.inc_current_term().unwrap();
+            self.persistent_log.set_voted_for(self.id).unwrap();
             let latest_log_index = self.latest_log_index();
             self.state = ConsensusState::Leader;
             self.leader_state.reinitialize(latest_log_index);
@@ -601,7 +601,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
         scoped_info!("transitioning to Leader");
         let current_term = self.current_term();
         let latest_log_index = self.latest_log_index();
-        let latest_log_term = self.store.latest_log_term().unwrap();
+        let latest_log_term = self.persistent_log.latest_log_term().unwrap();
         self.state = ConsensusState::Leader;
         self.leader_state.reinitialize(latest_log_index);
 
@@ -623,15 +623,15 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
     /// cluster peer.
     fn transition_to_candidate(&mut self, actions: &mut Actions) {
         scoped_info!("transitioning to Candidate");
-        self.store.inc_current_term().unwrap();
-        self.store.set_voted_for(self.id).unwrap();
+        self.persistent_log.inc_current_term().unwrap();
+        self.persistent_log.set_voted_for(self.id).unwrap();
         self.state = ConsensusState::Candidate;
         self.candidate_state.clear();
         self.candidate_state.record_vote(self.id);
 
         let current_term = self.current_term();
         let latest_index = self.latest_log_index();
-        let latest_term = self.store.latest_log_term().unwrap();
+        let latest_term = self.persistent_log.latest_log_term().unwrap();
 
         let mut message = MallocMessageBuilder::new_default();
         {
@@ -654,7 +654,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
         scoped_assert!(self.is_leader());
         let majority = self.majority();
         // TODO: Figure out failure condition here.
-        while self.commit_index < self.store.latest_log_index().unwrap() {
+        while self.commit_index < self.persistent_log.latest_log_index().unwrap() {
             if self.leader_state.count_match_indexes(self.commit_index + 1) >= majority {
                 self.commit_index = self.commit_index + 1;
                 scoped_debug!("advanced commit index to {}", self.commit_index);
@@ -686,7 +686,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
         let mut results = HashMap::new();
         while self.last_applied < self.commit_index {
             // Unwrap justified here since we know there is an entry here.
-            let (_, entry) = self.store.entry(self.last_applied + 1).unwrap();
+            let (_, entry) = self.persistent_log.entry(self.last_applied + 1).unwrap();
 
             if !entry.is_empty() {
                 // Unwrap justified because we **just** checked to see if it was empty.
@@ -705,7 +705,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
                               leader: ServerId,
                               actions: &mut Actions) {
         scoped_info!("transitioning to Follower");
-        self.store.set_current_term(term).unwrap();
+        self.persistent_log.set_current_term(term).unwrap();
         self.state = ConsensusState::Follower;
         self.follower_state.set_leader(leader);
         actions.clear_timeouts = true;
@@ -729,17 +729,17 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
 
     /// Returns the current term of the consensus module.
     fn current_term(&self) -> Term {
-        self.store.current_term().unwrap()
+        self.persistent_log.current_term().unwrap()
     }
 
     /// Returns the term of the latest applied log entry.
     fn latest_log_term(&self) -> Term {
-        self.store.latest_log_term().unwrap()
+        self.persistent_log.latest_log_term().unwrap()
     }
 
     /// Returns the index of the latest applied log entry.
     fn latest_log_index(&self) -> LogIndex {
-        self.store.latest_log_index().unwrap()
+        self.persistent_log.latest_log_index().unwrap()
     }
 
     /// Get the cluster quorum majority size.
@@ -750,7 +750,7 @@ impl <S, M> Consensus<S, M> where S: Store, M: StateMachine {
     }
 }
 
-impl <S, M> fmt::Debug for Consensus<S, M> where S: Store, M: StateMachine {
+impl <L, M> fmt::Debug for Consensus<L, M> where L: Log, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "Consensus {{ id: {}, state: {:?}, term: {}, index: {} }}",
                self.id, self.state, self.current_term(), self.latest_log_index())
@@ -774,14 +774,13 @@ mod test {
     use ClientId;
     use LogIndex;
     use ServerId;
-    use Store;
     use Term;
     use messages;
     use consensus::{Actions, Consensus, ConsensusTimeout};
     use state_machine::NullStateMachine;
-    use store::MemStore;
+    use persistent_log::{MemLog, Log};
 
-    type TestModule = Consensus<MemStore, NullStateMachine>;
+    type TestModule = Consensus<MemLog, NullStateMachine>;
 
     fn new_cluster(size: u64) -> HashMap<ServerId, TestModule> {
         let ids: HashMap<ServerId, SocketAddr> =
@@ -791,7 +790,7 @@ mod test {
         ids.iter().map(|(&id, _)| {
             let mut peers = ids.clone();
             peers.remove(&id);
-            let store = MemStore::new();
+            let store = MemLog::new();
             (id, Consensus::new(id, peers, store, NullStateMachine))
         }).collect()
     }
@@ -1006,7 +1005,7 @@ mod test {
             let client_messages = apply_actions(leader, actions, &mut consensus_modules);
             assert_eq!(1, client_messages.len());
             for module in consensus_modules.values() {
-                assert_eq!((Term(1), value), module.store.entry(LogIndex(1)).unwrap());
+                assert_eq!((Term(1), value), module.persistent_log.entry(LogIndex(1)).unwrap());
             }
         }
     }
