@@ -66,7 +66,7 @@ cargo build
 You can run the examples like so:
 
 ```bash
-RUST_LOG=raft=debug cargo run --example register 1 127.0.0.1:8080
+RUST_LOG=raft=debug cargo run --example register server 1 127.0.0.1:8080
 ```
 
 The `examples/register.rs` file currently hosts a partially-complete example of using the library. We'll add more as we go!

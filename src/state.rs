@@ -72,7 +72,8 @@ impl LeaderState {
 
     /// Counts the number of followers containing the given log index.
     pub fn count_match_indexes(&self, index: LogIndex) -> usize {
-        self.match_index.values().filter(|&&i| i >= index).count()
+        // +1 for self.
+        self.match_index.values().filter(|&&i| i >= index).count() + 1
     }
 
     /// Reinitializes the state following an election.
@@ -134,5 +135,42 @@ impl FollowerState {
     /// Sets a new leader.
     pub fn set_leader(&mut self, leader: ServerId) {
         self.leader = Some(leader)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashSet;
+
+    use {LogIndex, ServerId};
+    use state::LeaderState;
+
+    /// Tests the `LeaderState`'s  `.count_match_indexes()` function and makes sure it adequately
+    /// produces the correct values.
+    #[test]
+    fn test_count_match_indexes() {
+        let index = LogIndex(0);
+        let mut peers = HashSet::new();
+
+        // All peers start at 0 index.
+        let leader_state = LeaderState::new(index, &peers);
+        // Should be one, since the leader node would be matched always.
+        assert_eq!(1, leader_state.count_match_indexes(LogIndex(0)));
+
+        peers.insert(ServerId(1));
+        let leader_state = LeaderState::new(index, &peers);
+        assert_eq!(2, leader_state.count_match_indexes(LogIndex(0)));
+
+        peers.insert(ServerId(2));
+        let leader_state = LeaderState::new(index, &peers);
+        assert_eq!(3, leader_state.count_match_indexes(LogIndex(0)));
+
+        peers.insert(ServerId(3));
+        let mut leader_state = LeaderState::new(index, &peers);
+        assert_eq!(4, leader_state.count_match_indexes(LogIndex(0)));
+
+        leader_state.set_match_index(ServerId(1), LogIndex(1));
+        leader_state.set_match_index(ServerId(2), LogIndex(1));
+        assert_eq!(3, leader_state.count_match_indexes(LogIndex(1)));
     }
 }

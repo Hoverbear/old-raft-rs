@@ -9,9 +9,9 @@ use std::net::TcpStream;
 use std::str::FromStr;
 
 use bufstream::BufStream;
-use capnp::{serialize, MessageReader, ReaderOptions};
+use capnp::{serialize, MessageReader, ReaderOptions, MallocMessageBuilder};
 
-use messages_capnp::{client_response, proposal_response};
+use messages_capnp::{client_response, command_response};
 use messages;
 use ClientId;
 use Result;
@@ -43,10 +43,21 @@ impl Client {
     /// Proposes an entry to be appended to the replicated log. This will only
     /// return once the entry has been durably committed.
     /// Returns `Error` when the entire cluster has an unknown leader. Try proposing again later.
-    pub fn propose(&mut self, entry: &[u8]) -> Result<()> {
+    pub fn propose(&mut self, entry: &[u8]) -> Result<Vec<u8>> {
         scoped_trace!("{:?}: propose", self);
         let mut message = messages::proposal_request(entry);
+        self.send_message(&mut message)
+    }
 
+    /// Queries an entry from the state machine. This is non-mutating and doesn't go through the
+    /// durable log. Like `.propose()` this will only communicate with the leader of the cluster.
+    pub fn query(&mut self, query: &[u8]) -> Result<Vec<u8>> {
+        scoped_trace!("{:?}: query", self);
+        let mut message = messages::query_request(query);
+        self.send_message(&mut message)
+    }
+
+    fn send_message(&mut self, message: &mut MallocMessageBuilder) -> Result<Vec<u8>> {
         let mut members = self.cluster.iter().cloned();
 
         loop {
@@ -61,31 +72,35 @@ impl Client {
                     // Send the preamble.
                     let preamble = messages::client_connection_preamble(self.id);
                     let mut stream = BufStream::new(try!(TcpStream::connect(leader)));
+                    scoped_debug!("connected");
                     try!(serialize::write_message(&mut stream, &*preamble));
                     stream
                 }
             };
-            try!(serialize::write_message(&mut connection, &mut message));
+            try!(serialize::write_message(&mut connection, message));
             try!(connection.flush());
+            scoped_debug!("awaiting response from connection");
             let response = try!(serialize::read_message(&mut connection, ReaderOptions::new()));
             match try!(response.get_root::<client_response::Reader>()).which().unwrap() {
                 client_response::Which::Proposal(Ok(response)) => {
                     match response.which().unwrap() {
-                        proposal_response::Which::Success(()) => {
+                        command_response::Which::Success(data) => {
                             scoped_debug!("received response Success");
                             self.leader_connection = Some(connection);
-                            return Ok(())
+                            return data
+                                .map(|v| Vec::from(v))
+                                .map_err(|e| e.into()) // Exit the function.
                         },
-                        proposal_response::Which::UnknownLeader(()) => {
+                        command_response::Which::UnknownLeader(()) => {
                             scoped_debug!("received response UnknownLeader");
-                            ()
+                            () // Keep looping.
                         },
-                        proposal_response::Which::NotLeader(leader) => {
+                        command_response::Which::NotLeader(leader) => {
                             scoped_debug!("received response NotLeader");
                             let leader_str = try!(leader);
                             if !self.cluster.contains(&try!(SocketAddr::from_str(leader_str))) {
                                 scoped_debug!("cluster violation detected");
-                                return Err(RaftError::ClusterViolation.into())
+                                return Err(RaftError::ClusterViolation.into()) // Exit the function.
                             }
                             let mut connection: TcpStream = try!(TcpStream::connect(leader_str));
                             let preamble = messages::client_connection_preamble(self.id);
@@ -169,14 +184,14 @@ mod test {
             expect_preamble(&mut connection, client_id).unwrap();
             expect_proposal(&mut connection, to_propose).unwrap();
             // Send response! (success!)
-            let response = messages::proposal_response_success();
+            let response = messages::command_response_success(b"Foxes");
             serialize::write_message(&mut connection, &*response).unwrap();
             connection.flush().unwrap();
         });
 
         // Propose. It's a marriage made in heaven! :)
         // Should be ok
-        client.propose(to_propose).unwrap();
+        assert_eq!(client.propose(to_propose).unwrap(), b"Foxes");
         assert!(client.leader_connection.is_some());
 
         child.join().unwrap();
@@ -203,7 +218,7 @@ mod test {
             scoped_debug!("Should get proposal. Responds UnknownLeader");
             expect_proposal(&mut connection, to_propose).unwrap();
             // Send response! (unknown leader!) Client should drop connection.
-            let response = messages::proposal_response_unknown_leader();
+            let response = messages::command_response_unknown_leader();
             serialize::write_message(&mut connection, &*response).unwrap();
             connection.flush().unwrap();
         });
@@ -240,7 +255,7 @@ mod test {
             expect_proposal(&mut connection, to_propose).unwrap();
 
             // Send response! (not leader!)
-            let response = messages::proposal_response_not_leader(&second_addr);
+            let response = messages::command_response_not_leader(&second_addr);
             serialize::write_message(&mut connection, &*response).unwrap();
             connection.flush().unwrap();
 
@@ -251,7 +266,7 @@ mod test {
             expect_proposal(&mut connection, to_propose).unwrap();
 
             // Send final response! (Success!)
-            let response = messages::proposal_response_success();
+            let response = messages::command_response_success(b"Foxes");
             serialize::write_message(&mut connection, &*response).unwrap();
         });
 
@@ -264,7 +279,7 @@ mod test {
         };
 
         // Should be ok, change leader connection.
-        client.propose(to_propose).unwrap();
+        assert_eq!(client.propose(to_propose).unwrap(), b"Foxes");
         assert!(client.leader_connection.is_some());
 
         child.join().unwrap();
@@ -298,7 +313,7 @@ mod test {
             expect_proposal(&mut connection, to_propose).unwrap();
 
             // Send response! (not leader!)
-            let response = messages::proposal_response_not_leader(&second_addr);
+            let response = messages::command_response_not_leader(&second_addr);
             serialize::write_message(&mut connection, &*response).unwrap();
             connection.flush().unwrap();
 

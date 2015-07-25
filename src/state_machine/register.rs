@@ -18,10 +18,15 @@ impl StateMachine for RegisterStateMachine {
 
     type Error = Error;
 
-    fn apply(&mut self, new_value: &[u8]) -> Result<()> {
+    fn apply(&mut self, new_value: &[u8]) -> Result<Vec<u8>> {
+        let old_value = self.value.clone();
         self.value.clear();
         self.value.extend(new_value);
-        Ok(())
+        Ok(old_value)
+    }
+
+    fn query(&self, query: &[u8]) -> Result<Vec<u8>> {
+        Ok(self.value.clone())
     }
 
     fn snapshot(&self) -> Result<Vec<u8>> {

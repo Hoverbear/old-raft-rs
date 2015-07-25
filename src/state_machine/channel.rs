@@ -23,8 +23,12 @@ impl StateMachine for ChannelStateMachine {
 
     type Error = mpsc::SendError<Vec<u8>>;
 
-    fn apply(&mut self, command: &[u8]) -> result::Result<(), mpsc::SendError<Vec<u8>>> {
-        self.tx.send(command.to_vec())
+    fn apply(&mut self, command: &[u8]) -> result::Result<Vec<u8>, mpsc::SendError<Vec<u8>>> {
+        self.tx.send(command.to_vec()).map(|_| Vec::new())
+    }
+
+    fn query(&self, query: &[u8]) -> result::Result<Vec<u8>, Self::Error> {
+        unimplemented!()
     }
 
     fn snapshot(&self) -> result::Result<Vec<u8>, mpsc::SendError<Vec<u8>>> {
