@@ -4,7 +4,7 @@ use ClientId;
 use LogIndex;
 use ServerId;
 
-/// Replicas can be in one of three state:
+/// Consensus modules can be in one of three state:
 ///
 /// * `Follower` - which replicates AppendEntries requests and votes for it's leader.
 /// * `Leader` - which leads the cluster by serving incoming requests, ensuring
@@ -13,13 +13,13 @@ use ServerId;
 ///                  (if it gets enough votes) or a `Follower`, if it hears from
 ///                  a `Leader`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ReplicaState {
+pub enum ConsensusState {
     Follower,
     Candidate,
     Leader,
 }
 
-/// The state associated with a Raft replica in the `Leader` state.
+/// The state associated with a Raft consensus module in the `Leader` state.
 #[derive(Clone, Debug)]
 pub struct LeaderState {
     next_index: HashMap<ServerId, LogIndex>,
@@ -88,7 +88,7 @@ impl LeaderState {
     }
 }
 
-/// The state associated with a Raft replica in the `Candidate` state.
+/// The state associated with a Raft consensus module in the `Candidate` state.
 #[derive(Clone, Debug)]
 pub struct CandidateState {
     granted_votes: HashSet<ServerId>,
@@ -117,7 +117,7 @@ impl CandidateState {
     }
 }
 
-/// The state associated with a Raft replica in the `Follower` state.
+/// The state associated with a Raft consensus module in the `Follower` state.
 #[derive(Clone, Debug)]
 pub struct FollowerState {
     /// The most recent leader of the follower. The leader is not guaranteed to be active, so this

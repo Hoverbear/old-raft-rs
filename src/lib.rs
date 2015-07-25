@@ -77,7 +77,7 @@ mod backoff;
 mod client;
 mod connection;
 mod messages;
-mod replica;
+mod consensus;
 mod server;
 mod state;
 
@@ -122,7 +122,7 @@ pub enum RaftError {
     ConnectionLimitReached,
     /// A client reported an invalid client id
     InvalidClientId,
-    /// A replica reported back a leader not in the cluster.
+    /// A consensus module reported back a leader not in the cluster.
     ClusterViolation,
     /// A remote connection attempted to use an unknown connection type in the connection preamble
     UnknownConnectionType,
