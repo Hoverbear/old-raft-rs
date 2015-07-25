@@ -1,6 +1,6 @@
 //! `Server` is a Rust type which is responsible for coordinating with other remote `Server`
 //! instances, responding to commands from the `Client`, and applying commands to a local
-//! `StateMachine` replica. A `Server` may be a `Leader`, `Follower`, or `Candidate` at any given
+//! `StateMachine` consensus. A `Server` may be a `Leader`, `Follower`, or `Candidate` at any given
 //! time as described by the Raft Consensus Algorithm.
 
 use std::{fmt, io};
@@ -28,9 +28,9 @@ use RaftError;
 use ServerId;
 use messages;
 use messages_capnp::connection_preamble;
-use replica::{Replica, Actions, ReplicaTimeout};
+use consensus::{Consensus, Actions, ConsensusTimeout};
 use state_machine::StateMachine;
-use store::Store;
+use persistent_log::Log;
 use connection::{Connection, ConnectionKind};
 
 const LISTENER: Token = Token(0);
@@ -38,13 +38,13 @@ const LISTENER: Token = Token(0);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 
 pub enum ServerTimeout {
-    Replica(ReplicaTimeout),
+    Consensus(ConsensusTimeout),
     Reconnect(Token),
 }
 
 /// The `Server` is responsible for receiving events from remote `Server` or `Client` instances,
 /// as well as setting election and heartbeat timeouts.  When an event is received, it is applied
-/// to the local `Replica`. The `Replica` may optionally return a new event which must be
+/// to the local `Consensus`. The `Consensus` may optionally return a new event which must be
 /// dispatched to either the `Server` or `Client` which sent the original event, or to all
 /// `Server` instances.
 ///
@@ -53,13 +53,13 @@ pub enum ServerTimeout {
 /// In this situation, the `Server` will replace the existing event with the new event, except in
 /// one special circumstance: if the new and existing messages are both `AppendEntryRequest`s with
 /// the same `term`, then the new message will be dropped.
-pub struct Server<S, M> where S: Store, M: StateMachine {
+pub struct Server<L, M> where L: Log, M: StateMachine {
 
     /// Id of this server.
     id: ServerId,
 
-    /// Raft state machine replica.
-    replica: Replica<S, M>,
+    /// Raft state machine consensus.
+    consensus: Consensus<L, M>,
 
     /// Connection listener.
     listener: TcpListener,
@@ -73,40 +73,40 @@ pub struct Server<S, M> where S: Store, M: StateMachine {
     /// Index of client id to connection token.
     client_tokens: HashMap<ClientId, Token>,
 
-    /// Currently registered replica timeouts.
-    replica_timeouts: HashMap<ReplicaTimeout, TimeoutHandle>,
+    /// Currently registered consensus timeouts.
+    consensus_timeouts: HashMap<ConsensusTimeout, TimeoutHandle>,
 
     /// Currently registered reconnection timeouts.
     reconnection_timeouts: HashMap<Token, TimeoutHandle>,
 }
 
 /// The implementation of the Server.
-impl<S, M> Server<S, M> where S: Store, M: StateMachine {
+impl<L, M> Server<L, M> where L: Log, M: StateMachine {
 
     /// Creates a new instance of the server.
     /// *Gotcha:* `peers` must not contain the local `id`.
     fn new(id: ServerId,
            addr: SocketAddr,
            peers: HashMap<ServerId, SocketAddr>,
-           store: S,
-           state_machine: M) -> Result<(Server<S, M>, EventLoop<Server<S, M>>)> {
+           store: L,
+           state_machine: M) -> Result<(Server<L, M>, EventLoop<Server<L, M>>)> {
         if peers.contains_key(&id) {
             return Err(Error::Raft(RaftError::InvalidPeerSet))
         }
 
-        let replica = Replica::new(id, peers.clone(), store, state_machine);
-        let mut event_loop = try!(EventLoop::<Server<S, M>>::new());
+        let consensus = Consensus::new(id, peers.clone(), store, state_machine);
+        let mut event_loop = try!(EventLoop::<Server<L, M>>::new());
         let listener = try!(TcpListener::bind(&addr));
         try!(event_loop.register(&listener, LISTENER));
 
         let mut server = Server {
             id: id,
-            replica: replica,
+            consensus: consensus,
             listener: listener,
             connections: Slab::new_starting_at(Token(1), 129),
             peer_tokens: HashMap::new(),
             client_tokens: HashMap::new(),
-            replica_timeouts: HashMap::new(),
+            consensus_timeouts: HashMap::new(),
             reconnection_timeouts: HashMap::new(),
         };
 
@@ -136,10 +136,10 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     pub fn run(id: ServerId,
                addr: SocketAddr,
                peers: HashMap<ServerId, SocketAddr>,
-               store: S,
+               store: L,
                state_machine: M) -> Result<()> {
         let (mut server, mut event_loop) = try!(Server::new(id, addr, peers, store, state_machine));
-        let actions = server.replica.init();
+        let actions = server.consensus.init();
         server.execute_actions(&mut event_loop, actions);
         event_loop.run(&mut server).map_err(From::from)
     }
@@ -156,7 +156,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     pub fn spawn(id: ServerId,
                  addr: SocketAddr,
                  peers: HashMap<ServerId, SocketAddr>,
-                 store: S,
+                 store: L,
                  state_machine: M) -> Result<JoinHandle<Result<()>>> {
         thread::Builder::new().name(format!("raft::Server({})", id)).spawn(move || {
             Server::run(id, addr, peers, store, state_machine)
@@ -164,7 +164,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     }
 
     fn execute_actions(&mut self,
-                       event_loop: &mut EventLoop<Server<S, M>>,
+                       event_loop: &mut EventLoop<Server<L, M>>,
                        actions: Actions) {
         scoped_debug!("executing actions: {:?}", actions);
         let Actions { peer_messages, client_messages, timeouts, clear_timeouts } = actions;
@@ -187,11 +187,11 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             }
         }
         if clear_timeouts {
-            for (timeout, &handle) in &self.replica_timeouts {
+            for (timeout, &handle) in &self.consensus_timeouts {
                 scoped_assert!(event_loop.clear_timeout(handle),
                                "unable to clear timeout: {:?}", timeout);
             }
-            self.replica_timeouts.clear();
+            self.consensus_timeouts.clear();
         }
         for timeout in timeouts {
             let duration = timeout.duration_ms();
@@ -199,9 +199,9 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
             // Registering a timeout may only fail if the maximum number of timeouts
             // is already registered, which is by default 65,536. We use a
             // maximum of one timeout per peer, so this unwrap should be safe.
-            let handle = event_loop.timeout_ms(ServerTimeout::Replica(timeout), duration)
+            let handle = event_loop.timeout_ms(ServerTimeout::Consensus(timeout), duration)
                                    .unwrap();
-            self.replica_timeouts
+            self.consensus_timeouts
                 .insert(timeout, handle)
                 .map(|handle| scoped_assert!(event_loop.clear_timeout(handle),
                                              "unable to clear timeout: {:?}", timeout));
@@ -214,7 +214,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     /// period.
     ///
     /// If the connection is to a client or unknown it will be closed.
-    fn reset_connection(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) {
+    fn reset_connection(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token) {
         let kind = *self.connections[token].kind();
         match kind {
             ConnectionKind::Peer(..) => {
@@ -241,19 +241,19 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     ///
     /// If the connection returns an error on any operation, or any message fails to be
     /// deserialized, an error result is returned.
-    fn readable(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token) -> Result<()> {
+    fn readable(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token) -> Result<()> {
         scoped_trace!("{:?}: readable event", self.connections[token]);
         // Read messages from the connection until there are no more.
         while let Some(message) = try!(self.connections[token].readable()) {
             match *self.connections[token].kind() {
                 ConnectionKind::Peer(id) => {
                     let mut actions = Actions::new();
-                    self.replica.apply_peer_message(id, &message, &mut actions);
+                    self.consensus.apply_peer_message(id, &message, &mut actions);
                     self.execute_actions(event_loop, actions);
                 },
                 ConnectionKind::Client(id) => {
                     let mut actions = Actions::new();
-                    self.replica.apply_client_message(id, &message, &mut actions);
+                    self.consensus.apply_client_message(id, &message, &mut actions);
                     self.execute_actions(event_loop, actions);
                 },
                 ConnectionKind::Unknown => {
@@ -278,7 +278,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
                                 .remove(&prev_token)
                                 .map(|handle| scoped_assert!(event_loop.clear_timeout(handle)));
 
-                            // TODO: add reconnect messages from replica
+                            // TODO: add reconnect messages from consensus
                         },
                         connection_preamble::id::Which::Client(Ok(id)) => {
                             let client_id = try!(ClientId::from_bytes(id));
@@ -303,7 +303,7 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
 
     /// Accepts a new TCP connection, adds it to the connection slab, and registers it with the
     /// event loop.
-    fn accept_connection(&mut self, event_loop: &mut EventLoop<Server<S, M>>) -> Result<()> {
+    fn accept_connection(&mut self, event_loop: &mut EventLoop<Server<L, M>>) -> Result<()> {
         scoped_trace!("accept_connection");
         self.listener.accept().map_err(From::from)
             .and_then(|stream_opt| stream_opt.ok_or(Error::Io(
@@ -328,12 +328,12 @@ impl<S, M> Server<S, M> where S: Store, M: StateMachine {
     }
 }
 
-impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
+impl<L, M> Handler for Server<L, M> where L: Log, M: StateMachine {
 
     type Message = ();
     type Timeout = ServerTimeout;
 
-    fn ready(&mut self, event_loop: &mut EventLoop<Server<S, M>>, token: Token, events: EventSet) {
+    fn ready(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token, events: EventSet) {
         push_log_scope!("{:?}", self);
         scoped_trace!("ready; token: {:?}; events: {:?}", token, events);
 
@@ -384,15 +384,15 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
         }
     }
 
-    fn timeout(&mut self, event_loop: &mut EventLoop<Server<S, M>>, timeout: ServerTimeout) {
+    fn timeout(&mut self, event_loop: &mut EventLoop<Server<L, M>>, timeout: ServerTimeout) {
         push_log_scope!("{:?}", self);
         scoped_trace!("timeout: {:?}", &timeout);
         match timeout {
-            ServerTimeout::Replica(replica) => {
-                scoped_assert!(self.replica_timeouts.remove(&replica).is_some(),
+            ServerTimeout::Consensus(consensus) => {
+                scoped_assert!(self.consensus_timeouts.remove(&consensus).is_some(),
                                "missing timeout: {:?}", timeout);
                 let mut actions = Actions::new();
-                self.replica.apply_timeout(replica, &mut actions);
+                self.consensus.apply_timeout(consensus, &mut actions);
                 self.execute_actions(event_loop, actions);
             },
 
@@ -407,13 +407,13 @@ impl<S, M> Handler for Server<S, M> where S: Store, M: StateMachine {
                                      self.connections[token], error);
                         self.reset_connection(event_loop, token);
                     });
-                // TODO: add reconnect messages from replica
+                // TODO: add reconnect messages from consensus
             },
         }
     }
 }
 
-impl <S, M> fmt::Debug for Server<S, M> where S: Store, M: StateMachine {
+impl <L, M> fmt::Debug for Server<L, M> where L: Log, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "Server({})", self.id)
     }
@@ -437,19 +437,19 @@ mod test {
     use ServerId;
     use messages;
     use messages_capnp::connection_preamble;
-    use replica::Actions;
+    use consensus::Actions;
     use state_machine::NullStateMachine;
-    use store::MemStore;
+    use persistent_log::MemLog;
     use super::*;
 
-    type TestServer = Server<MemStore, NullStateMachine>;
+    type TestServer = Server<MemLog, NullStateMachine>;
 
     fn new_test_server(peers: HashMap<ServerId, SocketAddr>)
                        -> Result<(TestServer, EventLoop<TestServer>)> {
         Server::new(ServerId::from(0),
                     SocketAddr::from_str("127.0.0.1:0").unwrap(),
                     peers,
-                    MemStore::new(),
+                    MemLog::new(),
                     NullStateMachine)
     }
 

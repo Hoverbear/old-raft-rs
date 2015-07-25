@@ -10,7 +10,7 @@ use docopt::Docopt;
 
 use raft::{
     state_machine,
-    store,
+    persistent_log,
     ServerId,
     Server,
     Client,
@@ -92,7 +92,7 @@ fn parse_addr(addr: &str) -> SocketAddr {
 }
 
 fn server(args: &Args) {
-    let store = store::MemStore::new();
+    let persistent_log = persistent_log::MemLog::new();
     let state_machine = state_machine::RegisterStateMachine::new();
 
     let id = ServerId::from(args.arg_id.unwrap());
@@ -103,7 +103,7 @@ fn server(args: &Args) {
                     .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
                     .collect();
 
-    Server::run(id, addr, peers, store, state_machine).unwrap();
+    Server::run(id, addr, peers, persistent_log, state_machine).unwrap();
 }
 
 fn get(args: &Args) {

@@ -1,5 +1,5 @@
-//! The `Replica` is a state-machine (not to be confused with the `StateMachine` trait) which
-//!  implements the logic of the Raft Protocol. A `Replica` receives events from the local
+//! The `Consensus` is a state-machine (not to be confused with the `StateMachine` trait) which
+//!  implements the logic of the Raft Protocol. A `Consensus` receives events from the local
 //!  `Server`.  The set of possible events is specified by the Raft Protocol:
 //!
 //! ```text
@@ -8,7 +8,7 @@
 //!       | ElectionTimeout | HeartbeatTimeout
 //!       | ClientCommand
 //! ```
-//! In response to receiving an event, the `Replica` may mutate its own state, apply a command to
+//! In response to receiving an event, the `Consensus` may mutate its own state, apply a command to
 //!  the local `StateMachine`, or return an event to be sent to one or more remote `Server` or
 //!  `Client` instances.
 
@@ -35,9 +35,9 @@ use messages_capnp::{
     request_vote_request,
     request_vote_response,
 };
-use state::{ReplicaState, LeaderState, CandidateState, FollowerState};
+use state::{ConsensusState, LeaderState, CandidateState, FollowerState};
 use state_machine::StateMachine;
-use store::Store;
+use persistent_log::Log;
 
 const ELECTION_MIN: u64 = 1500;
 const ELECTION_MAX: u64 = 3000;
@@ -45,24 +45,24 @@ const HEARTBEAT_DURATION: u64 = 1000;
 
 /// Timeout types for Raft.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum ReplicaTimeout {
+pub enum ConsensusTimeout {
     // An election timeout. Randomized value.
     Election,
     // A heartbeat timeout. Stable value.
     Heartbeat(ServerId),
 }
 
-impl ReplicaTimeout {
+impl ConsensusTimeout {
     /// Returns how long the timeout period is.
     pub fn duration_ms(&self) -> u64 {
         match *self {
-            ReplicaTimeout::Election => rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX),
-            ReplicaTimeout::Heartbeat(..) => HEARTBEAT_DURATION,
+            ConsensusTimeout::Election => rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX),
+            ConsensusTimeout::Heartbeat(..) => HEARTBEAT_DURATION,
         }
     }
 }
 
-/// The set of actions for the server to carry out after applying requests to the replica.
+/// The set of actions for the server to carry out after applying requests to the consensus module.
 pub struct Actions {
     /// Messages to be sent to peers.
     pub peer_messages: Vec<(ServerId, Rc<MallocMessageBuilder>)>,
@@ -71,7 +71,7 @@ pub struct Actions {
     /// Whether or not to clear timeouts associated.
     pub clear_timeouts: bool,
     /// Any new timeouts to create.
-    pub timeouts: Vec<ReplicaTimeout>,
+    pub timeouts: Vec<ConsensusTimeout>,
 }
 
 impl fmt::Debug for Actions {
@@ -100,16 +100,16 @@ impl Actions {
     }
 }
 
-/// A replica of a Raft distributed state machine. A Raft replica controls a client state machine,
-/// to which it applies commands in a globally consistent order.
-pub struct Replica<S, M> {
-    /// The ID of this replica.
+/// A Consensus Module of a Raft distributed state machine. A Raft Consensus Module controls a
+/// client state machine, to which it applies commands in a globally consistent order.
+pub struct Consensus<L, M> {
+    /// The ID of this consensus module.
     id: ServerId,
-    /// The IDs of the other replicas in the cluster.
+    /// The IDs of the other consensus modules in the cluster.
     peers: HashMap<ServerId, SocketAddr>,
 
     /// The persistent log store.
-    store: S,
+    persistent_log: L,
     /// The client state machine to which client commands will be applied.
     state_machine: M,
 
@@ -118,8 +118,8 @@ pub struct Replica<S, M> {
     /// Index of the latest entry applied to the state machine.
     last_applied: LogIndex,
 
-    /// The current state of the `Replica` (`Leader`, `Candidate`, or `Follower`).
-    state: ReplicaState,
+    /// The current state of the `Consensus` (`Leader`, `Candidate`, or `Follower`).
+    state: ConsensusState,
     /// State necessary while a `Leader`. Should not be used otherwise.
     leader_state: LeaderState,
     /// State necessary while a `Candidate`. Should not be used otherwise.
@@ -128,23 +128,23 @@ pub struct Replica<S, M> {
     follower_state: FollowerState,
 }
 
-impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
-    /// Creates a `Replica`.
+impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
+    /// Creates a `Consensus`.
     pub fn new(id: ServerId,
                peers: HashMap<ServerId, SocketAddr>,
-               store: S,
+               persistent_log: L,
                state_machine: M)
-               -> Replica<S, M> {
-        let leader_state = LeaderState::new(store.latest_log_index().unwrap(),
+               -> Consensus<L, M> {
+        let leader_state = LeaderState::new(persistent_log.latest_log_index().unwrap(),
                                             &peers.keys().cloned().collect());
-        Replica {
+        Consensus {
             id: id,
             peers: peers,
-            store: store,
+            persistent_log: persistent_log,
             state_machine: state_machine,
             commit_index: LogIndex(0),
             last_applied: LogIndex(0),
-            state: ReplicaState::Follower,
+            state: ConsensusState::Follower,
             leader_state: leader_state,
             candidate_state: CandidateState::new(),
             follower_state: FollowerState::new(),
@@ -154,17 +154,17 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     /// Returns the set of initial action which should be executed upon startup.
     pub fn init(&self) -> Actions {
         let mut actions = Actions::new();
-        actions.timeouts.push(ReplicaTimeout::Election);
+        actions.timeouts.push(ConsensusTimeout::Election);
         actions
     }
 
-    /// Returns the peers (Id's only) of the replica.
+    /// Returns the peers (Id's only) of the consensus modules.
     pub fn peers(&self) -> &HashMap<ServerId, SocketAddr> {
         &self.peers
     }
 
-    /// Applies a peer message to the replica. This function dispatches a generic request to it's
-    /// appropriate handler.
+    /// Applies a peer message to the consensus module. This function dispatches a generic request
+    /// to it's appropriate handler.
     pub fn apply_peer_message<R>(&mut self, from: ServerId, message: &R, actions: &mut Actions)
     where R: MessageReader {
         push_log_scope!("{:?}", self);
@@ -182,8 +182,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         };
     }
 
-    /// Applies a client message to the replica. This function dispatches a generic request to its
-    /// appropriate handler.
+    /// Applies a client message to the consensus module. This function dispatches a generic
+    /// request to its appropriate handler.
     pub fn apply_client_message<R>(&mut self,
                                    from: ClientId,
                                    message: &R,
@@ -200,21 +200,21 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
     }
 
-    /// Applies a timeout's actions to the `Replica`.
-    pub fn apply_timeout(&mut self, timeout: ReplicaTimeout, actions: &mut Actions) {
+    /// Applies a timeout's actions to the `Consensus`.
+    pub fn apply_timeout(&mut self, timeout: ConsensusTimeout, actions: &mut Actions) {
         push_log_scope!("{:?}", self);
         match timeout {
-            ReplicaTimeout::Election => self.election_timeout(actions),
-            ReplicaTimeout::Heartbeat(peer) => self.heartbeat_timeout(peer, actions),
+            ConsensusTimeout::Election => self.election_timeout(actions),
+            ConsensusTimeout::Heartbeat(peer) => self.heartbeat_timeout(peer, actions),
         }
     }
 
-    /// Apply an append entries request to the Raft replica.
+    /// Apply an append entries request to the Raft consensus module.
     fn append_entries_request(&mut self,
                               from: ServerId,
                               request: append_entries_request::Reader,
                               actions: &mut Actions) {
-        scoped_debug!("AppendEntriesRequest from Replica({})", &from);
+        scoped_debug!("AppendEntriesRequest from Consensus({})", &from);
 
         let leader_term = Term(request.get_term());
         let current_term = self.current_term();
@@ -229,10 +229,10 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         scoped_assert!(self.commit_index <= leader_commit_index);
 
         match self.state {
-            ReplicaState::Follower => {
+            ConsensusState::Follower => {
                 let message = {
                     if current_term < leader_term {
-                        self.store.set_current_term(leader_term).unwrap();
+                        self.persistent_log.set_current_term(leader_term).unwrap();
                         self.follower_state.set_leader(from);
                     }
 
@@ -248,7 +248,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                         let existing_term = if leader_prev_log_index == LogIndex::from(0) {
                             Term::from(0)
                         } else {
-                            self.store.entry(leader_prev_log_index).unwrap().0
+                            self.persistent_log.entry(leader_prev_log_index).unwrap().0
                         };
 
                         if existing_term != leader_prev_log_term {
@@ -263,28 +263,28 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                 for i in 0..num_entries {
                                     entries_vec.push((leader_term, entries.get(i).unwrap()));
                                 }
-                                self.store.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
+                                self.persistent_log.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
                             }
                             let latest_log_index = leader_prev_log_index + num_entries as u64;
                             // We are matching the leaders log up to and including `latest_log_index`.
                             self.commit_index = cmp::min(leader_commit_index, latest_log_index);
                             self.apply_commits();
                             scoped_debug!("all looks fine, responding success to Leader");
-                            messages::append_entries_response_success(self.current_term(), self.store.latest_log_index().unwrap())
+                            messages::append_entries_response_success(self.current_term(), self.persistent_log.latest_log_index().unwrap())
                         }
                     }
                 };
                 actions.peer_messages.push((from, message));
-                actions.timeouts.push(ReplicaTimeout::Election);
+                actions.timeouts.push(ConsensusTimeout::Election);
             },
-            ReplicaState::Candidate => {
+            ConsensusState::Candidate => {
                 // recognize the new leader, return to follower state, and apply the entries
-                scoped_info!("received AppendEntriesRequest from Replica {{ id: {}, term: {} }} \
+                scoped_info!("received AppendEntriesRequest from Consensus {{ id: {}, term: {} }} \
                              with newer term", from, leader_term);
                 self.transition_to_follower(leader_term, from, actions);
                 return self.append_entries_request(from, request, actions)
             },
-            ReplicaState::Leader => {
+            ConsensusState::Leader => {
                 if leader_term == current_term {
                     // The single leader-per-term invariant is broken; there is a bug in the Raft
                     // implementation.
@@ -293,7 +293,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 }
 
                 // recognize the new leader, return to follower state, and apply the entries
-                scoped_info!("received AppendEntriesRequest from Replica {{ id: {}, term: {} }} \
+                scoped_info!("received AppendEntriesRequest from Consensus {{ id: {}, term: {} }} \
                              with newer term", from, leader_term);
                 self.transition_to_follower(leader_term, from, actions);
                 return self.append_entries_request(from, request, actions)
@@ -301,7 +301,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
     }
 
-    /// Apply an append entries response to the Raft replica.
+    /// Apply an append entries response to the Raft consensus module.
     ///
     /// The provided message may be initialized with a new AppendEntries request to send back to
     /// the follower in the case that the follower's log is behind.
@@ -309,7 +309,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                from: ServerId,
                                response: append_entries_response::Reader,
                                actions: &mut Actions) {
-        scoped_debug!("AppendEntriesResponse from Replica({})", from);
+        scoped_debug!("AppendEntriesResponse from Consensus({})", from);
 
         let local_term = self.current_term();
         let responder_term = Term::from(response.get_term());
@@ -321,7 +321,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
             // The responder is not necessarily the leader, but it is somewhat likely, so we will
             // use it as the leader hint.
-            scoped_info!("received AppendEntriesResponse from Replica {{ id: {}, term: {} }} \
+            scoped_info!("received AppendEntriesResponse from Consensus {{ id: {}, term: {} }} \
                          with newer term", from, responder_term);
             self.transition_to_follower(responder_term, from, actions);
             return;
@@ -355,11 +355,11 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             }
             Ok(append_entries_response::Which::InternalError(error_result)) => {
                 let error = error_result.unwrap_or("[unable to decode internal error]");
-                scoped_warn!("AppendEntries.InternalError response from Replica({}): {}",
+                scoped_warn!("AppendEntries.InternalError response from Consensus({}): {}",
                              from, error);
             }
             Err(error) => {
-                scoped_warn!("Error decoding AppendEntriesResponse from Replica({}): {}",
+                scoped_warn!("Error decoding AppendEntriesResponse from Consensus({}): {}",
                              from, error);
             }
         }
@@ -368,14 +368,14 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
         let next_index = self.leader_state.next_index(&from);
         if next_index <= local_latest_log_index {
-            // If the replica is behind, send it entries to catch up.
+            // If the module is behind, send it entries to catch up.
             scoped_debug!("responder is behind, catching them up");
             let prev_log_index = next_index - 1;
             let prev_log_term =
                 if prev_log_index == LogIndex(0) {
                     Term(0)
                 } else {
-                    self.store.entry(prev_log_index).unwrap().0
+                    self.persistent_log.entry(prev_log_index).unwrap().0
                 };
 
             let mut message = MallocMessageBuilder::new_default();
@@ -391,20 +391,20 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                 let until_index = Into::<u64>::into(local_latest_log_index) + 1;
                 let mut entries = request.init_entries((until_index - from_index) as u32);
                 for (n, index) in (from_index..until_index).enumerate() {
-                    entries.set(n as u32, self.store.entry(LogIndex::from(index)).unwrap().1);
+                    entries.set(n as u32, self.persistent_log.entry(LogIndex::from(index)).unwrap().1);
                 }
             }
             self.leader_state.set_next_index(from, local_latest_log_index + 1);
             actions.peer_messages.push((from, Rc::new(message)));
         } else {
-            // If the replica is caught up, set a heartbeat timeout.
+            // If the module is caught up, set a heartbeat timeout.
             scoped_debug!("responder is caught up");
-            let timeout = ReplicaTimeout::Heartbeat(from);
+            let timeout = ConsensusTimeout::Heartbeat(from);
             actions.timeouts.push(timeout);
         }
     }
 
-    /// Apply a request vote request to the Raft replica.
+    /// Apply a request vote request to the Raft module.
     fn request_vote_request(&mut self,
                             candidate: ServerId,
                             request: request_vote_request::Reader,
@@ -412,13 +412,13 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         let candidate_term = Term(request.get_term());
         let candidate_log_term = Term(request.get_last_log_term());
         let candidate_log_index = LogIndex(request.get_last_log_index());
-        scoped_debug!("RequestVoteRequest from Replica {{ id: {}, term: {}, latest_log_term: {}, \
+        scoped_debug!("RequestVoteRequest from Consensus {{ id: {}, term: {}, latest_log_term: {}, \
                       latest_log_index: {} }}",
                       &candidate, candidate_term, candidate_log_term, candidate_log_index);
         let local_term = self.current_term();
 
         let new_local_term = if candidate_term > local_term {
-            scoped_info!("received RequestVoteRequest from Replica {{ id: {}, term: {} }} \
+            scoped_info!("received RequestVoteRequest from Consensus {{ id: {}, term: {} }} \
                          with newer term", candidate, candidate_term);
             self.transition_to_follower(candidate_term, candidate, actions);
             candidate_term
@@ -432,9 +432,9 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                || candidate_log_index < self.latest_log_index() {
             messages::request_vote_response_inconsistent_log(new_local_term)
         } else {
-            match self.store.voted_for().unwrap() {
+            match self.persistent_log.voted_for().unwrap() {
                 None => {
-                    self.store.set_voted_for(candidate).unwrap();
+                    self.persistent_log.set_voted_for(candidate).unwrap();
                     messages::request_vote_response_granted(new_local_term)
                 },
                 Some(voted_for) if voted_for == candidate => {
@@ -448,12 +448,12 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         actions.peer_messages.push((candidate, message));
     }
 
-    /// Apply a request vote response to the Raft replica.
+    /// Apply a request vote response to the Raft consensus module.
     fn request_vote_response(&mut self,
                              from: ServerId,
                              response: request_vote_response::Reader,
                              actions: &mut Actions) {
-        scoped_debug!("RequestVoteResponse from Replica({})", from);
+        scoped_debug!("RequestVoteResponse from Consensus({})", from);
 
         let local_term = self.current_term();
         let voter_term = Term::from(response.get_term());
@@ -466,7 +466,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
 
             // The responder is not necessarily the leader, but it is somewhat likely, so we will
             // use it as the leader hint.
-            scoped_info!("received RequestVoteResponse from Replica {{ id: {}, term: {} }} \
+            scoped_info!("received RequestVoteResponse from Consensus {{ id: {}, term: {} }} \
                          with newer term", from, voter_term);
             self.transition_to_follower(voter_term, from, actions);
         } else if local_term > voter_term {
@@ -482,7 +482,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         };
     }
 
-    /// Apply a client proposal to the Raft replica.
+    /// Apply a client proposal to the Raft consensus module.
     fn proposal_request(&mut self,
                         from: ClientId,
                         request: proposal_request::Reader,
@@ -493,19 +493,19 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
             scoped_debug!("proposal received, but leader is not known");
             actions.client_messages.push((from.into(), messages::command_response_unknown_leader()));
         } else if self.is_follower() {
-            scoped_debug!("proposal received, but replica is not leader");
+            scoped_debug!("proposal received, but consensus module is not leader");
             let message =
                 messages::command_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
             actions.client_messages.push((from, message));
         } else {
-            scoped_debug!("proposal received, replica processing");
+            scoped_debug!("proposal received, consensus module processing");
             let prev_log_index = self.latest_log_index();
             let prev_log_term = self.latest_log_term();
             let term = self.current_term();
             let log_index = prev_log_index + 1;
             // TODO: This is probably not exactly safe.
             let entry = request.get_entry().unwrap();
-            self.store.append_entries(log_index,
+            self.persistent_log.append_entries(log_index,
                                       &[(term, entry)]).unwrap();
             self.leader_state.proposals.push_back((from, log_index));
 
@@ -521,7 +521,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                                                self.commit_index);
                 // In a multi-node cluster must message peers and wait.
                 for &peer in self.peers.keys() {
-                    scoped_debug!("replica queuing message for peer {}", peer);
+                    scoped_debug!("consensus module queuing message for peer {}", peer);
                     if self.leader_state.next_index(&peer) == prev_log_index + 1 {
                         actions.peer_messages.push((peer, message.clone()));
                     }
@@ -530,7 +530,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
     }
 
-    /// Issue a client query to the Raft replica.
+    /// Issue a client query to the Raft consensus module.
     fn query_request(&mut self,
                     from: ClientId,
                     request: query_request::Reader,
@@ -553,7 +553,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         }
     }
 
-    /// Trigger a heartbeat timeout on the Raft replica.
+    /// Trigger a heartbeat timeout on the Raft consensus module.
     /// `peer` is the ID of the peer which
     fn heartbeat_timeout(&mut self, peer: ServerId, actions: &mut Actions) {
         scoped_debug!("HeartbeatTimeout");
@@ -564,14 +564,14 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                                      .init_append_entries_request();
             request.set_term(self.current_term().into());
             request.set_prev_log_index(self.latest_log_index().into());
-            request.set_prev_log_term(self.store.latest_log_term().unwrap().into());
+            request.set_prev_log_term(self.persistent_log.latest_log_term().unwrap().into());
             request.set_leader_commit(self.commit_index.into());
             request.init_entries(0);
         }
         actions.peer_messages.push((peer, Rc::new(message)));
     }
 
-    /// Trigger an election timeout on the Raft replica.
+    /// Trigger an election timeout on the Raft consensus module.
     ///
     /// The provided RequestVoteRequest builder may be initialized with a message to send to each
     /// cluster peer.
@@ -579,21 +579,21 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         scoped_info!("ElectionTimeout");
         scoped_assert!(!self.is_leader());
         if self.peers.is_empty() {
-            // Solitary replica special case; jump straight to leader status
+            // Solitary consensus module special case; jump straight to leader status
             scoped_info!("transitioning to Leader");
             scoped_assert!(self.is_follower());
-            scoped_assert!(self.store.voted_for().unwrap().is_none());
-            self.store.inc_current_term().unwrap();
-            self.store.set_voted_for(self.id).unwrap();
+            scoped_assert!(self.persistent_log.voted_for().unwrap().is_none());
+            self.persistent_log.inc_current_term().unwrap();
+            self.persistent_log.set_voted_for(self.id).unwrap();
             let latest_log_index = self.latest_log_index();
-            self.state = ReplicaState::Leader;
+            self.state = ConsensusState::Leader;
             self.leader_state.reinitialize(latest_log_index);
         } else {
             self.transition_to_candidate(actions);
         }
     }
 
-    /// Transition this Replica to Leader state.
+    /// Transition this Consensus to Leader state.
     ///
     /// The provided Actions instance will have an AppendEntriesRequest message
     /// added for each cluster peer.
@@ -601,8 +601,8 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         scoped_info!("transitioning to Leader");
         let current_term = self.current_term();
         let latest_log_index = self.latest_log_index();
-        let latest_log_term = self.store.latest_log_term().unwrap();
-        self.state = ReplicaState::Leader;
+        let latest_log_term = self.persistent_log.latest_log_term().unwrap();
+        self.state = ConsensusState::Leader;
         self.leader_state.reinitialize(latest_log_index);
 
         let message = messages::append_entries_request(current_term,
@@ -617,21 +617,21 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         actions.clear_timeouts = true;
     }
 
-    /// Transition this Replica to Candidate state.
+    /// Transition this Consensus to Candidate state.
     ///
     /// The provided RequestVoteRequest message will be initialized with a message to send to each
     /// cluster peer.
     fn transition_to_candidate(&mut self, actions: &mut Actions) {
         scoped_info!("transitioning to Candidate");
-        self.store.inc_current_term().unwrap();
-        self.store.set_voted_for(self.id).unwrap();
-        self.state = ReplicaState::Candidate;
+        self.persistent_log.inc_current_term().unwrap();
+        self.persistent_log.set_voted_for(self.id).unwrap();
+        self.state = ConsensusState::Candidate;
         self.candidate_state.clear();
         self.candidate_state.record_vote(self.id);
 
         let current_term = self.current_term();
         let latest_index = self.latest_log_index();
-        let latest_term = self.store.latest_log_term().unwrap();
+        let latest_term = self.persistent_log.latest_log_term().unwrap();
 
         let mut message = MallocMessageBuilder::new_default();
         {
@@ -646,7 +646,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         for &peer in self.peers().keys() {
             actions.peer_messages.push((peer, message_rc.clone()));
         }
-        actions.timeouts.push(ReplicaTimeout::Election);
+        actions.timeouts.push(ConsensusTimeout::Election);
     }
 
     /// Advance the commit index and apply committed entries to the state machine, if possible.
@@ -654,7 +654,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         scoped_assert!(self.is_leader());
         let majority = self.majority();
         // TODO: Figure out failure condition here.
-        while self.commit_index < self.store.latest_log_index().unwrap() {
+        while self.commit_index < self.persistent_log.latest_log_index().unwrap() {
             if self.leader_state.count_match_indexes(self.commit_index + 1) >= majority {
                 self.commit_index = self.commit_index + 1;
                 scoped_debug!("advanced commit index to {}", self.commit_index);
@@ -686,7 +686,7 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
         let mut results = HashMap::new();
         while self.last_applied < self.commit_index {
             // Unwrap justified here since we know there is an entry here.
-            let (_, entry) = self.store.entry(self.last_applied + 1).unwrap();
+            let (_, entry) = self.persistent_log.entry(self.last_applied + 1).unwrap();
 
             if !entry.is_empty() {
                 // Unwrap justified because we **just** checked to see if it was empty.
@@ -705,41 +705,41 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
                               leader: ServerId,
                               actions: &mut Actions) {
         scoped_info!("transitioning to Follower");
-        self.store.set_current_term(term).unwrap();
-        self.state = ReplicaState::Follower;
+        self.persistent_log.set_current_term(term).unwrap();
+        self.state = ConsensusState::Follower;
         self.follower_state.set_leader(leader);
         actions.clear_timeouts = true;
-        actions.timeouts.push(ReplicaTimeout::Election);
+        actions.timeouts.push(ConsensusTimeout::Election);
     }
 
-    /// Returns `true` if the replica is in the Leader state.
+    /// Returns `true` if the consensus module is in the Leader state.
     fn is_leader(&self) -> bool {
-        self.state == ReplicaState::Leader
+        self.state == ConsensusState::Leader
     }
 
-    /// Returns `true` if the replica is in the Follower state.
+    /// Returns `true` if the consensus module is in the Follower state.
     fn is_follower(&self) -> bool {
-        self.state == ReplicaState::Follower
+        self.state == ConsensusState::Follower
     }
 
-    /// Returns `true` if the replica is in the Candidate state.
+    /// Returns `true` if the consensus module is in the Candidate state.
     fn is_candidate(&self) -> bool {
-        self.state == ReplicaState::Candidate
+        self.state == ConsensusState::Candidate
     }
 
-    /// Returns the current term of the replica.
+    /// Returns the current term of the consensus module.
     fn current_term(&self) -> Term {
-        self.store.current_term().unwrap()
+        self.persistent_log.current_term().unwrap()
     }
 
     /// Returns the term of the latest applied log entry.
     fn latest_log_term(&self) -> Term {
-        self.store.latest_log_term().unwrap()
+        self.persistent_log.latest_log_term().unwrap()
     }
 
     /// Returns the index of the latest applied log entry.
     fn latest_log_index(&self) -> LogIndex {
-        self.store.latest_log_index().unwrap()
+        self.persistent_log.latest_log_index().unwrap()
     }
 
     /// Get the cluster quorum majority size.
@@ -750,9 +750,9 @@ impl <S, M> Replica<S, M> where S: Store, M: StateMachine {
     }
 }
 
-impl <S, M> fmt::Debug for Replica<S, M> where S: Store, M: StateMachine {
+impl <L, M> fmt::Debug for Consensus<L, M> where L: Log, M: StateMachine {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "Replica {{ id: {}, state: {:?}, term: {}, index: {} }}",
+        write!(fmt, "Consensus {{ id: {}, state: {:?}, term: {}, index: {} }}",
                self.id, self.state, self.current_term(), self.latest_log_index())
     }
 }
@@ -774,16 +774,15 @@ mod test {
     use ClientId;
     use LogIndex;
     use ServerId;
-    use Store;
     use Term;
     use messages;
-    use replica::{Actions, Replica, ReplicaTimeout};
+    use consensus::{Actions, Consensus, ConsensusTimeout};
     use state_machine::NullStateMachine;
-    use store::MemStore;
+    use persistent_log::{MemLog, Log};
 
-    type TestReplica = Replica<MemStore, NullStateMachine>;
+    type TestModule = Consensus<MemLog, NullStateMachine>;
 
-    fn new_cluster(size: u64) -> HashMap<ServerId, TestReplica> {
+    fn new_cluster(size: u64) -> HashMap<ServerId, TestModule> {
         let ids: HashMap<ServerId, SocketAddr> =
             (0..size).map(Into::into)
                      .map(|id| (id, SocketAddr::from_str(&format!("127.0.0.1:{}", id)).unwrap()))
@@ -791,8 +790,8 @@ mod test {
         ids.iter().map(|(&id, _)| {
             let mut peers = ids.clone();
             peers.remove(&id);
-            let store = MemStore::new();
-            (id, Replica::new(id, peers, store, NullStateMachine))
+            let store = MemLog::new();
+            (id, Consensus::new(id, peers, store, NullStateMachine))
         }).collect()
     }
 
@@ -804,11 +803,11 @@ mod test {
         serialize::read_message(&mut buf, ReaderOptions::new()).unwrap()
     }
 
-    /// Applies the actions to the replicas (and recursively applies any resulting actions), and
-    /// returns any client messages.
+    /// Applies the actions to the consensus modules (and recursively applies any resulting
+    /// actions), and returns any client messages.
     fn apply_actions(from: ServerId,
                      mut actions: Actions,
-                     replicas: &mut HashMap<ServerId, TestReplica>)
+                     consensus_modules: &mut HashMap<ServerId, TestModule>)
                      -> Vec<(ClientId, Rc<MallocMessageBuilder>)> {
         let mut queue: VecDeque<(ServerId, ServerId, Rc<MallocMessageBuilder>)> = VecDeque::new();
 
@@ -819,7 +818,7 @@ mod test {
 
         while let Some((from, to, message)) = queue.pop_front() {
             let reader = into_reader(&*message);
-            replicas.get_mut(&to).unwrap().apply_peer_message(from, &reader, &mut actions);
+            consensus_modules.get_mut(&to).unwrap().apply_peer_message(from, &reader, &mut actions);
             let inner_from = to;
             for (inner_to, message) in actions.peer_messages.iter().cloned() {
                 queue.push_back((inner_from, inner_to, message));
@@ -834,42 +833,43 @@ mod test {
     /// Elect `leader` as the leader of a cluster with the provided followers.
     /// The leader and the followers must be in the same term.
     fn elect_leader(leader: ServerId,
-                    replicas: &mut HashMap<ServerId, TestReplica>) {
+                    consensus_modules: &mut HashMap<ServerId, TestModule>) {
         let mut actions = Actions::new();
-        replicas.get_mut(&leader).unwrap().apply_timeout(ReplicaTimeout::Election, &mut actions);
-        let client_messages = apply_actions(leader, actions, replicas);
+        consensus_modules.get_mut(&leader).unwrap().apply_timeout(ConsensusTimeout::Election, &mut actions);
+        let client_messages = apply_actions(leader, actions, consensus_modules);
         assert!(client_messages.is_empty());
-        assert!(replicas[&leader].is_leader());
+        assert!(consensus_modules[&leader].is_leader());
     }
 
     /// Tests the majority function.
     #[test]
     fn test_majority () {
-        let (_, replica) = new_cluster(1).into_iter().next().unwrap();
-        assert_eq!(1, replica.majority());
+        let (_, consensus_module) = new_cluster(1).into_iter().next().unwrap();
+        assert_eq!(1, consensus_module.majority());
 
-        let (_, replica) = new_cluster(2).into_iter().next().unwrap();
-        assert_eq!(2, replica.majority());
+        let (_, consensus_module) = new_cluster(2).into_iter().next().unwrap();
+        assert_eq!(2, consensus_module.majority());
 
-        let (_, replica) = new_cluster(3).into_iter().next().unwrap();
-        assert_eq!(2, replica.majority());
+        let (_, consensus_module) = new_cluster(3).into_iter().next().unwrap();
+        assert_eq!(2, consensus_module.majority());
 
-        let (_, replica) = new_cluster(4).into_iter().next().unwrap();
-        assert_eq!(3, replica.majority());
+        let (_, consensus_module) = new_cluster(4).into_iter().next().unwrap();
+        assert_eq!(3, consensus_module.majority());
     }
 
-    /// Tests that a single-replica cluster will behave appropriately.
+    /// Tests that a single-consensus module cluster will behave appropriately.
     ///
-    /// The single replica should transition straight to the Leader state upon the first timeout.
+    /// The single consensus module should transition straight to the Leader state upon the first
+    /// timeout.
     #[test]
-    fn test_solitary_replica_transition_to_leader() {
-        setup_test!("test_solitary_replica_transition_to_leader");
-        let (_, mut replica) = new_cluster(1).into_iter().next().unwrap();
-        assert!(replica.is_follower());
+    fn test_solitary_consensus_transition_to_leader() {
+        setup_test!("test_solitary_consensus_transition_to_leader");
+        let (_, mut consensus_module) = new_cluster(1).into_iter().next().unwrap();
+        assert!(consensus_module.is_follower());
 
         let mut actions = Actions::new();
-        replica.apply_timeout(ReplicaTimeout::Election, &mut actions);
-        assert!(replica.is_leader());
+        consensus_module.apply_timeout(ConsensusTimeout::Election, &mut actions);
+        assert!(consensus_module.is_leader());
         assert!(actions.peer_messages.is_empty());
         assert!(actions.client_messages.is_empty());
         assert!(actions.timeouts.is_empty());
@@ -881,13 +881,13 @@ mod test {
         setup_test!("test_election");
 
         for group_size in 1..10 {
-            let mut replicas = new_cluster(group_size);
-            let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-            let leader = &replica_ids[0];
-            elect_leader(leader.clone(), &mut replicas);
-            assert!(replicas[leader].is_leader());
-            for follower in replica_ids.iter().skip(1) {
-                assert!(replicas[follower].is_follower());
+            let mut consensus_modules = new_cluster(group_size);
+            let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
+            let leader = &module_ids[0];
+            elect_leader(leader.clone(), &mut consensus_modules);
+            assert!(consensus_modules[leader].is_leader());
+            for follower in module_ids.iter().skip(1) {
+                assert!(consensus_modules[follower].is_follower());
             }
         }
     }
@@ -899,16 +899,16 @@ mod test {
     #[test]
     fn test_heartbeat() {
         setup_test!("test_heartbeat");
-        let mut replicas = new_cluster(2);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let leader_id = &replica_ids[0];
-        let follower_id = &replica_ids[1];
-        elect_leader(leader_id.clone(), &mut replicas);
+        let mut consensus_modules = new_cluster(2);
+        let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
+        let leader_id = &module_ids[0];
+        let follower_id = &module_ids[1];
+        elect_leader(leader_id.clone(), &mut consensus_modules);
 
         // Leader pings with a heartbeat timeout.
         let leader_append_entries = {
             let mut actions = Actions::new();
-            let leader = replicas.get_mut(&leader_id).unwrap();
+            let leader = consensus_modules.get_mut(&leader_id).unwrap();
             leader.heartbeat_timeout(follower_id.clone(), &mut actions);
 
             let peer_message = actions.peer_messages.iter().next().unwrap();
@@ -920,11 +920,11 @@ mod test {
         // Follower responds.
         let follower_response = {
             let mut actions = Actions::new();
-            let follower = replicas.get_mut(&follower_id).unwrap();
+            let follower = consensus_modules.get_mut(&follower_id).unwrap();
             follower.apply_peer_message(leader_id.clone(), &reader, &mut actions);
 
             let election_timeout = actions.timeouts.iter().next().unwrap();
-            assert_eq!(election_timeout, &ReplicaTimeout::Election);
+            assert_eq!(election_timeout, &ConsensusTimeout::Election);
 
             let peer_message = actions.peer_messages.iter().next().unwrap();
             assert_eq!(peer_message.0, leader_id.clone());
@@ -933,50 +933,50 @@ mod test {
         let reader = into_reader(&*follower_response);
 
         // Leader applies and sends back a heartbeat to establish leadership.
-        let leader = replicas.get_mut(&leader_id).unwrap();
+        let leader = consensus_modules.get_mut(&leader_id).unwrap();
         let mut actions = Actions::new();
         leader.apply_peer_message(follower_id.clone(), &reader, &mut actions);
         let heartbeat_timeout = actions.timeouts.iter().next().unwrap();
-        assert_eq!(heartbeat_timeout, &ReplicaTimeout::Heartbeat(follower_id.clone()));
+        assert_eq!(heartbeat_timeout, &ConsensusTimeout::Heartbeat(follower_id.clone()));
     }
 
     /// Emulates a slow heartbeat message in a two-node cluster.
     ///
-    /// The initial leader (Replica 0) sends a heartbeat, but before it is received by the follower
-    /// (Replica 1), Replica 1's election timeout fires. Replica 1 transitions to candidate state
-    /// and attempts to send a RequestVote to Replica 0. When the partition is fixed, the
-    /// RequestVote should prompt Replica 0 to step down. Replica 1 should send a stale term
-    /// message in response to the heartbeat from Replica 0.
+    /// The initial leader (Consensus 0) sends a heartbeat, but before it is received by the follower
+    /// (Consensus 1), Consensus 1's election timeout fires. Consensus 1 transitions to candidate state
+    /// and attempts to send a RequestVote to Consensus 0. When the partition is fixed, the
+    /// RequestVote should prompt Consensus 0 to step down. Consensus 1 should send a stale term
+    /// message in response to the heartbeat from Consensus 0.
     #[test]
     fn test_slow_heartbeat() {
         setup_test!("test_heartbeat");
-        let mut replicas = new_cluster(2);
-        let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-        let replica0 = &replica_ids[0];
-        let replica1 = &replica_ids[1];
-        elect_leader(replica0.clone(), &mut replicas);
+        let mut consensus_modules = new_cluster(2);
+        let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
+        let module_0 = &module_ids[0];
+        let module_1 = &module_ids[1];
+        elect_leader(module_0.clone(), &mut consensus_modules);
 
-        let mut replica0_actions = Actions::new();
-        replicas.get_mut(replica0)
+        let mut module_0_actions = Actions::new();
+        consensus_modules.get_mut(module_0)
                 .unwrap()
-                .apply_timeout(ReplicaTimeout::Heartbeat(*replica1), &mut replica0_actions);
-        assert!(replicas[replica0].is_leader());
+                .apply_timeout(ConsensusTimeout::Heartbeat(*module_1), &mut module_0_actions);
+        assert!(consensus_modules[module_0].is_leader());
 
-        let mut replica1_actions = Actions::new();
-        replicas.get_mut(replica1)
+        let mut module_1_actions = Actions::new();
+        consensus_modules.get_mut(module_1)
                 .unwrap()
-                .apply_timeout(ReplicaTimeout::Election, &mut replica1_actions);
-        assert!(replicas[replica1].is_candidate());
+                .apply_timeout(ConsensusTimeout::Election, &mut module_1_actions);
+        assert!(consensus_modules[module_1].is_candidate());
 
         // Apply candidate messages.
-        assert!(apply_actions(*replica1, replica1_actions, &mut replicas).is_empty());
-        assert!(replicas[replica0].is_follower());
-        assert!(replicas[replica1].is_leader());
+        assert!(apply_actions(*module_1, module_1_actions, &mut consensus_modules).is_empty());
+        assert!(consensus_modules[module_0].is_follower());
+        assert!(consensus_modules[module_1].is_leader());
 
         // Apply stale heartbeat.
-        assert!(apply_actions(*replica0, replica0_actions, &mut replicas).is_empty());
-        assert!(replicas[replica0].is_follower());
-        assert!(replicas[replica1].is_leader());
+        assert!(apply_actions(*module_0, module_0_actions, &mut consensus_modules).is_empty());
+        assert!(consensus_modules[module_0].is_follower());
+        assert!(consensus_modules[module_1].is_leader());
     }
 
     /// Tests that a client proposal is correctly replicated to peers, and the client is notified
@@ -987,10 +987,10 @@ mod test {
         // Test various sizes.
         for i in 1..7 {
             scoped_debug!("testing size {} cluster", i);
-            let mut replicas = new_cluster(i);
-            let replica_ids: Vec<ServerId> = replicas.keys().cloned().collect();
-            let leader = replica_ids[0];
-            elect_leader(leader, &mut replicas);
+            let mut consensus_modules = new_cluster(i);
+            let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
+            let leader = module_ids[0];
+            elect_leader(leader, &mut consensus_modules);
 
             let value: &[u8] = b"foo";
             let proposal = into_reader(&messages::proposal_request(value));
@@ -998,14 +998,14 @@ mod test {
 
             let client = ClientId::new();
 
-            replicas.get_mut(&leader)
+            consensus_modules.get_mut(&leader)
                     .unwrap()
                     .apply_client_message(client, &proposal, &mut actions);
 
-            let client_messages = apply_actions(leader, actions, &mut replicas);
+            let client_messages = apply_actions(leader, actions, &mut consensus_modules);
             assert_eq!(1, client_messages.len());
-            for replica in replicas.values() {
-                assert_eq!((Term(1), value), replica.store.entry(LogIndex(1)).unwrap());
+            for module in consensus_modules.values() {
+                assert_eq!((Term(1), value), module.persistent_log.entry(LogIndex(1)).unwrap());
             }
         }
     }

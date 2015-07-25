@@ -1,20 +1,20 @@
 use std::{error, fmt, result};
 
-use store::Store;
+use persistent_log::Log;
 use LogIndex;
 use ServerId;
 use Term;
 
-/// This is a `Store` implementation that stores entries in a simple in-memory vector. Other data
+/// This is a `Log` implementation that stores entries in a simple in-memory vector. Other data
 /// is stored in a struct. It is chiefly intended for testing.
 #[derive(Clone, Debug)]
-pub struct MemStore {
+pub struct MemLog {
     current_term: Term,
     voted_for: Option<ServerId>,
     entries: Vec<(Term, Vec<u8>)>,
 }
 
-/// Non-instantiable error type for MemStore
+/// Non-instantiable error type for MemLog
 pub enum Error { }
 
 impl fmt::Display for Error {
@@ -35,10 +35,10 @@ impl error::Error for Error {
     }
 }
 
-impl MemStore {
+impl MemLog {
 
-    pub fn new() -> MemStore {
-        MemStore {
+    pub fn new() -> MemLog {
+        MemLog {
             current_term: Term(0),
             voted_for: None,
             entries: Vec::new(),
@@ -46,7 +46,7 @@ impl MemStore {
     }
 }
 
-impl Store for MemStore {
+impl Log for MemLog {
 
     type Error = Error;
 
@@ -108,11 +108,11 @@ mod test {
     use LogIndex;
     use ServerId;
     use Term;
-    use store::Store;
+    use persistent_log::Log;
 
     #[test]
     fn test_current_term() {
-        let mut store = MemStore::new();
+        let mut store = MemLog::new();
         assert_eq!(Term(0), store.current_term().unwrap());
         store.set_voted_for(ServerId::from(0)).unwrap();
         store.set_current_term(Term(42)).unwrap();
@@ -124,7 +124,7 @@ mod test {
 
     #[test]
     fn test_voted_for() {
-        let mut store = MemStore::new();
+        let mut store = MemLog::new();
         assert_eq!(None, store.voted_for().unwrap());
         let id = ServerId::from(0);
         store.set_voted_for(id).unwrap();
@@ -133,7 +133,7 @@ mod test {
 
     #[test]
     fn test_append_entries() {
-        let mut store = MemStore::new();
+        let mut store = MemLog::new();
         assert_eq!(LogIndex::from(0), store.latest_log_index().unwrap());
         assert_eq!(Term::from(0), store.latest_log_term().unwrap());
 

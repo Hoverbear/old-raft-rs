@@ -22,7 +22,7 @@
 //!
 //! Consuming this library works in a few parts:
 //!
-//! 1. Implement `Store` and `StateMachine` such that they will hook into your application.
+//! 1. Implement `Log` and `StateMachine` such that they will hook into your application.
 //! 2. Create a `Raft` with those impls which will spawn it's own `Server` and join with a cluster.
 //! 3. Interact with the cluster by issuing `append()` calls.
 //! 4. React to calls to `apply()` from the implemented `StateMachine`
@@ -67,7 +67,7 @@ macro_rules! setup_test {
 }
 
 pub mod state_machine;
-pub mod store;
+pub mod persistent_log;
 pub mod messages_capnp {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/messages_capnp.rs"));
@@ -77,13 +77,13 @@ mod backoff;
 mod client;
 mod connection;
 mod messages;
-mod replica;
+mod consensus;
 mod server;
 mod state;
 
 pub use server::Server;
 pub use state_machine::StateMachine;
-pub use store::Store;
+pub use persistent_log::Log;
 pub use client::Client;
 
 use std::{io, net, ops, fmt};
@@ -122,7 +122,7 @@ pub enum RaftError {
     ConnectionLimitReached,
     /// A client reported an invalid client id
     InvalidClientId,
-    /// A replica reported back a leader not in the cluster.
+    /// A consensus module reported back a leader not in the cluster.
     ClusterViolation,
     /// A remote connection attempted to use an unknown connection type in the connection preamble
     UnknownConnectionType,

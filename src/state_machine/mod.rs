@@ -6,7 +6,7 @@
 //! needing consistent state can be built on it.  For instance, a distributed hash table
 //! application could implement `StateMachine`, with commands corresponding to `insert`, and
 //! `remove`. The `raft` library would guarantee that the same order of `insert` and `remove`
-//! commands would be seen by all replicas.
+//! commands would be seen by all consensus modules.
 use std::{error, result};
 use std::fmt::Debug;
 
