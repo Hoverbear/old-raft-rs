@@ -2,12 +2,15 @@ extern crate docopt;
 extern crate env_logger;
 extern crate raft;
 extern crate rustc_serialize;
+extern crate bincode;
 
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::collections::HashMap;
 use std::io::{Error, Result};
 
 use docopt::Docopt;
+use bincode::SizeLimit;
 
 use raft::{
     state_machine,
@@ -19,12 +22,12 @@ use raft::{
 
 
 static USAGE: &'static str = "
-A replicated mutable value. Operations on the register have serializable
+A replicated mutable hashmap. Operations on the register have serializable
 consistency, but no durability (once all register servers are terminated the
-value is lost).
+map is lost).
 
-Each register server holds a replica of the register, and coordinates with its
-peers to update the register's value according to client commands. The register
+Each register server holds a replica of the map, and coordinates with its
+peers to update the maps values according to client commands. The register
 is available for reading and writing only if a majority of register servers are
 available.
 
@@ -44,10 +47,10 @@ Commands:
           peer servers.
 
 Usage:
-  register get (<server-address>)...
-  register put <new-value> (<server-address>)...
-  register cas <expected-value> <new-value> (<server-address>)...
-  register server <id> <address> [<peer-id> <peer-address>]...
+  register get (<node-address>)...
+  register put <new-value> (<node-address>)...
+  register cas <expected-value> <new-value> (<node-address>)...
+  register server <id> [<node-id> <node-address>]...
   register (-h | --help)
 
 Options:
@@ -62,10 +65,9 @@ struct Args {
     cmd_cas: bool,
 
     arg_id: Option<u64>,
-    arg_address: String,
-    arg_peer_id: Vec<u64>,
-    arg_peer_address: Vec<String>,
-    arg_server_address: Vec<String>,
+    arg_node_id: Vec<u64>,
+    arg_node_address: Vec<String>,
+    arg_server_id: Option<u64>,
 
     arg_new_value: String,
     arg_expected_value: String,
@@ -98,36 +100,49 @@ fn server(args: &Args) {
     let state_machine = RegisterStateMachine::new();
 
     let id = ServerId::from(args.arg_id.unwrap());
-    let addr = parse_addr(&args.arg_address);
-    let peers = args.arg_peer_id
+    let mut peers = args.arg_node_id
                     .iter()
-                    .zip(args.arg_peer_address.iter())
+                    .zip(args.arg_node_address.iter())
                     .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
-                    .collect();
+                    .collect::<HashMap<_,_>>();
 
+    let addr = peers.remove(&id).unwrap();
     Server::run(id, addr, peers, persistent_log, state_machine).unwrap();
 }
 
 fn get(args: &Args) {
-    let cluster = args.arg_server_address.iter()
+    let cluster = args.arg_node_address.iter()
         .map(|v| parse_addr(&v))
         .collect();
     let mut client = Client::new(cluster);
-    let response = client.query(args.arg_new_value.as_bytes()).unwrap();
-    println!("{}", String::from_utf8(response).unwrap())
+    let payload = Message::Get;
+    let encoded = bincode::encode(&payload, SizeLimit::Infinite).unwrap();
+    let response = client.query(&encoded).unwrap();
+    let val = bincode::decode::<String>(&response).unwrap();
+    println!("{}", val)
 }
 
 fn put(args: &Args) {
-    let cluster = args.arg_server_address.iter()
+    let cluster = args.arg_node_address.iter()
         .map(|v| parse_addr(&v))
         .collect();
     let mut client = Client::new(cluster);
-    let response = client.propose(args.arg_new_value.as_bytes()).unwrap();
-    println!("{}", String::from_utf8(response).unwrap())
+    let payload = Message::Put(args.arg_new_value.clone().into_bytes());
+    let encoded = bincode::encode(&payload, SizeLimit::Infinite).unwrap();
+    let response = client.propose(&encoded).unwrap();
+    let val = bincode::decode::<String>(&response).unwrap();
+    println!("{}", val)
 }
 
 fn cas(_args: &Args) {
     panic!("unimplemented: waiting on changes to the Raft Client and StateMachine APIs");
+}
+
+#[derive(RustcEncodable, RustcDecodable, PartialEq)]
+enum Message {
+    Get,
+    Put(Vec<u8>),
+    Cas(Vec<u8>, Vec<u8>),
 }
 
 /// A state machine that holds a single mutable value.
@@ -147,15 +162,37 @@ impl state_machine::StateMachine for RegisterStateMachine {
 
     type Error = Error;
 
-    fn apply(&mut self, new_value: &[u8]) -> Result<Vec<u8>> {
+    fn apply(&mut self, proposal: &[u8]) -> Result<Vec<u8>> {
         let old_value = self.value.clone();
-        self.value.clear();
-        self.value.extend(new_value);
-        Ok(old_value)
+        let message = bincode::decode::<Message>(&proposal).unwrap();
+        let response = (match message {
+            Message::Put(val) => {
+                self.value.clear();
+                self.value.extend(val);
+                bincode::encode(&old_value, SizeLimit::Infinite)
+            },
+            Message::Get => bincode::encode(&old_value, SizeLimit::Infinite),
+            Message::Cas(test, new) => {
+                if test == old_value {
+                    self.value.clear();
+                    self.value.extend(new);
+                    bincode::encode(&true, SizeLimit::Infinite)
+                } else {
+                    bincode::encode(&false, SizeLimit::Infinite)
+                }
+            },
+        }).unwrap();
+        Ok(response)
     }
 
     fn query(&self, query: &[u8]) -> Result<Vec<u8>> {
-        Ok(self.value.clone())
+        let old_value = self.value.clone();
+        let message = bincode::decode::<Message>(&query).unwrap();
+        let response = (match message {
+            Message::Get => bincode::encode(&old_value, SizeLimit::Infinite),
+            _ => panic!("Cannot mutate from query!"),
+        }).unwrap();
+        Ok(response)
     }
 
     fn snapshot(&self) -> Result<Vec<u8>> {
