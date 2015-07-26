@@ -1,14 +1,21 @@
 #![cfg(feature="examples")]
 
+#![cfg_attr(feature = "examples", feature(plugin))]
+#![cfg_attr(feature = "examples", feature(custom_derive))]
+#![cfg_attr(feature = "examples", plugin(serde_macros))]
+
 extern crate docopt;
 extern crate env_logger;
 extern crate raft;
+extern crate serde;
 extern crate rustc_serialize;
 
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::io::{Error, Result};
+use std::collections::HashMap;
 
+use serde::json::{self, Value};
 use docopt::Docopt;
 
 use raft::{
@@ -18,6 +25,7 @@ use raft::{
     Server,
     Client,
 };
+
 
 
 static USAGE: &'static str = "
@@ -97,7 +105,7 @@ fn parse_addr(addr: &str) -> SocketAddr {
 
 fn server(args: &Args) {
     let persistent_log = persistent_log::MemLog::new();
-    let state_machine = RegisterStateMachine::new();
+    let state_machine = HashmapStateMachine::new();
 
     let id = ServerId::from(args.arg_id.unwrap());
     let addr = parse_addr(&args.arg_address);
@@ -132,40 +140,57 @@ fn cas(_args: &Args) {
     panic!("unimplemented: waiting on changes to the Raft Client and StateMachine APIs");
 }
 
-/// A state machine that holds a single mutable value.
+/// A state machine that holds a hashmap.
 #[derive(Debug)]
-pub struct RegisterStateMachine {
-    value: Vec<u8>,
+pub struct HashmapStateMachine {
+    map: HashMap<String, Value>,
 }
 
-impl RegisterStateMachine {
-    pub fn new() -> RegisterStateMachine {
-        RegisterStateMachine { value: vec![] }
+/// Generally maps (key, value)
+#[derive(Serialize, Deserialize)]
+pub struct Message(String, Option<Value>);
+
+impl HashmapStateMachine {
+    pub fn new() -> HashmapStateMachine {
+        HashmapStateMachine {
+            map: HashMap::new(),
+        }
     }
 }
 
-
-impl state_machine::StateMachine for RegisterStateMachine {
+impl state_machine::StateMachine for HashmapStateMachine {
 
     type Error = Error;
 
     fn apply(&mut self, new_value: &[u8]) -> Result<Vec<u8>> {
-        let old_value = self.value.clone();
-        self.value.clear();
-        self.value.extend(new_value);
-        Ok(old_value)
+        let string = String::from_utf8_lossy(new_value);
+        let Message(key, value) = json::from_str(&string).unwrap();
+
+        let response = json::to_string(&match value {
+            Some(v) => (key.clone(), self.map.insert(key, v)),
+            None => (key.clone(), self.map.remove(&key)),
+        }).unwrap();
+
+        Ok(response.into_bytes())
     }
 
     fn query(&self, query: &[u8]) -> Result<Vec<u8>> {
-        Ok(self.value.clone())
+        let string = String::from_utf8_lossy(query);
+        let Message(key, _) = json::from_str(&string).unwrap();
+
+        let response = json::to_string(&self.map.get(&key).map(|v| v.clone())).unwrap();
+
+        Ok(response.into_bytes())
     }
 
     fn snapshot(&self) -> Result<Vec<u8>> {
-        Ok(self.value.clone())
+        Ok(json::to_string(&self.map)
+            .unwrap()
+            .into_bytes())
     }
 
     fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) -> Result<()> {
-        self.value = snapshot_value;
+        self.map = json::from_str(&String::from_utf8_lossy(&snapshot_value)).unwrap();
         Ok(())
     }
 }

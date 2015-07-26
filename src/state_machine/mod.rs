@@ -12,12 +12,9 @@ use std::fmt::Debug;
 
 mod channel;
 mod null;
-mod register;
-#[cfg(feature="hashmap")] mod hashmap;
 
 pub use state_machine::channel::ChannelStateMachine;
 pub use state_machine::null::NullStateMachine;
-pub use state_machine::register::RegisterStateMachine;
 
 /// This trait is meant to be implemented such that the commands issued to it via `apply()` will
 /// be reflected in your consuming application. Commands sent via `apply()` have been committed

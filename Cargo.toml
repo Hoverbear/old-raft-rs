@@ -40,9 +40,9 @@ license = "MIT"
 build = "build.rs"
 
 [features]
-default = [ "hashmap", ]
+default = [ "examples", ]
 
-hashmap = [ "serde", "serde_macros", ]
+examples = [ "serde", "serde_macros", ]
 
 # Dependencies
 [build-dependencies.capnpc]
