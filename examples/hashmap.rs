@@ -12,8 +12,11 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::io::{Error, Result};
 use std::collections::HashMap;
+use std::fmt::Debug;
+use std::hash::Hash;
 
 use serde::json::{self, Value};
+use serde::{Serialize, Deserialize};
 use docopt::Docopt;
 
 use raft::{
@@ -23,6 +26,7 @@ use raft::{
     Server,
     Client,
 };
+use Message::*;
 
 static USAGE: &'static str = "
 A replicated mutable value. Operations on the register have serializable
@@ -36,25 +40,25 @@ available.
 
 Commands:
 
-  get     Returns the current value of the register.
+  get     Returns the current value of the key.
 
-  put     Sets the current value of the register, and returns the previous
+  put     Sets the current value of the key, and returns the previous
           value.
 
-  cas     (compare and set) Conditionally sets the value of the register if the
+  cas     (compare and set) Conditionally sets the value of the key if the
           current value matches an expected value, returning true if the
-          register was set.
+          key was set.
 
-  server  Starts a register server. Servers must be provided a unique ID and
+  server  Starts a key server. Servers must be provided a unique ID and
           address (ip:port) at startup, along with the ID and address of all
-          peer servers.
+          peer servers.register
 
 Usage:
-  register get (<server-address>)...
-  register put <new-value> (<server-address>)...
-  register cas <expected-value> <new-value> (<server-address>)...
-  register server <id> <address> [<peer-id> <peer-address>]...
-  register (-h | --help)
+  hashmap get <key> (<node-address>)...
+  hashmap put <key> <new-value> (<node-address>)...
+  hashmap cas <key> <expected-value> <new-value> (<node-address>)...
+  hashmap server <id> [<node-id> <node-address>]...
+  hashmap (-h | --help)
 
 Options:
   -h --help   Show a help message.
@@ -68,11 +72,11 @@ struct Args {
     cmd_cas: bool,
 
     arg_id: Option<u64>,
-    arg_address: String,
-    arg_peer_id: Vec<u64>,
-    arg_peer_address: Vec<String>,
-    arg_server_address: Vec<String>,
+    arg_node_id: Vec<u64>,
+    arg_node_address: Vec<String>,
+    arg_server_id: Option<u64>,
 
+    arg_key: String,
     arg_new_value: String,
     arg_expected_value: String,
 }
@@ -104,31 +108,34 @@ fn server(args: &Args) {
     let state_machine = HashmapStateMachine::new();
 
     let id = ServerId::from(args.arg_id.unwrap());
-    let addr = parse_addr(&args.arg_address);
-    let peers = args.arg_peer_id
+    let mut peers = args.arg_node_id
                     .iter()
-                    .zip(args.arg_peer_address.iter())
+                    .zip(args.arg_node_address.iter())
                     .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
-                    .collect();
+                    .collect::<HashMap<_,_>>();
 
+    let addr = peers.remove(&id).unwrap();
     Server::run(id, addr, peers, persistent_log, state_machine).unwrap();
 }
 
 fn get(args: &Args) {
-    let cluster = args.arg_server_address.iter()
+    let cluster = args.arg_node_address.iter()
         .map(|v| parse_addr(&v))
         .collect();
     let mut client = Client::new(cluster);
-    let response = client.query(args.arg_new_value.as_bytes()).unwrap();
+    let payload = json::to_string(&Message::Get(args.arg_key.clone())).unwrap();
+    let response = client.query(payload.as_bytes()).unwrap();
     println!("{}", String::from_utf8(response).unwrap())
 }
 
 fn put(args: &Args) {
-    let cluster = args.arg_server_address.iter()
+    let cluster = args.arg_node_address.iter()
         .map(|v| parse_addr(&v))
         .collect();
     let mut client = Client::new(cluster);
-    let response = client.propose(args.arg_new_value.as_bytes()).unwrap();
+    let new_value = json::to_value(&args.arg_new_value);
+    let payload = json::to_string(&Message::Put(args.arg_key.clone(), new_value)).unwrap();
+    let response = client.propose(payload.as_bytes()).unwrap();
     println!("{}", String::from_utf8(response).unwrap())
 }
 
@@ -142,9 +149,12 @@ pub struct HashmapStateMachine {
     map: HashMap<String, Value>,
 }
 
-/// Generally maps (key, value)
 #[derive(Serialize, Deserialize)]
-pub struct Message(String, Option<Value>);
+pub enum Message {
+    Get(String),
+    Put(String, Value),
+    Cas(String, Value, Value),
+}
 
 impl HashmapStateMachine {
     pub fn new() -> HashmapStateMachine {
@@ -160,23 +170,43 @@ impl state_machine::StateMachine for HashmapStateMachine {
 
     fn apply(&mut self, new_value: &[u8]) -> Result<Vec<u8>> {
         let string = String::from_utf8_lossy(new_value);
-        let Message(key, value) = json::from_str(&string).unwrap();
+        let message = json::from_str(&string).unwrap();
 
-        let response = json::to_string(&match value {
-            Some(v) => (key.clone(), self.map.insert(key, v)),
-            None => (key.clone(), self.map.remove(&key)),
-        }).unwrap();
+        let response = match message {
+            Get(key) => {
+                let old_value = &self.map.get(&key).map(|v| v.clone());
+                json::to_string(old_value)
+            },
+            Put(key, value) => {
+                let old_value = &self.map.insert(key, value);
+                json::to_string(old_value)
+            },
+            Cas(key, old_check, new) => {
+                if *self.map.get(&key).unwrap() == old_check {
+                    let _ = self.map.insert(key, new);
+                    json::to_string(&true)
+                } else {
+                    json::to_string(&false)
+                }
+            },
+        };
 
-        Ok(response.into_bytes())
+        Ok(response.unwrap().into_bytes())
     }
 
     fn query(&self, query: &[u8]) -> Result<Vec<u8>> {
         let string = String::from_utf8_lossy(query);
-        let Message(key, _) = json::from_str(&string).unwrap();
+        let message = json::from_str(&string).unwrap();
 
-        let response = json::to_string(&self.map.get(&key).map(|v| v.clone())).unwrap();
+        let response = match message {
+            Get(key) => {
+                let old_value = &self.map.get(&key).map(|v| v.clone());
+                json::to_string(old_value)
+            },
+            _ => panic!("Can't do mutating requests in query"),
+        };
 
-        Ok(response.into_bytes())
+        Ok(response.unwrap().into_bytes())
     }
 
     fn snapshot(&self) -> Result<Vec<u8>> {
