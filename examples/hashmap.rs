@@ -1,8 +1,6 @@
-#![cfg(feature="examples")]
-
-#![cfg_attr(feature = "examples", feature(plugin))]
-#![cfg_attr(feature = "examples", feature(custom_derive))]
-#![cfg_attr(feature = "examples", plugin(serde_macros))]
+#![feature(plugin)]
+#![feature(custom_derive)]
+#![plugin(serde_macros)]
 
 extern crate docopt;
 extern crate env_logger;
@@ -25,8 +23,6 @@ use raft::{
     Server,
     Client,
 };
-
-
 
 static USAGE: &'static str = "
 A replicated mutable value. Operations on the register have serializable

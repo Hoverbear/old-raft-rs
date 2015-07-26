@@ -1,5 +1,3 @@
-#![cfg(feature="examples")]
-
 extern crate docopt;
 extern crate env_logger;
 extern crate raft;
