@@ -1,6 +1,6 @@
 # Raft #
 
-> Note: This project is **incomplete** and the code is of **pre-alpha** quality. **Only some specific, basic functionality is available.** A stable version will be released when we feel it is ready.
+> Note: This project is of **alpha** quality. **APIs are still in some flux, but they are ready for you to play with them.** A stable version will be released when we feel it is ready.
 
 [![Build Status](https://img.shields.io/travis/Hoverbear/raft/master.svg)](https://travis-ci.org/Hoverbear/raft)
 [![Coverage Status](https://img.shields.io/coveralls/Hoverbear/raft/master.svg)](https://coveralls.io/github/Hoverbear/raft)
@@ -23,10 +23,11 @@ Two well known Distributed Consensus Algorithms are Paxos and Raft. Paxos is use
 * [The Secret Lives of Data - Raft](http://thesecretlivesofdata.com/raft/)
 * [Raft Paper](http://ramcloud.stanford.edu/raft.pdf)
 * [Raft Dissertation](https://github.com/ongardie/dissertation#readme)
+* [Raft Refloated](https://www.cl.cam.ac.uk/~ms705/pub/papers/2015-osr-raft.pdf)
 
 ## Compiling ##
 
-> For Linux, BSD, or Mac. Windows is not supported at this time.
+> For Linux, BSD, or Mac. Windows is not supported at this time. We are willing and interested in including support, however none of our contributors work on Windows. Your PRs are welcome!
 
 You will need the [Rust](http://rust-lang.org/) compiler:
 
@@ -69,23 +70,25 @@ You can run the examples like so:
 RUST_LOG=raft=debug cargo run --example register server 1 127.0.0.1:8080
 ```
 
-The `examples/register.rs` file currently hosts a partially-complete example of using the library. We'll add more as we go!
+There are currently examples showing:
+
+* **Register:** A single shared, replicated buffer for storing some data. Uses `bincode`.
+* **Hashmap:** A replicated hash table that stores `json::Value` with `String`s as keys. Uses `serde`.
+
+We'd love it if you contributed your own or expanded on ours!
 
 ## Testing ##
 
 You can run `raft`'s full bank of tests with all debug output like so:
 
 ```bash
-RUST_LOG=raft=debug cargo test -- --nocapture
+RUST_BACKTRACE=1 RUST_LOG=raft=debug cargo test -- --nocapture
 ```
 
 For something more terse use `cargo test`.
-
-> Due to the nature of this library's pre-alpha state testing is not complete,
-> we're working on it!
 
 ## Contributing ##
 
 **First timer with Git?** Check [this](https://github.com/hoverbear/rust-rosetta#contributing-1) out for some help!!
 
-We use [Homu](http://homu.io/q/Hoverbear/raft) for merging requests. **This means we cannot merge your code unless it passes tests!**.
+We use [Homu](http://homu.io/q/Hoverbear/raft) for merging requests. **This means we cannot merge your code unless it passes tests!**
