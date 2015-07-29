@@ -1,6 +1,8 @@
 //! This example demonstrates using Raft to implement a replicated hashmap over `n` servers and
 //! interact with them over `m` clients.
 //!
+//! This example uses Serde serialization.
+//!
 //! Comments below will aim to be tailored towards Raft and it's usage. If you have any questions,
 //! Please, just open an issue.
 //!
@@ -12,7 +14,7 @@
 #![feature(custom_derive)]
 #![plugin(serde_macros)]
 
-extern crate raft; // <--- Kind of a big deal
+extern crate raft; // <--- Kind of a big deal for this!
 extern crate env_logger;
 extern crate docopt;
 extern crate serde;
@@ -208,8 +210,23 @@ fn put(args: &Args) {
     println!("{}", String::from_utf8(response).unwrap())
 }
 
+/// Compares and sets a value for a given key in the provided Raft cluster if the value is what is
+/// expected.
 fn cas(_args: &Args) {
-    panic!("unimplemented: waiting on changes to the Raft Client and StateMachine APIs");
+    // Same as above.
+    let cluster = args.arg_node_address.iter()
+        .map(|v| parse_addr(&v))
+        .collect();
+
+    let mut client = Client::new(cluster);
+
+    let new_value = json::to_value(&args.arg_new_value);
+    let expected_value = json::to_value(&args.arg_new_value);
+    let payload = json::to_string(&Message::Cas(args.arg_key.clone(), expected_value, new_value)).unwrap();
+
+    let response = client.propose(payload.as_bytes()).unwrap();
+
+    println!("{}", String::from_utf8(response).unwrap())
 }
 
 /// A state machine that holds a hashmap.

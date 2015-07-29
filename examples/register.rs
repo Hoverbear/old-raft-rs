@@ -1,6 +1,17 @@
+//! This example demonstrates using Raft to implement a replicated hashmap over `n` servers and
+//! interact with them over `m` clients.
+//!
+//! This example uses Bincode serialization.
+//!
+//! Comments below will aim to be tailored towards Raft and it's usage. If you have any questions,
+//! Please, just open an issue.
+//!
+//! TODO: For the sake of simplicity of this example, we don't implement a `Log` and just use a
+//! simple testing one. We should improve this in the future.
+
+extern crate raft; // <--- Kind of a big deal for this!
 extern crate docopt;
 extern crate env_logger;
-extern crate raft;
 extern crate rustc_serialize;
 extern crate bincode;
 
@@ -12,6 +23,7 @@ use std::io::{Error, Result};
 use docopt::Docopt;
 use bincode::SizeLimit;
 
+// Raft's major components. See comments in code on usage and things.
 use raft::{
     state_machine,
     persistent_log,
@@ -20,7 +32,17 @@ use raft::{
     Client,
 };
 
+/// This is the defined message type for this example. For the sake of simplicity we don't go very
+/// far with this. In a "real" application you may want to more distinctly distinguish between
+/// data meant for `.query()` and data meant for `.propose()`.
+#[derive(RustcEncodable, RustcDecodable, PartialEq)]
+enum Message {
+    Get,
+    Put(Vec<u8>),
+    Cas(Vec<u8>, Vec<u8>),
+}
 
+// Using docopt we define the overall usage of the application.
 static USAGE: &'static str = "
 A replicated mutable hashmap. Operations on the register have serializable
 consistency, but no durability (once all register servers are terminated the
@@ -64,6 +86,9 @@ struct Args {
     cmd_put: bool,
     cmd_cas: bool,
 
+    // When creating a server you will necessarily need some sort of unique ID for it as well
+    // as a list of peers. In this example we just accept them straight from args. You might
+    // find it best to use a `toml` or `yaml` or `json` file.
     arg_id: Option<u64>,
     arg_node_id: Vec<u64>,
     arg_node_address: Vec<String>,
@@ -73,6 +98,7 @@ struct Args {
     arg_expected_value: String,
 }
 
+/// Just a plain old boring "parse args and dispatch" call.
 fn main() {
     let _ = env_logger::init();
     let args: Args = Docopt::new(USAGE)
@@ -89,60 +115,106 @@ fn main() {
     }
 }
 
+/// A simple convenience method since this is an example and it should exit if given invalid params.
 fn parse_addr(addr: &str) -> SocketAddr {
     SocketAddr::from_str(addr)
                .ok()
                .expect(&format!("unable to parse socket address: {}", addr))
 }
 
+/// Creates a Raft server using the specified ID from the list of nodes.
 fn server(args: &Args) {
+    // Creating a raft server requires several things:
+
+    // A persistent log implementation, which manages the persistent, replicated log...
     let persistent_log = persistent_log::MemLog::new();
+
+    // A state machine which replicated state. This state should be the same on all nodes.
     let state_machine = RegisterStateMachine::new();
 
+    // As well as a unique server id.
     let id = ServerId::from(args.arg_id.unwrap());
+
+    // ...  And a list of peers.
     let mut peers = args.arg_node_id
                     .iter()
                     .zip(args.arg_node_address.iter())
                     .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
                     .collect::<HashMap<_,_>>();
 
+    // The Raft Server will panic if it's ID is inside of it's peer set. Don't do that.
+    // Instead, take it out and use it!
     let addr = peers.remove(&id).unwrap();
+
+    // Using all of the above components.
+    // You probably shouldn't `.unwrap()` in production code unless you're totally sure it works
+    // 100% of the time, all the time.
     Server::run(id, addr, peers, persistent_log, state_machine).unwrap();
 }
 
+/// Gets a value for the register from the provided Raft cluster.
 fn get(args: &Args) {
+    // Clients necessarily need to now the valid set of nodes which they can talk to.
+    // This is both so they can try to talk to all the nodes if some are failing, and so that it
+    // can verify that it's not being lead astray somehow in redirections on leadership changes.
     let cluster = args.arg_node_address.iter()
         .map(|v| parse_addr(&v))
         .collect();
+
+    // Clients and be stored and reused, or used once and discarded.
+    // There is very small overhead in connecting a new client to a cluster as it must discover and
+    // identify itself to the leader.
     let mut client = Client::new(cluster);
+
+    // Bincode makes it very easy to encode and fire off random enums and structs.
     let payload = Message::Get;
     let encoded = bincode::encode(&payload, SizeLimit::Infinite).unwrap();
+
+    // A query executes **immutably** on the leader of the cluster and does not pass through the
+    // persistent log. This is intended for querying the current state of the state machine.
     let response = client.query(&encoded).unwrap();
+
+    // A response will block until it's query is complete. This is intended and expected behavior
+    // based on the papers specifications.
     let val = bincode::decode::<String>(&response).unwrap();
     println!("{}", val)
 }
 
+/// Sets a value for a given key in the provided Raft cluster.
 fn put(args: &Args) {
+    // Same as above.
     let cluster = args.arg_node_address.iter()
         .map(|v| parse_addr(&v))
         .collect();
     let mut client = Client::new(cluster);
+
     let payload = Message::Put(args.arg_new_value.clone().into_bytes());
     let encoded = bincode::encode(&payload, SizeLimit::Infinite).unwrap();
+
+    // A propose will go through the persistent log and mutably modify the state machine in some
+    // way. This is **much** slower than `.query()`.
     let response = client.propose(&encoded).unwrap();
+
     let val = bincode::decode::<String>(&response).unwrap();
     println!("{}", val)
 }
 
+/// Compares and sets a value for a given key in the provided Raft cluster if the value is what is
+/// expected.
 fn cas(_args: &Args) {
-    panic!("unimplemented: waiting on changes to the Raft Client and StateMachine APIs");
-}
+    // Same as above.
+    let cluster = args.arg_node_address.iter()
+        .map(|v| parse_addr(&v))
+        .collect();
+    let mut client = Client::new(cluster);
 
-#[derive(RustcEncodable, RustcDecodable, PartialEq)]
-enum Message {
-    Get,
-    Put(Vec<u8>),
-    Cas(Vec<u8>, Vec<u8>),
+    let payload = Message::Cas(args.arg_expected_value.clone(), args.arg_new_value.clone().into_bytes());
+    let encoded = bincode::encode(&payload, SizeLimit::Infinite).unwrap();
+
+    let response = client.propose(&encoded).unwrap();
+
+    let val = bincode::decode::<String>(&response).unwrap();
+    println!("{}", val)
 }
 
 /// A state machine that holds a single mutable value.
@@ -151,20 +223,30 @@ pub struct RegisterStateMachine {
     value: Vec<u8>,
 }
 
+/// Implement anything you want... A `new()` is generally a great idea.
 impl RegisterStateMachine {
     pub fn new() -> RegisterStateMachine {
         RegisterStateMachine { value: vec![] }
     }
 }
 
-
+/// Implementing `state_machine::StateMachine` allows your application specific state machine to be
+/// used in Raft. Feel encouraged to base yours of one of ours in these examples.
 impl state_machine::StateMachine for RegisterStateMachine {
 
     type Error = Error;
 
+    /// `apply()` is called on when a client's `.propose()` is commited and reaches the state
+    /// machine. At this point it is durable and is going to be applied on at least half the nodes
+    /// within the next couple round trips.
     fn apply(&mut self, proposal: &[u8]) -> Result<Vec<u8>> {
+        // Store the old value (example specific)
         let old_value = self.value.clone();
+
+        // Deserialize
         let message = bincode::decode::<Message>(&proposal).unwrap();
+
+        // Handle
         let response = (match message {
             Message::Put(val) => {
                 self.value.clear();
@@ -182,9 +264,14 @@ impl state_machine::StateMachine for RegisterStateMachine {
                 }
             },
         }).unwrap();
+
+        // Respond.
         Ok(response)
     }
 
+    /// `query()` is called on when a client's `.query()` is recieved. It does not go through the
+    /// persistent log, it does not mutate the state of the state machine, and it is intended to be
+    /// fast.
     fn query(&self, query: &[u8]) -> Result<Vec<u8>> {
         let old_value = self.value.clone();
         let message = bincode::decode::<Message>(&query).unwrap();
