@@ -7,7 +7,6 @@
 //! application could implement `StateMachine`, with commands corresponding to `insert`, and
 //! `remove`. The `raft` library would guarantee that the same order of `insert` and `remove`
 //! commands would be seen by all consensus modules.
-use std::{error, result};
 use std::fmt::Debug;
 
 mod channel;
@@ -20,22 +19,23 @@ pub use state_machine::null::NullStateMachine;
 /// be reflected in your consuming application. Commands sent via `apply()` have been committed
 /// in the cluser. Unlike `store`, your application should consume data produced by this and
 /// accept it as truth.
+///
+/// Note that you are responsible for **not crashing** the state machine. Your production
+/// implementation should not use `.unwrap()`, `.expect()` or anything else that likes to `panic!()`
 pub trait StateMachine: Debug + Send + 'static {
-
-    type Error: Debug + error::Error + Send + 'static;
 
     /// Applies a command to the state machine.
     /// Returns an application-specific result value.
-    fn apply(&mut self, command: &[u8]) -> result::Result<Vec<u8>, Self::Error>;
+    fn apply(&mut self, command: &[u8]) -> Vec<u8>;
 
     /// Queries a value of the state machine. Does not go through the durable log, or mutate the
     /// state machine.
     /// Returns an application-specific result value.
-    fn query(&self, query: &[u8]) -> result::Result<Vec<u8>, Self::Error>;
+    fn query(&self, query: &[u8]) -> Vec<u8>;
 
     /// Take a snapshot of the state machine.
-    fn snapshot(&self) -> result::Result<Vec<u8>, Self::Error>;
+    fn snapshot(&self) -> Vec<u8>;
 
     /// Restore a snapshot of the state machine.
-    fn restore_snapshot(&mut self, snapshot: Vec<u8>) -> result::Result<(), Self::Error>;
+    fn restore_snapshot(&mut self, snapshot: Vec<u8>) -> ();
 }

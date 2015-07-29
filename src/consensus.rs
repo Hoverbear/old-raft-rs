@@ -546,8 +546,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         } else {
             // TODO: This is probably not exactly safe.
             let query = request.get_query().unwrap();
-            // TODO: This is probably not exactly safe.
-            let result = self.state_machine.query(query).unwrap();
+            let result = self.state_machine.query(query);
             let message = messages::command_response_success(&result);
             actions.client_messages.push((from, message));
         }
@@ -689,8 +688,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
             let (_, entry) = self.persistent_log.entry(self.last_applied + 1).unwrap();
 
             if !entry.is_empty() {
-                // Unwrap justified because we **just** checked to see if it was empty.
-                let result = self.state_machine.apply(entry).unwrap();
+                let result = self.state_machine.apply(entry);
                 results.insert(self.last_applied + 1, result);
             }
             self.last_applied = self.last_applied + 1;

@@ -22,7 +22,6 @@ extern crate rustc_serialize;
 
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::io::{Error, Result};
 use std::collections::HashMap;
 
 use serde::json::{self, Value};
@@ -212,7 +211,7 @@ fn put(args: &Args) {
 
 /// Compares and sets a value for a given key in the provided Raft cluster if the value is what is
 /// expected.
-fn cas(_args: &Args) {
+fn cas(args: &Args) {
     // Same as above.
     let cluster = args.arg_node_address.iter()
         .map(|v| parse_addr(&v))
@@ -248,12 +247,10 @@ impl HashmapStateMachine {
 /// used in Raft. Feel encouraged to base yours of one of ours in these examples.
 impl state_machine::StateMachine for HashmapStateMachine {
 
-    type Error = Error;
-
     /// `apply()` is called on when a client's `.propose()` is commited and reaches the state
     /// machine. At this point it is durable and is going to be applied on at least half the nodes
     /// within the next couple round trips.
-    fn apply(&mut self, new_value: &[u8]) -> Result<Vec<u8>> {
+    fn apply(&mut self, new_value: &[u8]) -> Vec<u8> {
         // Deserialize
         let string = String::from_utf8_lossy(new_value);
         let message = json::from_str(&string).unwrap();
@@ -279,13 +276,13 @@ impl state_machine::StateMachine for HashmapStateMachine {
         };
 
         // Respond.
-        Ok(response.unwrap().into_bytes())
+        response.unwrap().into_bytes()
     }
 
     /// `query()` is called on when a client's `.query()` is recieved. It does not go through the
     /// persistent log, it does not mutate the state of the state machine, and it is intended to be
     /// fast.
-    fn query(&self, query: &[u8]) -> Result<Vec<u8>> {
+    fn query(&self, query: &[u8]) -> Vec<u8> {
         // Deserialize
         let string = String::from_utf8_lossy(query);
         let message = json::from_str(&string).unwrap();
@@ -300,17 +297,17 @@ impl state_machine::StateMachine for HashmapStateMachine {
         };
 
         // Respond.
-        Ok(response.unwrap().into_bytes())
+        response.unwrap().into_bytes()
     }
 
-    fn snapshot(&self) -> Result<Vec<u8>> {
-        Ok(json::to_string(&self.map)
+    fn snapshot(&self) -> Vec<u8> {
+        json::to_string(&self.map)
             .unwrap()
-            .into_bytes())
+            .into_bytes()
     }
 
-    fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) -> Result<()> {
+    fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) -> () {
         self.map = json::from_str(&String::from_utf8_lossy(&snapshot_value)).unwrap();
-        Ok(())
+        ()
     }
 }

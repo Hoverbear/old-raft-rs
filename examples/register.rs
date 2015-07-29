@@ -18,7 +18,6 @@ extern crate bincode;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::collections::HashMap;
-use std::io::{Error, Result};
 
 use docopt::Docopt;
 use bincode::SizeLimit;
@@ -201,14 +200,16 @@ fn put(args: &Args) {
 
 /// Compares and sets a value for a given key in the provided Raft cluster if the value is what is
 /// expected.
-fn cas(_args: &Args) {
+fn cas(args: &Args) {
     // Same as above.
     let cluster = args.arg_node_address.iter()
         .map(|v| parse_addr(&v))
         .collect();
     let mut client = Client::new(cluster);
 
-    let payload = Message::Cas(args.arg_expected_value.clone(), args.arg_new_value.clone().into_bytes());
+    let payload = Message::Cas(
+        args.arg_expected_value.clone().into_bytes(),
+        args.arg_new_value.clone().into_bytes());
     let encoded = bincode::encode(&payload, SizeLimit::Infinite).unwrap();
 
     let response = client.propose(&encoded).unwrap();
@@ -234,12 +235,10 @@ impl RegisterStateMachine {
 /// used in Raft. Feel encouraged to base yours of one of ours in these examples.
 impl state_machine::StateMachine for RegisterStateMachine {
 
-    type Error = Error;
-
     /// `apply()` is called on when a client's `.propose()` is commited and reaches the state
     /// machine. At this point it is durable and is going to be applied on at least half the nodes
     /// within the next couple round trips.
-    fn apply(&mut self, proposal: &[u8]) -> Result<Vec<u8>> {
+    fn apply(&mut self, proposal: &[u8]) -> Vec<u8> {
         // Store the old value (example specific)
         let old_value = self.value.clone();
 
@@ -266,28 +265,35 @@ impl state_machine::StateMachine for RegisterStateMachine {
         }).unwrap();
 
         // Respond.
-        Ok(response)
+        response
     }
 
     /// `query()` is called on when a client's `.query()` is recieved. It does not go through the
     /// persistent log, it does not mutate the state of the state machine, and it is intended to be
     /// fast.
-    fn query(&self, query: &[u8]) -> Result<Vec<u8>> {
+    fn query(&self, query: &[u8]) -> Vec<u8> {
+        // Store the old value (example specific)
         let old_value = self.value.clone();
+
+        // Deserialize
         let message = bincode::decode::<Message>(&query).unwrap();
+
+        // Handle
         let response = (match message {
             Message::Get => bincode::encode(&old_value, SizeLimit::Infinite),
             _ => panic!("Cannot mutate from query!"),
         }).unwrap();
-        Ok(response)
+
+        // Respond.
+        response
     }
 
-    fn snapshot(&self) -> Result<Vec<u8>> {
-        Ok(self.value.clone())
+    fn snapshot(&self) -> Vec<u8> {
+        self.value.clone()
     }
 
-    fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) -> Result<()> {
+    fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) -> () {
         self.value = snapshot_value;
-        Ok(())
+        ()
     }
 }
