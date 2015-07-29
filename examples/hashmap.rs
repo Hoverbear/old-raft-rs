@@ -22,11 +22,8 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::io::{Error, Result};
 use std::collections::HashMap;
-use std::fmt::Debug;
-use std::hash::Hash;
 
 use serde::json::{self, Value};
-use serde::{Serialize, Deserialize};
 use docopt::Docopt;
 
 // Raft's major components. See comments in code on usage and things.
