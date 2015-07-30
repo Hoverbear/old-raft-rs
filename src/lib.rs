@@ -53,6 +53,7 @@ extern crate uuid;
 #[macro_use] extern crate scoped_log;
 #[macro_use] extern crate wrapped_enum;
 #[cfg(test)] extern crate env_logger;
+#[cfg(feature = "serde")] extern crate serde;
 
 /// Prepares the environment testing. Should be called as the first line of every test with the
 /// name of the test as the only argument.

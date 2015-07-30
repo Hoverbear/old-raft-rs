@@ -1,4 +1,3 @@
-use std::result;
 use std::fmt::{self, Debug};
 use std::sync::mpsc;
 
@@ -21,22 +20,20 @@ impl ChannelStateMachine {
 
 impl StateMachine for ChannelStateMachine {
 
-    type Error = mpsc::SendError<Vec<u8>>;
-
-    fn apply(&mut self, command: &[u8]) -> result::Result<Vec<u8>, mpsc::SendError<Vec<u8>>> {
-        self.tx.send(command.to_vec()).map(|_| Vec::new())
+    fn apply(&mut self, command: &[u8]) -> Vec<u8> {
+        self.tx.send(command.to_vec()).map(|_| Vec::new()).unwrap_or(b"An error occured."[..].into())
     }
 
-    fn query(&self, query: &[u8]) -> result::Result<Vec<u8>, Self::Error> {
+    fn query(&self, _query: &[u8]) -> Vec<u8> {
         unimplemented!()
     }
 
-    fn snapshot(&self) -> result::Result<Vec<u8>, mpsc::SendError<Vec<u8>>> {
-        Ok(Vec::new())
+    fn snapshot(&self) -> Vec<u8> {
+        Vec::new()
     }
 
-    fn restore_snapshot(&mut self, _snapshot: Vec<u8>) -> result::Result<(), mpsc::SendError<Vec<u8>>> {
-        Ok(())
+    fn restore_snapshot(&mut self, _snapshot: Vec<u8>) -> () {
+        ()
     }
 }
 

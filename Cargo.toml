@@ -39,6 +39,7 @@ license = "MIT"
 # Builds Cap'n Proto messages
 build = "build.rs"
 
+# Dependencies
 [build-dependencies.capnpc]
 git = "https://github.com/dwrensha/capnpc-rust"
 
@@ -56,6 +57,10 @@ git = "https://github.com/danburkert/capnproto-rust"
 branch = "async"
 
 [dev-dependencies]
-docopt = "*"
 env_logger = "*"
+# Used in Examples
+docopt = "*"
+serde = "*"
+serde_macros = "*"
 rustc-serialize = "*"
+bincode = "*"
