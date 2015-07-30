@@ -40,14 +40,15 @@ use Message::*;
 
 // Using docopt we define the overall usage of the application.
 static USAGE: &'static str = "
-A replicated mutable value. Operations on the register have serializable
+A replicated mutable hashmap. Operations on the register have serializable
 consistency, but no durability (once all register servers are terminated the
-value is lost).
+map is lost).
 
-Each register server holds a replica of the register, and coordinates with its
-peers to update the register's value according to client commands. The register
+Each register server holds a replica of the map, and coordinates with its
+peers to update the maps values according to client commands. The register
 is available for reading and writing only if a majority of register servers are
 available.
+
 
 Commands:
 
@@ -137,7 +138,7 @@ fn server(args: &Args) {
     // A persistent log implementation, which manages the persistent, replicated log...
     let persistent_log = persistent_log::MemLog::new();
 
-    // A state machine which replicated state. This state should be the same on all nodes.
+    // A state machine which replicates state. This state should be the same on all nodes.
     let state_machine = HashmapStateMachine::new();
 
     // As well as a unique server id.
@@ -150,7 +151,7 @@ fn server(args: &Args) {
                     .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
                     .collect::<HashMap<_,_>>();
 
-    // The Raft Server will panic if it's ID is inside of it's peer set. Don't do that.
+    // The Raft Server will return an error if it's ID is inside of it's peer set. Don't do that.
     // Instead, take it out and use it!
     let addr = peers.remove(&id).unwrap();
 
@@ -306,7 +307,7 @@ impl state_machine::StateMachine for HashmapStateMachine {
             .into_bytes()
     }
 
-    fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) -> () {
+    fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) {
         self.map = json::from_str(&String::from_utf8_lossy(&snapshot_value)).unwrap();
         ()
     }

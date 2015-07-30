@@ -43,12 +43,12 @@ enum Message {
 
 // Using docopt we define the overall usage of the application.
 static USAGE: &'static str = "
-A replicated mutable hashmap. Operations on the register have serializable
+A replicated mutable value. Operations on the register have serializable
 consistency, but no durability (once all register servers are terminated the
-map is lost).
+value is lost).
 
-Each register server holds a replica of the map, and coordinates with its
-peers to update the maps values according to client commands. The register
+Each register server holds a replica of the register, and coordinates with its
+peers to update the register's value according to client commands. The register
 is available for reading and writing only if a majority of register servers are
 available.
 
@@ -141,7 +141,7 @@ fn server(args: &Args) {
                     .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
                     .collect::<HashMap<_,_>>();
 
-    // The Raft Server will panic if it's ID is inside of it's peer set. Don't do that.
+    // The Raft Server will error if it's ID is inside of it's peer set. Don't do that.
     // Instead, take it out and use it!
     let addr = peers.remove(&id).unwrap();
 
@@ -292,7 +292,7 @@ impl state_machine::StateMachine for RegisterStateMachine {
         self.value.clone()
     }
 
-    fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) -> () {
+    fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) {
         self.value = snapshot_value;
         ()
     }
