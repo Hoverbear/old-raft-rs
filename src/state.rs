@@ -139,7 +139,7 @@ impl FollowerState {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::collections::HashSet;
 
     use {LogIndex, ServerId};
