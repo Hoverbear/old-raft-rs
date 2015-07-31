@@ -123,7 +123,7 @@ impl fmt::Debug for Client {
 
 
 #[cfg(test)]
-mod test {
+mod tests {
     extern crate env_logger;
 
     use std::collections::HashSet;

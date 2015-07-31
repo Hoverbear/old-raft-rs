@@ -756,9 +756,10 @@ impl <L, M> fmt::Debug for Consensus<L, M> where L: Log, M: StateMachine {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
 
     extern crate env_logger;
+    extern crate test;
 
     use std::collections::{HashMap, VecDeque};
     use std::io::Cursor;
@@ -768,6 +769,7 @@ mod test {
 
     use capnp::{MallocMessageBuilder, MessageBuilder, ReaderOptions};
     use capnp::serialize::{self, OwnedSpaceMessageReader};
+    use test::Bencher;
 
     use ClientId;
     use LogIndex;
@@ -1006,5 +1008,144 @@ mod test {
                 assert_eq!((Term(1), value), module.persistent_log.entry(LogIndex(1)).unwrap());
             }
         }
+    }
+
+    #[bench]
+    fn bench_proposal_1(b: &mut Bencher) {
+        scoped_debug!("benching size {} cluster", 1);
+        b.iter(|| {
+            let mut consensus_modules = new_cluster(1);
+            let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
+            let leader = module_ids[0];
+            elect_leader(leader, &mut consensus_modules);
+
+            let value: &[u8] = b"foo";
+            let proposal = into_reader(&messages::proposal_request(value));
+            let mut actions = Actions::new();
+
+            let client = ClientId::new();
+
+            consensus_modules.get_mut(&leader)
+                    .unwrap()
+                    .apply_client_message(client, &proposal, &mut actions);
+
+            let client_messages = apply_actions(leader, actions, &mut consensus_modules);
+            assert_eq!(1, client_messages.len());
+            for module in consensus_modules.values() {
+                assert_eq!((Term(1), value), module.persistent_log.entry(LogIndex(1)).unwrap());
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_proposal_7(b: &mut Bencher) {
+        scoped_debug!("benching size {} cluster", 7);
+        b.iter(|| {
+            let mut consensus_modules = new_cluster(7);
+            let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
+            let leader = module_ids[0];
+            elect_leader(leader, &mut consensus_modules);
+
+            let value: &[u8] = b"foo";
+            let proposal = into_reader(&messages::proposal_request(value));
+            let mut actions = Actions::new();
+
+            let client = ClientId::new();
+
+            consensus_modules.get_mut(&leader)
+                    .unwrap()
+                    .apply_client_message(client, &proposal, &mut actions);
+
+            let client_messages = apply_actions(leader, actions, &mut consensus_modules);
+            assert_eq!(1, client_messages.len());
+            for module in consensus_modules.values() {
+                assert_eq!((Term(1), value), module.persistent_log.entry(LogIndex(1)).unwrap());
+            }
+        })
+    }
+
+    /// Tests that a client query is correctly responded to, and the client is notified
+    /// of the success.
+    #[test]
+    fn test_query() {
+        setup_test!("test_query");
+        // Test various sizes.
+        for i in 1..7 {
+            scoped_debug!("testing size {} cluster", i);
+            let mut consensus_modules = new_cluster(i);
+            let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
+            let leader = module_ids[0];
+            elect_leader(leader, &mut consensus_modules);
+
+            let value: &[u8] = b"foo";
+            let query = into_reader(&messages::proposal_request(value));
+            let mut actions = Actions::new();
+
+            let client = ClientId::new();
+
+            consensus_modules.get_mut(&leader)
+                    .unwrap()
+                    .apply_client_message(client, &query, &mut actions);
+
+            let client_messages = apply_actions(leader, actions, &mut consensus_modules);
+            assert_eq!(1, client_messages.len());
+            for module in consensus_modules.values() {
+                assert_eq!((Term(1), value), module.persistent_log.entry(LogIndex(1)).unwrap());
+            }
+        }
+    }
+
+    #[bench]
+    fn bench_query_1(b: &mut Bencher) {
+        scoped_debug!("benching size {} cluster", 1);
+        b.iter(|| {
+            let mut consensus_modules = new_cluster(1);
+            let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
+            let leader = module_ids[0];
+            elect_leader(leader, &mut consensus_modules);
+
+            let value: &[u8] = b"foo";
+            let query = into_reader(&messages::proposal_request(value));
+            let mut actions = Actions::new();
+
+            let client = ClientId::new();
+
+            consensus_modules.get_mut(&leader)
+                    .unwrap()
+                    .apply_client_message(client, &query, &mut actions);
+
+            let client_messages = apply_actions(leader, actions, &mut consensus_modules);
+            assert_eq!(1, client_messages.len());
+            for module in consensus_modules.values() {
+                assert_eq!((Term(1), value), module.persistent_log.entry(LogIndex(1)).unwrap());
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_query_7(b: &mut Bencher) {
+        scoped_debug!("benching size {} cluster", 7);
+        b.iter(|| {
+            let mut consensus_modules = new_cluster(7);
+            let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
+            let leader = module_ids[0];
+            elect_leader(leader, &mut consensus_modules);
+
+            let value: &[u8] = b"foo";
+            let query = into_reader(&messages::proposal_request(value));
+            let mut actions = Actions::new();
+
+            let client = ClientId::new();
+
+            consensus_modules.get_mut(&leader)
+                    .unwrap()
+                    .apply_client_message(client, &query, &mut actions);
+
+            let client_messages = apply_actions(leader, actions, &mut consensus_modules);
+            assert_eq!(1, client_messages.len());
+            for module in consensus_modules.values() {
+                assert_eq!((Term(1), value), module.persistent_log.entry(LogIndex(1)).unwrap());
+            }
+        })
     }
 }
