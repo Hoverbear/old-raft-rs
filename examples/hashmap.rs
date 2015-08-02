@@ -221,7 +221,7 @@ fn cas(args: &Args) {
     let mut client = Client::new(cluster);
 
     let new_value = json::to_value(&args.arg_new_value);
-    let expected_value = json::to_value(&args.arg_new_value);
+    let expected_value = json::to_value(&args.arg_expected_value);
     let payload = json::to_string(&Message::Cas(args.arg_key.clone(), expected_value, new_value)).unwrap();
 
     let response = client.propose(payload.as_bytes()).unwrap();
