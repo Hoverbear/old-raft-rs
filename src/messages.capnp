@@ -28,6 +28,8 @@ struct Message {
         appendEntriesResponse @1 :AppendEntriesResponse;
         requestVoteResponse @2 :RequestVoteResponse;
         requestVoteRequest @3 :RequestVoteRequest;
+        installSnapshotRequest @4 :InstallSnapshotRequest;
+        installSnapshotResponse @5 :InstallSnapshotResponse;
     }
 }
 
@@ -169,4 +171,32 @@ struct CommandResponse {
     # The client request failed because the Raft node is not the leader.
     # The value returned may be the address of the current leader.
   }
+}
+
+struct InstallSnapshotRequest {
+    term @0 :UInt64;
+    # Leader's term.
+
+    leaderId @1 :UInt64;
+    # So follower can redirect clients.
+
+    lastIncludedIndex @2 :UInt64;
+    # The snapshot replaces all entries up through and including this index.
+
+    lastIncludedTerm @3 :UInt64;
+    # The term of lastIncludedIndex.
+
+    offset @4 :UInt64;
+    # The byte offset where chunk is positions in snapshot file.
+
+    data @5 :Data;
+    # Raw bytes of the snapshot chunk, starting at offset.
+
+    done @6 :Bool;
+    # `true` if this is the last chunk.
+}
+
+struct InstallSnapshotResponse {
+    term @0 :UInt64;
+    # `currentTerm` for the `Leader` to update itself.
 }
