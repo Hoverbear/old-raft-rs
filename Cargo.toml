@@ -40,8 +40,8 @@ license = "MIT"
 build = "build.rs"
 
 # Dependencies
-[build-dependencies.capnpc]
-git = "https://github.com/dwrensha/capnpc-rust"
+[build-dependencies]
+capnpc = "0.2.5"
 
 [dependencies]
 bufstream = "*"
