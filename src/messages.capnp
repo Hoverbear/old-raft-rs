@@ -26,8 +26,12 @@ struct Message {
     union {
         appendEntriesRequest @0 :AppendEntriesRequest;
         appendEntriesResponse @1 :AppendEntriesResponse;
+
         requestVoteResponse @2 :RequestVoteResponse;
         requestVoteRequest @3 :RequestVoteRequest;
+
+        membershipRequest @4 :MembershipRequest;
+        membershipResponse @5 :MembershipResponse;
     }
 }
 
@@ -169,4 +173,29 @@ struct CommandResponse {
     # The client request failed because the Raft node is not the leader.
     # The value returned may be the address of the current leader.
   }
+}
+
+struct MembershipRequest {
+    union {
+        add @0 :Text;
+        # Address of the server to add to configuration.
+
+        remove @1 :Text;
+        # Address of the server to remove from configuration.
+    }
+}
+
+struct MembershipResponse {
+    union {
+        success @0 :Text;
+        # If the addition succeeded. Text is address of recent leader.
+
+        notLeader @1 :Text;
+        # The request failed since the node is not the leader. Try again on
+        # the leader (text).
+
+        timeout @2 :Void;
+        # If the new server does not make progress for an election timeout.
+        # (Only used in `add`)
+    }
 }
