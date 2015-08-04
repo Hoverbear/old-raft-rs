@@ -24,26 +24,51 @@
 //!
 //! Consuming this library works in a few parts:
 //!
-//! 1. Implement `Log` and `StateMachine` such that they will hook into your application.
-//! 2. Create a `Raft` with those impls which will spawn it's own `Server` and join with a cluster.
-//! 3. Interact with the cluster by issuing `append()` calls.
-//! 4. React to calls to `apply()` from the implemented `StateMachine`
+//! 1. Implement or consume a Persistent Log and a State Machine such that they will hook into
+//!    your application desirably.
+//! 2. Create a `Server` with those implementations. It will independently fire up and join the
+//!    cluster.
+//! 3. Interact with the cluster by issuing `.propose()` and `.query()` calls via the `Client`
+//! 4. React to calls to `.propose()` and `.query()` from the implemented `StateMachine`
 //!
-//! It's important to note that issuing an `append()` call to `Raft` does not (at this time)
-//! necessarily gaurantee that the entry has been applied to the `StateMachine`, since it must be
-//! successfully replicated across a majority of nodes before it is applied.
+//! ## Peristent Log
 //!
-//! ## State
+//! A `Log` represents the **replicated, persistent log** of your application. It has a
+//! strong ordering such that `A → B → C` and should **only** act to store information. Entries
+//! placed into the log should not be acted on in any way by the consuming application as they
+//! have not been committed to the cluster.
 //!
-//!     // TODO
+//! Some ideas for a Persistent Log implementation:
+//!   * A PostgreSQL / SQLite instance.
+//!   * A plain old file.
+//!   * A vector in memory *(Note: Log compaction is still pending, so be aware of running out!)*
 //!
-//! ## StateMachine
+//! > It is our belief that in many cases the implementation of `Log` will be generic to
+//! > application purposes. You are encouraged to submit your own implementations to us!
 //!
-//!     // TODO
+//! ## State Machine
+//!
+//! The `StateMachine` represents the **stateful representation** of your application. Events
+//! are applied to the `StateMachine` in the correct ordering at the time of commit. This is where
+//! your application **should** act on information.
+//!
+//! In the `StateMachine` there are both mutable (`.apply()`) and immutable (`.query()`) calls.
+//! There is a considerable performance difference, as `.query()` calls do not pass through the
+//! durablable `Log` while `.apply()` events do.
+//!
+//! Some ideas for a State Machine implementation:
+//!   * A Hashmap or key-value store (Example provided)
+//!   * A single register (Example provided)
+//!   * Basically anything from `std::collections`
 //!
 //! ## Client Requests
 //!
-//!     // TODO
+//! Client requests are the **only** way to interact with the Raft cluster. Calls to `.propose()`
+//! and `.query()` are automatically routed to the relevant `Leader` node and behave as blocking
+//! calls.
+//!
+//! This means `.propose()` won't return until the entry is durably replicated into the log of at
+//! least the majority of the cluster and has been commited.
 //!
 
 extern crate bufstream;
