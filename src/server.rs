@@ -310,11 +310,11 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
                     io::Error::new(io::ErrorKind::WouldBlock, "listener.accept() returned None"))))
             .and_then(|stream| Connection::unknown(stream))
             .and_then(|mut conn| match self.connections.reserve_token() {
-                Some(mut t) => conn.register(event_loop, *t.get_key())
-                                   .map(|()| {
-                                       scoped_debug!("new connection accepted: {:?}", conn);
-                                       t.insert(conn)
-                                   }),
+                Some(t) => conn.register(event_loop, *t.get_key())
+                               .map(|()| {
+                                   scoped_debug!("new connection accepted: {:?}", conn);
+                                   t.insert(conn)
+                               }),
                 None => Err(Error::Raft(RaftError::ConnectionLimitReached)),
             })
     }
