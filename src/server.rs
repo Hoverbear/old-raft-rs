@@ -309,22 +309,10 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
             .and_then(|stream_opt| stream_opt.ok_or(Error::Io(
                     io::Error::new(io::ErrorKind::WouldBlock, "listener.accept() returned None"))))
             .and_then(|stream| Connection::unknown(stream))
-            .and_then(|conn| self.connections.insert(conn)
-                                 .map_err(|_| Error::Raft(RaftError::ConnectionLimitReached)))
-            .and_then(|token|
-                // Until this point if any failures occur the connection is simply dropped. From
-                // this point down, the connection is stored in the slab, so dropping it would
-                // result in a leaked TCP stream and slab entry. Instead of dropping the
-                // connection, it will be reset if an error occurs.
-                self.connections[token]
-                    .register(event_loop, token)
-                    .or_else(|_| {
-                        self.reset_connection(event_loop, token);
-                        Err(Error::Raft(RaftError::ConnectionRegisterFailed))
-                    })
-                    .map(|_|
-                        scoped_debug!("new connection accepted: {:?}", self.connections[token]))
-            )
+            .and_then(|mut conn| match self.connections.reserve_token() {
+                Some(mut t) => conn.register(event_loop, *t.get_key()).map(|()| t.insert(conn)),
+                None => Err(Error::Raft(RaftError::ConnectionLimitReached)),
+            })
     }
 }
 
