@@ -70,7 +70,8 @@
 //! calls.
 //!
 //! This means `.propose()` won't return until the entry is durably replicated into the log of at
-//! least the majority of the cluster and has been commited.
+//! least the majority of the cluster and has been commited. `.query()` will perform better if
+//! you wish to only read data and not have it pass through the persisted log.
 //!
 
 extern crate bufstream;
@@ -240,7 +241,7 @@ impl fmt::Display for LogIndex {
 }
 
 /// The id of a Raft server. Must be unique among the participants in a
-/// consensus group.
+/// consensus group. Represented as a `u64`.
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ServerId(u64);
 impl From<u64> for ServerId {
@@ -264,7 +265,7 @@ impl fmt::Display for ServerId {
     }
 }
 
-/// The ID of a Raft client.
+/// The ID of a Raft client. Represented as a `Uuid::v4`.
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ClientId(Uuid);
 impl ClientId {
@@ -279,6 +280,16 @@ impl ClientId {
             Some(uuid) => Ok(ClientId(uuid)),
             None => Err(Error::Raft(RaftError::InvalidClientId)),
         }
+    }
+}
+impl From<Uuid> for ClientId {
+    fn from(val: Uuid) -> ClientId {
+        ClientId(val)
+    }
+}
+impl Into<Uuid> for ClientId {
+    fn into(self) -> Uuid {
+        self.0
     }
 }
 impl fmt::Debug for ClientId {
