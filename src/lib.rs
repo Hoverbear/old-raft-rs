@@ -39,6 +39,7 @@
 //! have not been committed to the cluster.
 //!
 //! Some ideas for a Persistent Log implementation:
+//!
 //!   * A PostgreSQL / SQLite instance.
 //!   * A plain old file.
 //!   * A vector in memory *(Note: Log compaction is still pending, so be aware of running out!)*
@@ -57,6 +58,7 @@
 //! durablable `Log` while `.apply()` events do.
 //!
 //! Some ideas for a State Machine implementation:
+//!
 //!   * A Hashmap or key-value store (Example provided)
 //!   * A single register (Example provided)
 //!   * Basically anything from `std::collections`
