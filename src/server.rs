@@ -294,9 +294,10 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
                                 }
                                 _ => unreachable!()
                             }
-                            // Inform consensus about the new peer address.
-                            self.consensus.update_peer(peer_id, peer_addr)
-                            // TODO: add reconnect messages from consensus.
+                            // Notify consensus that the connection reset.
+                            let mut actions = Actions::new();
+                            self.consensus.peer_connection_reset(peer_id, peer_addr, &mut actions);
+                            self.execute_actions(event_loop, actions);
                         },
                         connection_preamble::id::Which::Client(Ok(id)) => {
                             let client_id = try!(ClientId::from_bytes(id));
@@ -419,15 +420,24 @@ impl<L, M> Handler for Server<L, M> where L: Log, M: StateMachine {
                                "{:?} missing timeout: {:?}", self.connections[token], timeout);
                 let local_addr = self.listener.local_addr();
                 scoped_assert!(local_addr.is_ok(), "could not obtain listener address");
+                let id = match *self.connections[token].kind() {
+                    ConnectionKind::Peer(id) => id,
+                    _ => unreachable!(),
+                };
+                let addr = self.connections[token].addr().clone();
                 self.connections[token]
                     .reconnect_peer(self.id, &local_addr.unwrap())
                     .and_then(|_| self.connections[token].register(event_loop, token))
+                    .map(|_| {
+                        let mut actions = Actions::new();
+                        self.consensus.peer_connection_reset(id, addr, &mut actions);
+                        self.execute_actions(event_loop, actions);
+                    })
                     .unwrap_or_else(|error| {
                         scoped_warn!("unable to reconnect connection {:?}: {}",
                                      self.connections[token], error);
                         self.reset_connection(event_loop, token);
                     });
-                // TODO: add reconnect messages from consensus
             },
         }
     }

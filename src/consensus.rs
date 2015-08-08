@@ -1,16 +1,16 @@
-//! The `Consensus` is a state-machine (not to be confused with the `StateMachine` trait) which
-//!  implements the logic of the Raft Protocol. A `Consensus` receives events from the local
-//!  `Server`.  The set of possible events is specified by the Raft Protocol:
+//! `Consensus` is a state-machine (not to be confused with the `StateMachine` trait) which
+//! implements the logic of the Raft Protocol. A `Consensus` receives events from the local
+//! `Server`. The set of possible events is specified by the Raft Protocol:
 //!
 //! ```text
 //! Event = AppendEntriesRequest | AppendEntriesResponse
-//!       | RequestVoteRequest | RequestVoteResponse
-//!       | ElectionTimeout | HeartbeatTimeout
-//!       | ClientCommand
+//!       | RequestVoteRequest   | RequestVoteResponse
+//!       | ElectionTimeout      | HeartbeatTimeout
+//!       | ClientProposal       | ClientQuery
 //! ```
-//! In response to receiving an event, the `Consensus` may mutate its own state, apply a command to
-//!  the local `StateMachine`, or return an event to be sent to one or more remote `Server` or
-//!  `Client` instances.
+//!
+//! In response to an event, the `Consensus` may mutate its own state, apply a command to the local
+//! `StateMachine`, or return an event to be sent to one or more remote peers or clients.
 
 use std::{cmp, fmt};
 use std::collections::HashMap;
@@ -43,7 +43,7 @@ const ELECTION_MIN: u64 = 1500;
 const ELECTION_MAX: u64 = 3000;
 const HEARTBEAT_DURATION: u64 = 1000;
 
-/// Timeout types for Raft.
+/// Consensus timeout types.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ConsensusTimeout {
     // An election timeout. Randomized value.
@@ -53,7 +53,7 @@ pub enum ConsensusTimeout {
 }
 
 impl ConsensusTimeout {
-    /// Returns how long the timeout period is.
+    /// Returns the timeout period in milliseconds.
     pub fn duration_ms(&self) -> u64 {
         match *self {
             ConsensusTimeout::Election => rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX),
@@ -100,17 +100,17 @@ impl Actions {
     }
 }
 
-/// A Consensus Module of a Raft distributed state machine. A Raft Consensus Module controls a
-/// client state machine, to which it applies commands in a globally consistent order.
+/// An instance of a Raft state machine. The Consensus controls a client state machine, to which it
+/// applies entries in a globally consistent order.
 pub struct Consensus<L, M> {
-    /// The ID of this consensus module.
+    /// The ID of this consensus instance.
     id: ServerId,
-    /// The IDs of the other consensus modules in the cluster.
+    /// The IDs of peers in the consensus group.
     peers: HashMap<ServerId, SocketAddr>,
 
-    /// The persistent log store.
+    /// The persistent log.
     persistent_log: L,
-    /// The client state machine to which client commands will be applied.
+    /// The client state machine to which client commands are applied.
     state_machine: M,
 
     /// Index of the latest entry known to be committed.
@@ -158,19 +158,12 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         actions
     }
 
-    /// Returns the peers (`Id`s only) of the consensus modules.
+    /// Returns the consenus peers.
     pub fn peers(&self) -> &HashMap<ServerId, SocketAddr> {
         &self.peers
     }
 
-    /// Updates the address at which to contact the node with the
-    /// given `Id`.
-    pub fn update_peer(&mut self, id: ServerId, addr: SocketAddr) -> () {
-        &self.peers.insert(id, addr).expect("new peer insertion not supported");
-    }
-
-    /// Applies a peer message to the consensus module. This function dispatches a generic request
-    /// to its appropriate handler.
+    /// Applies a peer message to the consensus state machine.
     pub fn apply_peer_message<R>(&mut self, from: ServerId, message: &R, actions: &mut Actions)
     where R: MessageReader {
         push_log_scope!("{:?}", self);
@@ -215,7 +208,67 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         }
     }
 
-    /// Apply an append entries request to the Raft consensus module.
+    /// Notifies the consensus state machine that a new connection to the peer exists, and
+    /// in-flight messages may have been lost.
+    pub fn peer_connection_reset(&mut self,
+                                 peer: ServerId,
+                                 addr: SocketAddr,
+                                 actions: &mut Actions) {
+        push_log_scope!("{:?}", self);
+        self.peers.insert(peer, addr).expect("new peer insertion not supported");
+        match self.state {
+            ConsensusState::Leader => {
+                // Send any outstanding entries to the peer, or an empty heartbeat if there are no
+                // outstanding entries.
+                let from_index = Into::<u64>::into(self.leader_state.next_index(&peer));
+                let until_index = Into::<u64>::into(self.latest_log_index()) + 1;
+
+                let prev_log_index = from_index - 1;
+                let prev_log_term =
+                    if prev_log_index == 0 {
+                        Term(0)
+                    } else {
+                        self.persistent_log.entry(LogIndex(prev_log_index)).unwrap().0
+                    };
+
+                let mut message = MallocMessageBuilder::new_default();
+                {
+                    let mut request = message.init_root::<message::Builder>()
+                                             .init_append_entries_request();
+                    request.set_term(self.current_term().into());
+
+                    request.set_prev_log_index(prev_log_index);
+                    request.set_prev_log_term(prev_log_term.into());
+                    request.set_leader_commit(self.commit_index.into());
+
+                    let mut entries = request.init_entries((until_index - from_index) as u32);
+                    for (n, index) in (from_index..until_index).enumerate() {
+                        entries.set(n as u32, self.persistent_log.entry(LogIndex::from(index)).unwrap().1);
+                    }
+                }
+                self.leader_state.set_next_index(peer, LogIndex(until_index));
+                actions.peer_messages.push((peer, Rc::new(message)));
+            },
+            ConsensusState::Candidate => {
+                // Resend the request vote request if a response has not yet been receieved.
+                if self.candidate_state.peer_voted(peer) { return; }
+                let current_term = self.current_term();
+                let latest_index = self.latest_log_index();
+                let latest_term = self.persistent_log.latest_log_term().unwrap();
+
+                let message = messages::request_vote_request(current_term,
+                                                             latest_index,
+                                                             latest_term);
+                actions.peer_messages.push((peer, message));
+            },
+            ConsensusState::Follower => {
+                // No message is necessary; if the peer is a leader or candidate they will send a
+                // message.
+            },
+        }
+    }
+
+    /// Apply an append entries request to the consensus state machine.
     fn append_entries_request(&mut self,
                               from: ServerId,
                               request: append_entries_request::Reader,
@@ -307,7 +360,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         }
     }
 
-    /// Apply an append entries response to the Raft consensus module.
+    /// Apply an append entries response to the consensus state machine.
     ///
     /// The provided message may be initialized with a new AppendEntries request to send back to
     /// the follower in the case that the follower's log is behind.
@@ -370,11 +423,9 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
             }
         }
 
-        // TODO: add client responses based on new commit index
-
         let next_index = self.leader_state.next_index(&from);
         if next_index <= local_latest_log_index {
-            // If the module is behind, send it entries to catch up.
+            // If the peer is behind, send it entries to catch up.
             scoped_debug!("responder is behind, catching them up");
             let prev_log_index = next_index - 1;
             let prev_log_term =
@@ -403,14 +454,14 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
             self.leader_state.set_next_index(from, local_latest_log_index + 1);
             actions.peer_messages.push((from, Rc::new(message)));
         } else {
-            // If the module is caught up, set a heartbeat timeout.
+            // If the peer is caught up, set a heartbeat timeout.
             scoped_debug!("responder is caught up");
             let timeout = ConsensusTimeout::Heartbeat(from);
             actions.timeouts.push(timeout);
         }
     }
 
-    /// Apply a request vote request to the Raft module.
+    /// Applies a peer request vote request to the consensus state machine.
     fn request_vote_request(&mut self,
                             candidate: ServerId,
                             request: request_vote_request::Reader,
@@ -454,7 +505,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         actions.peer_messages.push((candidate, message));
     }
 
-    /// Apply a request vote response to the Raft consensus module.
+    /// Applies a request vote response to the consensus state machine.
     fn request_vote_response(&mut self,
                              from: ServerId,
                              response: request_vote_response::Reader,
@@ -488,23 +539,20 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         };
     }
 
-    /// Apply a client proposal to the Raft consensus module.
+    /// Applies a client proposal to the consensus state machine.
     fn proposal_request(&mut self,
                         from: ClientId,
                         request: proposal_request::Reader,
                         actions: &mut Actions) {
-        scoped_debug!("proposal from Client({})", from);
+        scoped_trace!("proposal from Client({})", from);
 
         if self.is_candidate() || (self.is_follower() && self.follower_state.leader.is_none()) {
-            scoped_debug!("proposal received, but leader is not known");
             actions.client_messages.push((from.into(), messages::command_response_unknown_leader()));
         } else if self.is_follower() {
-            scoped_debug!("proposal received, but consensus module is not leader");
             let message =
                 messages::command_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
             actions.client_messages.push((from, message));
         } else {
-            scoped_debug!("proposal received, consensus module processing");
             let prev_log_index = self.latest_log_index();
             let prev_log_term = self.latest_log_term();
             let term = self.current_term();
@@ -527,7 +575,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                                                                self.commit_index);
                 // In a multi-node cluster must message peers and wait.
                 for &peer in self.peers.keys() {
-                    scoped_debug!("consensus module queuing message for peer {}", peer);
+                    scoped_debug!("queuing message for peer {}", peer);
                     if self.leader_state.next_index(&peer) == prev_log_index + 1 {
                         actions.peer_messages.push((peer, message.clone()));
                     }
@@ -536,7 +584,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         }
     }
 
-    /// Issue a client query to the Raft consensus module.
+    /// Applies a client query to the state machine.
     fn query_request(&mut self,
                     from: ClientId,
                     request: query_request::Reader,
@@ -558,8 +606,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         }
     }
 
-    /// Trigger a heartbeat timeout on the Raft consensus module.
-    /// `peer` is the ID of the peer which
+    /// Triggers a heartbeat timeout for the peer.
     fn heartbeat_timeout(&mut self, peer: ServerId, actions: &mut Actions) {
         scoped_debug!("HeartbeatTimeout");
         scoped_assert!(self.is_leader());
@@ -576,10 +623,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         actions.peer_messages.push((peer, Rc::new(message)));
     }
 
-    /// Trigger an election timeout on the Raft consensus module.
-    ///
-    /// The provided RequestVoteRequest builder may be initialized with a message to send to each
-    /// cluster peer.
+    /// Triggers an election timeout.
     fn election_timeout(&mut self, actions: &mut Actions) {
         scoped_info!("ElectionTimeout");
         scoped_assert!(!self.is_leader());
@@ -598,10 +642,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         }
     }
 
-    /// Transition this Consensus to Leader state.
-    ///
-    /// The provided Actions instance will have an AppendEntriesRequest message
-    /// added for each cluster peer.
+    /// Transitions this consensus state machine to Leader state.
     fn transition_to_leader(&mut self, actions: &mut Actions) {
         scoped_info!("transitioning to Leader");
         let current_term = self.current_term();
@@ -622,10 +663,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         actions.clear_timeouts = true;
     }
 
-    /// Transition this Consensus to Candidate state.
-    ///
-    /// The provided RequestVoteRequest message will be initialized with a message to send to each
-    /// cluster peer.
+    /// Transitions the conensus state machine to Candidate state.
     fn transition_to_candidate(&mut self, actions: &mut Actions) {
         scoped_info!("transitioning to Candidate");
         self.persistent_log.inc_current_term().unwrap();
@@ -634,27 +672,17 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         self.candidate_state.clear();
         self.candidate_state.record_vote(self.id);
 
-        let current_term = self.current_term();
-        let latest_index = self.latest_log_index();
-        let latest_term = self.persistent_log.latest_log_term().unwrap();
+        let message = messages::request_vote_request(self.current_term(),
+                                                     self.latest_log_index(),
+                                                     self.persistent_log.latest_log_term().unwrap());
 
-        let mut message = MallocMessageBuilder::new_default();
-        {
-            let mut request = message.init_root::<message::Builder>()
-                                     .init_request_vote_request();
-            request.set_term(current_term.into());
-            request.set_last_log_index(latest_index.into());
-            request.set_last_log_term(latest_term.into());
-        }
-
-        let message_rc = Rc::new(message);
         for &peer in self.peers().keys() {
-            actions.peer_messages.push((peer, message_rc.clone()));
+            actions.peer_messages.push((peer, message.clone()));
         }
         actions.timeouts.push(ConsensusTimeout::Election);
     }
 
-    /// Advance the commit index and apply committed entries to the state machine, if possible.
+    /// Advances the commit index and applies committed entries to the state machine.
     fn advance_commit_index(&mut self, actions: &mut Actions) {
         scoped_assert!(self.is_leader());
         let majority = self.majority();
@@ -685,8 +713,8 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         }
     }
 
-    /// Apply all committed but unapplied log entries to the state machine.
-    /// Returns the set of return values from the commits applied.
+    /// Applies all committed but unapplied log entries to the state machine.  Returns the set of
+    /// return values from the commits applied.
     fn apply_commits(&mut self) -> HashMap<LogIndex, Vec<u8>> {
         let mut results = HashMap::new();
         while self.last_applied < self.commit_index {
@@ -702,8 +730,9 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         results
     }
 
-    /// Transition to follower state with the provided term. The `voted_for` field will be reset.
-    /// The provided leader hint will replace the last known leader.
+    /// Transitions the consensus state machine to Follower state with the provided term. The
+    /// `voted_for` field will be reset. The provided leader hint will replace the last known
+    /// leader.
     fn transition_to_follower(&mut self,
                               term: Term,
                               leader: ServerId,
@@ -716,22 +745,22 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         actions.timeouts.push(ConsensusTimeout::Election);
     }
 
-    /// Returns `true` if the consensus module is in the Leader state.
+    /// Returns whether the consensus state machine is currently a Leader.
     fn is_leader(&self) -> bool {
         self.state == ConsensusState::Leader
     }
 
-    /// Returns `true` if the consensus module is in the Follower state.
+    /// Returns whether the consensus state machine is currently a Follower.
     fn is_follower(&self) -> bool {
         self.state == ConsensusState::Follower
     }
 
-    /// Returns `true` if the consensus module is in the Candidate state.
+    /// Returns whether the consensus module is currently a Candidate.
     fn is_candidate(&self) -> bool {
         self.state == ConsensusState::Candidate
     }
 
-    /// Returns the current term of the consensus module.
+    /// Returns the current term.
     fn current_term(&self) -> Term {
         self.persistent_log.current_term().unwrap()
     }

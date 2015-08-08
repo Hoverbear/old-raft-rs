@@ -115,6 +115,11 @@ impl CandidateState {
     pub fn clear(&mut self) {
         self.granted_votes.clear();
     }
+
+    /// Returns whether the peer has voted in the current election.
+    pub fn peer_voted(&self, voter: ServerId) -> bool {
+        self.granted_votes.contains(&voter)
+    }
 }
 
 /// The state associated with a Raft consensus module in the `Follower` state.
