@@ -259,6 +259,16 @@ impl Connection {
         scoped_info!("{:?}: reset, will attempt to reconnect in {}ms", self, duration);
         Ok((timeout, handle))
     }
+
+    pub fn clear_messages(&mut self) {
+        if self.write_continuation.is_some() {
+            let message = self.write_queue.pop_front().unwrap();
+            self.write_queue.clear();
+            self.write_queue.push_front(message);
+        } else {
+            self.write_queue.clear();
+        }
+    }
 }
 
 impl fmt::Debug for Connection {

@@ -68,10 +68,12 @@ pub struct Actions {
     pub peer_messages: Vec<(ServerId, Rc<MallocMessageBuilder>)>,
     /// Messages to be send to clients.
     pub client_messages: Vec<(ClientId, Rc<MallocMessageBuilder>)>,
-    /// Whether or not to clear timeouts associated.
+    /// Whether to clear existing consensus timeouts.
     pub clear_timeouts: bool,
     /// Any new timeouts to create.
     pub timeouts: Vec<ConsensusTimeout>,
+    /// Whether to clear outbound peer message queues.
+    pub clear_peer_messages: bool,
 }
 
 impl fmt::Debug for Actions {
@@ -83,8 +85,9 @@ impl fmt::Debug for Actions {
                                                  .iter().map(|client_message| client_message.0)
                                                  .collect();
         write!(fmt, "Actions {{ peer_messages: {:?}, client_messages: {:?}, \
-                     clear_timeouts: {:?}, timeouts: {:?} }}",
-               peer_messages, client_messages, self.clear_timeouts, self.timeouts)
+                     clear_timeouts: {:?}, timeouts: {:?}, clear_peer_messages: {} }}",
+               peer_messages, client_messages, self.clear_timeouts, self.timeouts,
+               self.clear_peer_messages)
     }
 }
 
@@ -96,6 +99,7 @@ impl Actions {
             client_messages: vec![],
             clear_timeouts: false,
             timeouts: vec![],
+            clear_peer_messages: false,
         }
     }
 }
@@ -666,9 +670,10 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         }
 
         actions.clear_timeouts = true;
+        actions.clear_peer_messages = true;
     }
 
-    /// Transitions the conensus state machine to Candidate state.
+    /// Transitions the consensus state machine to Candidate state.
     fn transition_to_candidate(&mut self, actions: &mut Actions) {
         scoped_info!("transitioning to Candidate");
         self.persistent_log.inc_current_term().unwrap();
@@ -685,6 +690,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
             actions.peer_messages.push((peer, message.clone()));
         }
         actions.timeouts.push(ConsensusTimeout::Election);
+        actions.clear_peer_messages = true;
     }
 
     /// Advances the commit index and applies committed entries to the state machine.
@@ -747,6 +753,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         self.state = ConsensusState::Follower;
         self.follower_state.set_leader(leader);
         actions.clear_timeouts = true;
+        actions.clear_peer_messages = true;
         actions.timeouts.push(ConsensusTimeout::Election);
     }
 
