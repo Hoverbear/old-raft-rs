@@ -43,17 +43,18 @@ pub enum ServerTimeout {
     Reconnect(Token),
 }
 
-/// The `Server` is responsible for receiving events from remote `Server` or `Client` instances,
-/// as well as setting election and heartbeat timeouts.  When an event is received, it is applied
-/// to the local `Consensus`. The `Consensus` may optionally return a new event which must be
-/// dispatched to either the `Server` or `Client` which sent the original event, or to all
-/// `Server` instances.
+/// The `Server` is responsible for receiving events from peer `Server` instance or clients,
+/// as well as managing election and heartbeat timeouts. When an event is received, it is applied
+/// to the local `Consensus`. The `Consensus` may optionally return a set of events to be
+/// dispatched to either remote peers or clients.
 ///
-/// Because messages are passed asyncronously between `Server` instances, a `Server` could get
-/// into a situation where multiple events are ready to be dispatched to a single remote `Server`.
-/// In this situation, the `Server` will replace the existing event with the new event, except in
-/// one special circumstance: if the new and existing messages are both `AppendEntryRequest`s with
-/// the same `term`, then the new message will be dropped.
+/// ## Logging
+///
+/// Server instances log events according to frequency and importance. It is recommended to use at
+/// least info level logging when running in production. The warn level is used for unexpected,
+/// but recoverable events. The info level is used for infrequent events such as connection resets
+/// and election results. The debug level is used for frequent events such as client proposals and
+/// heartbeats. The trace level is used for very high frequency debugging output.
 pub struct Server<L, M> where L: Log, M: StateMachine {
 
     /// Id of this server.
@@ -167,7 +168,7 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
     fn execute_actions(&mut self,
                        event_loop: &mut EventLoop<Server<L, M>>,
                        actions: Actions) {
-        scoped_debug!("executing actions: {:?}", actions);
+        scoped_trace!("executing actions: {:?}", actions);
         let Actions {
             peer_messages,
             client_messages,
@@ -312,7 +313,7 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
                         },
                         connection_preamble::id::Which::Client(Ok(id)) => {
                             let client_id = try!(ClientId::from_bytes(id));
-                            scoped_debug!("received new connection from {:?}", client_id);
+                            scoped_debug!("received new client connection from {}", client_id);
                             self.connections[token]
                                 .set_kind(ConnectionKind::Client(client_id));
                             let prev_token = self.client_tokens
@@ -352,8 +353,8 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
                         self.reset_connection(event_loop, token);
                         Err(Error::Raft(RaftError::ConnectionRegisterFailed))
                     })
-                    .map(|_|
-                        scoped_debug!("new connection accepted: {:?}", self.connections[token]))
+                    .map(|_| scoped_debug!("new connection accepted from {}",
+                                           self.connections[token].addr()))
             )
     }
 }
