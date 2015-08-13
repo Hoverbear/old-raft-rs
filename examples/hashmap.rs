@@ -18,13 +18,14 @@ extern crate raft; // <--- Kind of a big deal for this!
 extern crate env_logger;
 extern crate docopt;
 extern crate serde;
+extern crate serde_json;
 extern crate rustc_serialize;
 
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::collections::HashMap;
 
-use serde::json::{self, Value};
+use serde_json::Value;
 use docopt::Docopt;
 
 // Raft's major components. See comments in code on usage and things.
@@ -178,7 +179,7 @@ fn get(args: &Args) {
     // In this example `serde::json` is used to serialize and deserialize messages.
     // Since Raft accepts `[u8]` the way you structure your data, the serialization method you
     // choose, and how you interpret that data is entirely up to you.
-    let payload = json::to_string(&Message::Get(args.arg_key.clone())).unwrap();
+    let payload = serde_json::to_string(&Message::Get(args.arg_key.clone())).unwrap();
 
     // A query executes **immutably** on the leader of the cluster and does not pass through the
     // persistent log. This is intended for querying the current state of the state machine.
@@ -198,8 +199,8 @@ fn put(args: &Args) {
 
     let mut client = Client::new(cluster);
 
-    let new_value = json::to_value(&args.arg_new_value);
-    let payload = json::to_string(&Message::Put(args.arg_key.clone(), new_value)).unwrap();
+    let new_value = serde_json::to_value(&args.arg_new_value);
+    let payload = serde_json::to_string(&Message::Put(args.arg_key.clone(), new_value)).unwrap();
 
     // A propose will go through the persistent log and mutably modify the state machine in some
     // way. This is **much** slower than `.query()`.
@@ -220,9 +221,9 @@ fn cas(args: &Args) {
 
     let mut client = Client::new(cluster);
 
-    let new_value = json::to_value(&args.arg_new_value);
-    let expected_value = json::to_value(&args.arg_expected_value);
-    let payload = json::to_string(&Message::Cas(args.arg_key.clone(), expected_value, new_value)).unwrap();
+    let new_value = serde_json::to_value(&args.arg_new_value);
+    let expected_value = serde_json::to_value(&args.arg_expected_value);
+    let payload = serde_json::to_string(&Message::Cas(args.arg_key.clone(), expected_value, new_value)).unwrap();
 
     let response = client.propose(payload.as_bytes()).unwrap();
 
@@ -254,24 +255,24 @@ impl state_machine::StateMachine for HashmapStateMachine {
     fn apply(&mut self, new_value: &[u8]) -> Vec<u8> {
         // Deserialize
         let string = String::from_utf8_lossy(new_value);
-        let message = json::from_str(&string).unwrap();
+        let message = serde_json::from_str(&string).unwrap();
 
         // Handle
         let response = match message {
             Get(key) => {
                 let old_value = &self.map.get(&key).map(|v| v.clone());
-                json::to_string(old_value)
+                serde_json::to_string(old_value)
             },
             Put(key, value) => {
                 let old_value = &self.map.insert(key, value);
-                json::to_string(old_value)
+                serde_json::to_string(old_value)
             },
             Cas(key, old_check, new) => {
                 if *self.map.get(&key).unwrap() == old_check {
                     let _ = self.map.insert(key, new);
-                    json::to_string(&true)
+                    serde_json::to_string(&true)
                 } else {
-                    json::to_string(&false)
+                    serde_json::to_string(&false)
                 }
             },
         };
@@ -286,13 +287,13 @@ impl state_machine::StateMachine for HashmapStateMachine {
     fn query(&self, query: &[u8]) -> Vec<u8> {
         // Deserialize
         let string = String::from_utf8_lossy(query);
-        let message = json::from_str(&string).unwrap();
+        let message = serde_json::from_str(&string).unwrap();
 
         // Handle
         let response = match message {
             Get(key) => {
                 let old_value = &self.map.get(&key).map(|v| v.clone());
-                json::to_string(old_value)
+                serde_json::to_string(old_value)
             },
             _ => panic!("Can't do mutating requests in query"),
         };
@@ -302,13 +303,13 @@ impl state_machine::StateMachine for HashmapStateMachine {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        json::to_string(&self.map)
+        serde_json::to_string(&self.map)
             .unwrap()
             .into_bytes()
     }
 
     fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) {
-        self.map = json::from_str(&String::from_utf8_lossy(&snapshot_value)).unwrap();
+        self.map = serde_json::from_str(&String::from_utf8_lossy(&snapshot_value)).unwrap();
         ()
     }
 }

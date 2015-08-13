@@ -61,6 +61,7 @@ env_logger = "*"
 # Used in Examples
 docopt = "*"
 serde = "*"
+serde_json = "*"
 serde_macros = "*"
 rustc-serialize = "*"
 bincode = "*"

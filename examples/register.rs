@@ -9,9 +9,15 @@
 //! TODO: For the sake of simplicity of this example, we don't implement a `Log` and just use a
 //! simple testing one. We should improve this in the future.
 
+// In order to use Serde we need to enable these nightly features.
+#![feature(plugin)]
+#![feature(custom_derive)]
+#![plugin(serde_macros)]
+
 extern crate raft; // <--- Kind of a big deal for this!
 extern crate docopt;
 extern crate env_logger;
+extern crate serde;
 extern crate rustc_serialize;
 extern crate bincode;
 
@@ -20,6 +26,7 @@ use std::str::FromStr;
 use std::collections::HashMap;
 
 use docopt::Docopt;
+use bincode::serde::{serialize, deserialize};
 use bincode::SizeLimit;
 
 // Raft's major components. See comments in code on usage and things.
@@ -34,7 +41,7 @@ use raft::{
 /// This is the defined message type for this example. For the sake of simplicity we don't go very
 /// far with this. In a "real" application you may want to more distinctly distinguish between
 /// data meant for `.query()` and data meant for `.propose()`.
-#[derive(RustcEncodable, RustcDecodable, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq)]
 enum Message {
     Get,
     Put(Vec<u8>),
@@ -167,7 +174,7 @@ fn get(args: &Args) {
 
     // Bincode makes it very easy to encode and fire off random enums and structs.
     let payload = Message::Get;
-    let encoded = bincode::encode(&payload, SizeLimit::Infinite).unwrap();
+    let encoded = serialize(&payload, SizeLimit::Infinite).unwrap();
 
     // A query executes **immutably** on the leader of the cluster and does not pass through the
     // persistent log. This is intended for querying the current state of the state machine.
@@ -175,7 +182,7 @@ fn get(args: &Args) {
 
     // A response will block until it's query is complete. This is intended and expected behavior
     // based on the papers specifications.
-    let val = bincode::decode::<String>(&response).unwrap();
+    let val = deserialize::<String>(&response).unwrap();
     println!("{}", val)
 }
 
@@ -188,13 +195,13 @@ fn put(args: &Args) {
     let mut client = Client::new(cluster);
 
     let payload = Message::Put(args.arg_new_value.clone().into_bytes());
-    let encoded = bincode::encode(&payload, SizeLimit::Infinite).unwrap();
+    let encoded = serialize(&payload, SizeLimit::Infinite).unwrap();
 
     // A propose will go through the persistent log and mutably modify the state machine in some
     // way. This is **much** slower than `.query()`.
     let response = client.propose(&encoded).unwrap();
 
-    let val = bincode::decode::<String>(&response).unwrap();
+    let val = deserialize::<String>(&response).unwrap();
     println!("{}", val)
 }
 
@@ -210,11 +217,11 @@ fn cas(args: &Args) {
     let payload = Message::Cas(
         args.arg_expected_value.clone().into_bytes(),
         args.arg_new_value.clone().into_bytes());
-    let encoded = bincode::encode(&payload, SizeLimit::Infinite).unwrap();
+    let encoded = serialize(&payload, SizeLimit::Infinite).unwrap();
 
     let response = client.propose(&encoded).unwrap();
 
-    let val = bincode::decode::<String>(&response).unwrap();
+    let val = deserialize::<String>(&response).unwrap();
     println!("{}", val)
 }
 
@@ -243,23 +250,23 @@ impl state_machine::StateMachine for RegisterStateMachine {
         let old_value = self.value.clone();
 
         // Deserialize
-        let message = bincode::decode::<Message>(&proposal).unwrap();
+        let message = deserialize::<Message>(&proposal).unwrap();
 
         // Handle
         let response = (match message {
             Message::Put(val) => {
                 self.value.clear();
                 self.value.extend(val);
-                bincode::encode(&old_value, SizeLimit::Infinite)
+                serialize(&old_value, SizeLimit::Infinite)
             },
-            Message::Get => bincode::encode(&old_value, SizeLimit::Infinite),
+            Message::Get => serialize(&old_value, SizeLimit::Infinite),
             Message::Cas(test, new) => {
                 if test == old_value {
                     self.value.clear();
                     self.value.extend(new);
-                    bincode::encode(&true, SizeLimit::Infinite)
+                    serialize(&true, SizeLimit::Infinite)
                 } else {
-                    bincode::encode(&false, SizeLimit::Infinite)
+                    serialize(&false, SizeLimit::Infinite)
                 }
             },
         }).unwrap();
@@ -276,11 +283,11 @@ impl state_machine::StateMachine for RegisterStateMachine {
         let old_value = self.value.clone();
 
         // Deserialize
-        let message = bincode::decode::<Message>(&query).unwrap();
+        let message = deserialize::<Message>(&query).unwrap();
 
         // Handle
         let response = (match message {
-            Message::Get => bincode::encode(&old_value, SizeLimit::Infinite),
+            Message::Get => serialize(&old_value, SizeLimit::Infinite),
             _ => panic!("Cannot mutate from query!"),
         }).unwrap();
 
