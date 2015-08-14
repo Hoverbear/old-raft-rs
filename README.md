@@ -64,16 +64,24 @@ cargo build
 
 ## Examples ##
 
-You can run the examples like so:
+You can run a single-node `register` example like this:
 
 ```bash
-RUST_LOG=raft=debug cargo run --example register server 1 127.0.0.1:8080
+RUST_LOG=raft=debug cargo run --example register server 1 1 127.0.0.1:8080
 ```
 
 There are currently examples showing:
 
 * **Register:** A single shared, replicated buffer for storing some data. Uses `bincode`.
 * **Hashmap:** A replicated hash table that stores `json::Value` with `String`s as keys. Uses `serde`.
+
+For a multi-node example (`hashmap` shown for variety), make sure to include all the peers on all instances:
+```bash
+# Node 1
+RUST_LOG=raft=debug cargo run --example hashmap server 1 1 127.0.0.1:8080 2 127.0.0.1:8081
+# Node 2
+RUST_LOG=raft=debug cargo run --example hashmap server 2 1 127.0.0.1:8080 2 127.0.0.1:8081
+```
 
 We'd love it if you contributed your own or expanded on ours!
 
