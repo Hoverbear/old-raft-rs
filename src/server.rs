@@ -514,7 +514,7 @@ mod tests {
     }
 
     /// Tests that a Server connects to peer at startup, and reconnects when the
-    /// connection is droped.
+    /// connection is dropped.
     #[test]
     fn test_peer_connect() {
         setup_test!("test_peer_connect");
@@ -588,7 +588,7 @@ mod tests {
         assert!(stream_shutdown(&mut in_stream));
     }
 
-    /// Tests that the server will accept a client connection, then dispose of
+    /// Tests that the server will accept a client connection, then disposes of
     /// it when the client disconnects.
     #[test]
     fn test_client_accept() {

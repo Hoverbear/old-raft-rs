@@ -242,9 +242,10 @@ impl RegisterStateMachine {
 /// used in Raft. Feel encouraged to base yours of one of ours in these examples.
 impl state_machine::StateMachine for RegisterStateMachine {
 
-    /// `apply()` is called on when a client's `.propose()` is commited and reaches the state
-    /// machine. At this point it is durable and is going to be applied on at least half the nodes
-    /// within the next couple round trips.
+    /// `apply()` is called on when a client's `.propose()` is committed and
+    /// reaches the state machine. At this point the proposal is durably stored
+    /// on a majority of peers. The proposal will be applied to follower's state
+    /// machines after the next communication with the master.
     fn apply(&mut self, proposal: &[u8]) -> Vec<u8> {
         // Store the old value (example specific)
         let old_value = self.value.clone();
@@ -275,7 +276,7 @@ impl state_machine::StateMachine for RegisterStateMachine {
         response
     }
 
-    /// `query()` is called on when a client's `.query()` is recieved. It does not go through the
+    /// `query()` is called on when a client's `.query()` is received. It does not go through the
     /// persistent log, it does not mutate the state of the state machine, and it is intended to be
     /// fast.
     fn query(&self, query: &[u8]) -> Vec<u8> {

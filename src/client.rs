@@ -22,8 +22,8 @@ pub struct Client {
     /// The `Uuid` of the client, should be unique in the cluster.
     pub id: ClientId,
     /// The current connection to the current leader.
-    /// If it is none it may mean that there is no estabished leader or that there has been
-    /// a disconnection.
+    /// If it is `None`, there may be no established leader, or a connection
+    /// issue.
     leader_connection: Option<BufStream<TcpStream>>,
     /// A lookup for the cluster's nodes.
     cluster: HashSet<SocketAddr>,
