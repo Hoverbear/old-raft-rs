@@ -19,12 +19,14 @@ use messages_capnp::{
 
 // ConnectionPreamble
 
-pub fn server_connection_preamble(id: ServerId) -> Rc<MallocMessageBuilder> {
+pub fn server_connection_preamble(id: ServerId, addr: &SocketAddr) -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
-        message.init_root::<connection_preamble::Builder>()
+        let mut server = message.init_root::<connection_preamble::Builder>()
                .init_id()
-               .set_server(id.into());
+               .init_server();
+        server.set_addr(&format!("{}", addr));
+        server.set_id(id.into());
     }
     Rc::new(message)
 }

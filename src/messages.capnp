@@ -9,7 +9,7 @@ struct ConnectionPreamble {
     # client.
 
     id :union {
-        server @0 :UInt64;
+        server @0 :Peer;
         # Indicates that the connecting process is a Raft peer, and that all
         # further messages in the connection (in both directions) will be of
         # type Message.
@@ -20,6 +20,14 @@ struct ConnectionPreamble {
         # all replys from the server to the client will be of type
         # ClientResponse.
     }
+}
+
+struct Peer {
+   id @0 :UInt64;
+
+   addr @1 :Text;
+   # The address to use for reconnecting or to redirect clients to
+   # when not leader.
 }
 
 struct Message {
@@ -107,7 +115,7 @@ struct RequestVoteResponse {
     # up-to-date with the voter's log.
 
     internalError @5 :Text;
-    # An internal error occured; a description is included.
+    # An internal error occurred; a description is included.
   }
 }
 
@@ -133,13 +141,13 @@ struct PingRequest {
 struct PingResponse {
 
   term @0 :UInt64;
-  # The servers current term.
+  # The server's current term.
 
   index @1 :UInt64;
-  # The servers current index.
+  # The server's current index.
 
   state :union {
-  # The servers current state.
+  # The server's current state.
     leader @2 :Void;
     follower @3 :Void;
     candidate @4 :Void;

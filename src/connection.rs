@@ -67,6 +67,8 @@ impl ConnectionKind {
 
 pub struct Connection {
     kind: ConnectionKind,
+    /// The address to reconnect to - for a connection initiated by the remote,
+    /// this is not the remote address.
     addr: SocketAddr,
     stream: TcpStream,
     backoff: Backoff,
@@ -122,6 +124,14 @@ impl Connection {
 
     pub fn set_kind(&mut self, kind: ConnectionKind) {
         self.kind = kind;
+    }
+
+    pub fn addr(&self) -> &SocketAddr {
+        &self.addr
+    }
+
+    pub fn set_addr(&mut self, addr: SocketAddr) {
+        self.addr = addr;
     }
 
     /// Writes queued messages to the socket.
@@ -218,14 +228,16 @@ impl Connection {
                   })
     }
 
-    pub fn reconnect_peer(&mut self, id: ServerId) -> Result<()> {
+    /// Reconnects to the given peer ID and sends the preamble, advertising the
+    /// given local address to the peer.
+    pub fn reconnect_peer(&mut self, id: ServerId, local_addr: &SocketAddr) -> Result<()> {
         scoped_trace!("{:?}: reconnect", self);
         self.stream = try!(TcpStream::connect(&self.addr));
         self.is_connected = true;
         self.read_continuation = None;
         self.write_continuation = None;
         self.write_queue.clear();
-        self.send_message(messages::server_connection_preamble(id));
+        self.send_message(messages::server_connection_preamble(id, local_addr));
         Ok(())
     }
 
