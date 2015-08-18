@@ -417,9 +417,10 @@ impl<L, M> Handler for Server<L, M> where L: Log, M: StateMachine {
             ServerTimeout::Reconnect(token) => {
                 scoped_assert!(self.reconnection_timeouts.remove(&token).is_some(),
                                "{:?} missing timeout: {:?}", self.connections[token], timeout);
+                let local_addr = self.listener.local_addr();
+                scoped_assert!(local_addr.is_ok(), "could not obtain listener address");
                 self.connections[token]
-                    // TODO(tschottdorf): alternatives to unwrap() here?
-                    .reconnect_peer(self.id, &self.listener.local_addr().unwrap())
+                    .reconnect_peer(self.id, &local_addr.unwrap())
                     .and_then(|_| self.connections[token].register(event_loop, token))
                     .unwrap_or_else(|error| {
                         scoped_warn!("unable to reconnect connection {:?}: {}",
