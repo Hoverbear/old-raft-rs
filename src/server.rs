@@ -4,6 +4,7 @@
 //! time as described by the Raft Consensus Algorithm.
 
 use std::{fmt, io};
+use std::str::FromStr;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::thread::{self, JoinHandle};
@@ -117,7 +118,7 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
             scoped_assert!(server.peer_tokens.insert(peer_id, token).is_none());
 
             let mut connection = &mut server.connections[token];
-            connection.send_message(messages::server_connection_preamble(id));
+            connection.send_message(messages::server_connection_preamble(id, &addr));
             try!(connection.register(&mut event_loop, token));
         }
 
@@ -259,26 +260,43 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
                 ConnectionKind::Unknown => {
                     let preamble = try!(message.get_root::<connection_preamble::Reader>());
                     match try!(preamble.get_id().which()) {
-                        connection_preamble::id::Which::Server(id) => {
-                            let peer_id = ServerId(id);
-                            scoped_debug!("received new connection from {:?}", peer_id);
+                        connection_preamble::id::Which::Server(peer) => {
+                            let peer = try!(peer);
+                            let peer_id = ServerId(peer.get_id());
+
+                            // Not the source address of this connection, but the
+                            // address the peer tells us it's listening on.
+                            let peer_addr = SocketAddr::from_str(try!(peer.get_addr())).unwrap();
+                            scoped_debug!("received new connection from {:?} ({})", peer_id, peer_addr);
 
                             self.connections[token].set_kind(ConnectionKind::Peer(peer_id));
-                            let prev_token = self.peer_tokens
-                                                 .insert(peer_id, token)
-                                                 .expect("peer token not found");
+                            // Use the advertised address, not the remote's source
+                            // address, for future retries in this connection.
+                            self.connections[token].set_addr(peer_addr);
 
-                            // Close the existing connection.
-                            self.connections
-                                .remove(prev_token)
-                                .expect("peer connection not found");
+                            let prev_token = Some(self.peer_tokens
+                                                      .insert(peer_id, token)
+                                                      .expect("peer token not found"));
 
-                            // Clear any timeouts associated with the existing connection.
-                            self.reconnection_timeouts
-                                .remove(&prev_token)
-                                .map(|handle| scoped_assert!(event_loop.clear_timeout(handle)));
+                            // Close the existing connection, if any.
+                            // Currently, prev_token is never `None`; see above.
+                            // With config changes, this will have to be handled.
+                            match prev_token {
+                                Some(tok) => {
+                                    self.connections
+                                        .remove(tok)
+                                        .expect("peer connection not found");
 
-                            // TODO: add reconnect messages from consensus
+                                    // Clear any timeouts associated with the existing connection.
+                                    self.reconnection_timeouts
+                                        .remove(&tok)
+                                        .map(|handle| scoped_assert!(event_loop.clear_timeout(handle)));
+                                }
+                                _ => unreachable!()
+                            }
+                            // Inform consensus about the new peer address.
+                            self.consensus.update_peer(peer_id, peer_addr)
+                            // TODO: add reconnect messages from consensus.
                         },
                         connection_preamble::id::Which::Client(Ok(id)) => {
                             let client_id = try!(ClientId::from_bytes(id));
@@ -399,8 +417,10 @@ impl<L, M> Handler for Server<L, M> where L: Log, M: StateMachine {
             ServerTimeout::Reconnect(token) => {
                 scoped_assert!(self.reconnection_timeouts.remove(&token).is_some(),
                                "{:?} missing timeout: {:?}", self.connections[token], timeout);
+                let local_addr = self.listener.local_addr();
+                scoped_assert!(local_addr.is_ok(), "could not obtain listener address");
                 self.connections[token]
-                    .reconnect_peer(self.id)
+                    .reconnect_peer(self.id, &local_addr.unwrap())
                     .and_then(|_| self.connections[token].register(event_loop, token))
                     .unwrap_or_else(|error| {
                         scoped_warn!("unable to reconnect connection {:?}: {}",
@@ -467,8 +487,8 @@ mod tests {
         let preamble = message.get_root::<connection_preamble::Reader>().unwrap();
 
         match preamble.get_id().which().unwrap() {
-            connection_preamble::id::Which::Server(id) => {
-                ServerId::from(id)
+            connection_preamble::id::Which::Server(peer) => {
+                ServerId::from(peer.unwrap().get_id())
             },
             _ => {
                 panic!("unexpected preamble id");
@@ -514,7 +534,7 @@ mod tests {
     }
 
     /// Tests that a Server connects to peer at startup, and reconnects when the
-    /// connection is droped.
+    /// connection is dropped.
     #[test]
     fn test_peer_connect() {
         setup_test!("test_peer_connect");
@@ -578,17 +598,25 @@ mod tests {
         let mut out_stream = TcpStream::connect(server_addr).unwrap();
         event_loop.run_once(&mut server).unwrap();
 
+        // This is what the new peer tells the server is listening address is.
+        let fake_peer_addr = SocketAddr::from_str("192.168.0.1:12345").unwrap();
         // Send server the preamble message to the server.
-        serialize::write_message(&mut out_stream, &*messages::server_connection_preamble(peer_id))
+        serialize::write_message(&mut out_stream, &*messages::server_connection_preamble(peer_id, &fake_peer_addr))
                  .unwrap();
         out_stream.flush().unwrap();
         event_loop.run_once(&mut server).unwrap();
 
+        // Make sure that reconnecting updated the peer address
+        // known to `Consensus` with the one given in the preamble.
+        assert_eq!(server.consensus.peers()[&peer_id], fake_peer_addr);
         // Check that the server has closed the old connection.
         assert!(stream_shutdown(&mut in_stream));
+        // Check that there's a connection which has the fake address
+        // stored for reconnection purposes.
+        assert!(server.connections.iter().any(|conn| conn.addr().port() == 12345))
     }
 
-    /// Tests that the server will accept a client connection, then dispose of
+    /// Tests that the server will accept a client connection, then disposes of
     /// it when the client disconnects.
     #[test]
     fn test_client_accept() {
@@ -742,7 +770,8 @@ mod tests {
         let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
 
         let mut peers = HashMap::new();
-        peers.insert(peer_id, peer_listener.local_addr().unwrap());
+        let peer_addr = peer_listener.local_addr().unwrap();
+        peers.insert(peer_id, peer_addr);
         let (mut server, mut event_loop) = new_test_server(peers).unwrap();
 
         // Accept the server's connection.
@@ -754,7 +783,7 @@ mod tests {
 
         // Send a test message (the type is not important).
         let mut actions = Actions::new();
-        actions.peer_messages.push((peer_id, messages::server_connection_preamble(peer_id)));
+        actions.peer_messages.push((peer_id, messages::server_connection_preamble(peer_id, &peer_addr)));
         server.execute_actions(&mut event_loop, actions);
         event_loop.run_once(&mut server).unwrap();
 
@@ -771,7 +800,8 @@ mod tests {
             let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
 
             let mut peers = HashMap::new();
-            peers.insert(peer_id, peer_listener.local_addr().unwrap());
+            let peer_addr = peer_listener.local_addr().unwrap();
+            peers.insert(peer_id, peer_addr);
             let (mut server, mut event_loop) = new_test_server(peers).unwrap();
 
             // Accept the server's connection.
@@ -783,7 +813,7 @@ mod tests {
 
             // Send a test message (the type is not important).
             let mut actions = Actions::new();
-            actions.peer_messages.push((peer_id, messages::server_connection_preamble(peer_id)));
+            actions.peer_messages.push((peer_id, messages::server_connection_preamble(peer_id, &peer_addr)));
             server.execute_actions(&mut event_loop, actions);
             event_loop.run_once(&mut server).unwrap();
 

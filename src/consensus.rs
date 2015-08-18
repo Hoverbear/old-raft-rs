@@ -158,13 +158,19 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         actions
     }
 
-    /// Returns the peers (Id's only) of the consensus modules.
+    /// Returns the peers (`Id`s only) of the consensus modules.
     pub fn peers(&self) -> &HashMap<ServerId, SocketAddr> {
         &self.peers
     }
 
+    /// Updates the address at which to contact the node with the
+    /// given `Id`.
+    pub fn update_peer(&mut self, id: ServerId, addr: SocketAddr) -> () {
+        &self.peers.insert(id, addr).expect("new peer insertion not supported");
+    }
+
     /// Applies a peer message to the consensus module. This function dispatches a generic request
-    /// to it's appropriate handler.
+    /// to its appropriate handler.
     pub fn apply_peer_message<R>(&mut self, from: ServerId, message: &R, actions: &mut Actions)
     where R: MessageReader {
         push_log_scope!("{:?}", self);
