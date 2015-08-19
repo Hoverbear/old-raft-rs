@@ -21,7 +21,7 @@ extern crate serde;
 extern crate serde_json;
 extern crate rustc_serialize;
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::collections::HashMap;
 
@@ -127,9 +127,11 @@ fn main() {
 
 /// A simple convenience method since this is an example and it should exit if given invalid params.
 fn parse_addr(addr: &str) -> SocketAddr {
-    SocketAddr::from_str(addr)
-               .ok()
-               .expect(&format!("unable to parse socket address: {}", addr))
+    addr.to_socket_addrs()
+        .ok()
+        .expect(&format!("unable to parse socket address: {}", addr))
+        .next()
+        .unwrap()
 }
 
 /// Creates a Raft server using the specified ID from the list of nodes.
