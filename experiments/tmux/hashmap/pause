@@ -1,5 +1,5 @@
 #! /bin/bash
 STRING=$(pidof hashmap)
 PID=$(echo $STRING | cut -d " " -f $1)
-echo $PID
+echo "Pausing ID $1 with PID $PID" | wall
 kill -SIGSTOP ${PID}

@@ -2,7 +2,7 @@
 export HOSTS="localhost:8080 localhost:8081 localhost:8082 localhost:8083"
 export EHOSTS="1 localhost:8081 2 localhost:8082 3 localhost:8083"
 export BINARY="../../../target/release/examples/hashmap"
-export RUST_LOG="raft=debug"
+export RUST_LOG="raft=info"
 
 tmux -L hashmap new -s hashmap -d
 tmux -L hashmap new-window -n "Server 1" './server 1'
