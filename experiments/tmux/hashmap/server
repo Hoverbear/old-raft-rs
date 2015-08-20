@@ -1,0 +1,2 @@
+#! /bin/bash
+$BINARY server $1 ${EHOSTS}

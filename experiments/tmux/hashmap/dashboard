@@ -1,0 +1,12 @@
+#! /bin/bash
+export HOSTS="localhost:8080 localhost:8081 localhost:8082 localhost:8083"
+export EHOSTS="1 localhost:8081 2 localhost:8082 3 localhost:8083"
+export BINARY="../../../target/release/examples/hashmap"
+export RUST_LOG="raft=debug"
+
+tmux -L hashmap new -s hashmap -d
+tmux -L hashmap new-window -n "Server 1" './server 1'
+tmux -L hashmap new-window -n "Server 2" './server 2'
+tmux -L hashmap new-window -n "Server 3" './server 3'
+tmux -L hashmap select-window 1
+tmux -L hashmap -2 attach-session -t hashmap
