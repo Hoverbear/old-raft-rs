@@ -1,0 +1,53 @@
+# Installs on an Ubuntu host
+- hosts: all
+  tasks:
+  - name: Add `ppa:hansjorg/rust` PPA
+    apt_repository: repo='ppa:hansjorg/rust'
+  - name: Install requirements.
+    apt:
+      pkg: "{{ item }}"
+      state: present
+    with_items:
+      - rust-nightly
+      - cargo-nightly
+      - git
+      # For dashboard.
+      - mosh
+      # For Cap'n Proto
+      - subversion
+      - gcc-4.8
+      - g++-4.8
+      - build-essential
+      - autoconf
+      - automake
+      - libtool
+  - name: Clone Cap'n Proto.
+    git:
+      repo: https://github.com/kentonv/capnproto.git
+      version: release-0.5.3
+      dest: /capnproto
+      update: yes
+      accept_hostkey: true
+  - name: Build Cap'n Proto
+    shell: |
+      ./setup-autotools.sh &&
+      autoreconf -i &&
+      ./configure --disable-shared &&
+      make -j5 &&
+      make install
+    args:
+      chdir: /capnproto/c++
+    environment:
+      CXX: g++-4.8
+      CC: gcc-4.8
+  - name: Clone `raft`
+    git:
+      repo: https://github.com/Hoverbear/raft.git
+      version: hostnames
+      dest: /raft
+      update: yes
+      accept_hostkey: true
+  - name: Build Raft
+    command: cargo build --release --example hashmap
+    args:
+        chdir: /raft
