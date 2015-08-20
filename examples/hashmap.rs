@@ -16,6 +16,8 @@
 
 extern crate raft; // <--- Kind of a big deal for this!
 extern crate env_logger;
+#[macro_use] extern crate log;
+#[macro_use] extern crate scoped_log;
 extern crate docopt;
 extern crate serde;
 extern crate serde_json;
@@ -255,6 +257,7 @@ impl state_machine::StateMachine for HashmapStateMachine {
     /// machine. At this point it is durable and is going to be applied on at least half the nodes
     /// within the next couple round trips.
     fn apply(&mut self, new_value: &[u8]) -> Vec<u8> {
+        scoped_info!("Applying {:?}", String::from_utf8_lossy(new_value));
         // Deserialize
         let string = String::from_utf8_lossy(new_value);
         let message = serde_json::from_str(&string).unwrap();
@@ -287,6 +290,7 @@ impl state_machine::StateMachine for HashmapStateMachine {
     /// persistent log, it does not mutate the state of the state machine, and it is intended to be
     /// fast.
     fn query(&self, query: &[u8]) -> Vec<u8> {
+        scoped_info!("Querying {:?}", String::from_utf8_lossy(query));
         // Deserialize
         let string = String::from_utf8_lossy(query);
         let message = serde_json::from_str(&string).unwrap();

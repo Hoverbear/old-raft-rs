@@ -401,9 +401,10 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                 self.advance_commit_index(actions);
             }
             Ok(append_entries_response::Which::InconsistentPrevEntry(..)) => {
-                scoped_debug!("responder had inconsistent previous entry, rolling it back one");
                 scoped_assert!(self.is_leader());
                 let next_index = self.leader_state.next_index(&from) - 1;
+                scoped_debug!("responder had inconsistent previous entry, rolling it back to {}",
+                    next_index);
                 self.leader_state.set_next_index(from, next_index);
             }
             Ok(append_entries_response::Which::StaleTerm(..)) => {
@@ -426,7 +427,8 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         let next_index = self.leader_state.next_index(&from);
         if next_index <= local_latest_log_index {
             // If the peer is behind, send it entries to catch up.
-            scoped_debug!("responder is behind, catching them up");
+            scoped_debug!("responder is behind at index {}, catching them up to {}",
+                next_index, local_latest_log_index);
             let prev_log_index = next_index - 1;
             let prev_log_term =
                 if prev_log_index == LogIndex(0) {
