@@ -72,9 +72,10 @@ struct AppendEntriesResponse {
     # The `AppendEntries` request failed because the follower has a greater term
     # than the leader.
 
-    inconsistentPrevEntry @3 :Void;
+    inconsistentPrevEntry @3 :UInt64;
     # The `AppendEntries` request failed because the follower failed the
-    # previous entry term and index checks.
+    # previous entry term and index checks. Includes the index of the
+    # inconsistent entry.
 
     internalError @4 :Text;
     # an internal error occured; a description is included.

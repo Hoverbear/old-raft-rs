@@ -88,13 +88,13 @@ pub fn append_entries_response_stale_term(term: Term) -> Rc<MallocMessageBuilder
     Rc::new(message)
 }
 
-pub fn append_entries_response_inconsistent_prev_entry(term: Term) -> Rc<MallocMessageBuilder> {
+pub fn append_entries_response_inconsistent_prev_entry(term: Term, index: LogIndex) -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
                                   .init_append_entries_response();
         response.set_term(term.into());
-        response.set_inconsistent_prev_entry(());
+        response.set_inconsistent_prev_entry(index.into());
     }
     Rc::new(message)
 }

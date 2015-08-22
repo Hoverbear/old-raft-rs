@@ -302,7 +302,9 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                     if latest_log_index < leader_prev_log_index {
                         scoped_debug!("AppendEntriesRequest: inconsistent previous log index: leader: {}, local: {}",
                                       leader_prev_log_index, latest_log_index);
-                        messages::append_entries_response_inconsistent_prev_entry(self.current_term())
+                        // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
+                        messages::append_entries_response_inconsistent_prev_entry(self.current_term(),
+                            leader_prev_log_index)
                     } else {
                         let existing_term = if leader_prev_log_index == LogIndex::from(0) {
                             Term::from(0)
@@ -313,7 +315,10 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                         if existing_term != leader_prev_log_term {
                             scoped_debug!("AppendEntriesRequest: inconsistent previous log term: leader: {}, local: {}",
                                           leader_prev_log_term, existing_term);
-                            messages::append_entries_response_inconsistent_prev_entry(self.current_term())
+                            // If an existing entry conflicts with a new one (same index but different terms),
+                            // delete the existing entry and all that follow it
+                            messages::append_entries_response_inconsistent_prev_entry(self.current_term(),
+                                leader_prev_log_index)
                         } else {
                             let entries = request.get_entries().unwrap();
                             let num_entries = entries.len();
@@ -400,12 +405,12 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                 self.leader_state.set_match_index(from, follower_latest_log_index);
                 self.advance_commit_index(actions);
             }
-            Ok(append_entries_response::Which::InconsistentPrevEntry(..)) => {
+            Ok(append_entries_response::Which::InconsistentPrevEntry(index)) => {
                 scoped_assert!(self.is_leader());
-                let next_index = self.leader_state.next_index(&from) - 1;
+                let next_index = index;
                 scoped_debug!("responder had inconsistent previous entry, rolling it back to {}",
                     next_index);
-                self.leader_state.set_next_index(from, next_index);
+                self.leader_state.set_next_index(from, next_index.into());
             }
             Ok(append_entries_response::Which::StaleTerm(..)) => {
                 // The peer is reporting a stale term, but the term number matches the local term.
