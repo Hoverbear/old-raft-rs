@@ -1,0 +1,16 @@
+#! /bin/bash
+set -e
+
+export HOSTS="localhost:8080 localhost:8081 localhost:8082 localhost:8083"
+export EHOSTS="1 localhost:8081 2 localhost:8082 3 localhost:8083"
+export BINARY="../../../target/release/examples/hashmap"
+export RUST_LOG="raft=info,hashmap=debug"
+
+# cargo build --release --example hashmap
+
+tmux -L hashmap new -s hashmap -d -n "Server 1"
+tmux -L hashmap new-window -n "Server 2"
+tmux -L hashmap new-window -n "Server 3"
+tmux -L hashmap new-window -n "Command Seat"
+tmux -L hashmap select-window -t 1
+tmux -L hashmap -2 attach-session -t hashmap

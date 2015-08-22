@@ -1,0 +1,3 @@
+#! /bin/bash
+# echo $$ > /tmp/server$1
+$BINARY server $1 ${EHOSTS}
