@@ -30,7 +30,18 @@ struct Peer {
    # when not leader.
 }
 
+struct Entry {
+    # A log entry.
+
+    term @0 :UInt64;
+    # The term of the entry.
+
+    data @1 :Data;
+    # The user-defined data of the entry.
+}
+
 struct Message {
+
     union {
         appendEntriesRequest @0 :AppendEntriesRequest;
         appendEntriesResponse @1 :AppendEntriesResponse;
@@ -50,7 +61,7 @@ struct AppendEntriesRequest {
   prevLogTerm @2 :UInt64;
   # Term of prevLogIndex entry.
 
-  entries @3 :List(Data);
+  entries @3 :List(Entry);
   # Log entries to store (empty for heartbeat; may send more than one for
   # efficiency).
 

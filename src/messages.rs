@@ -46,7 +46,7 @@ pub fn client_connection_preamble(id: ClientId) -> Rc<MallocMessageBuilder> {
 pub fn append_entries_request(term: Term,
                               prev_log_index: LogIndex,
                               prev_log_term: Term,
-                              entries: &[&[u8]],
+                              entries: &[(Term, &[u8])],
                               leader_commit: LogIndex)
                               -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
@@ -60,7 +60,9 @@ pub fn append_entries_request(term: Term,
 
         let mut entry_list = request.init_entries(entries.len() as u32);
         for (n, entry) in entries.iter().enumerate() {
-            entry_list.set(n as u32, entry);
+            let mut slot = entry_list.borrow().get(n as u32);
+            slot.set_term(entry.0.into());
+            slot.set_data(entry.1);
         }
     }
     Rc::new(message)
