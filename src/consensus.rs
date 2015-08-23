@@ -231,23 +231,20 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                         self.persistent_log.entry(LogIndex(prev_log_index)).unwrap().0
                     };
 
-                let mut message = MallocMessageBuilder::new_default();
-                {
-                    let mut request = message.init_root::<message::Builder>()
-                                             .init_append_entries_request();
-                    request.set_term(self.current_term().into());
-
-                    request.set_prev_log_index(prev_log_index);
-                    request.set_prev_log_term(prev_log_term.into());
-                    request.set_leader_commit(self.commit_index.into());
-
-                    let mut entries = request.init_entries((until_index - from_index) as u32);
-                    for (n, index) in (from_index..until_index).enumerate() {
-                        entries.set(n as u32, self.persistent_log.entry(LogIndex::from(index)).unwrap().1);
-                    }
+                let mut entries = Vec::with_capacity((until_index - from_index) as usize);
+                for index in (from_index .. until_index) {
+                    entries.push(self.persistent_log.entry(LogIndex::from(index)).unwrap())
                 }
+
+                let message = messages::append_entries_request(
+                    self.current_term().into(),
+                    prev_log_index.into(),
+                    prev_log_term.into(),
+                    &entries,
+                    self.commit_index.into());
+
                 self.leader_state.set_next_index(peer, LogIndex(until_index));
-                actions.peer_messages.push((peer, Rc::new(message)));
+                actions.peer_messages.push((peer, message));
             },
             ConsensusState::Candidate => {
                 // Resend the request vote request if a response has not yet been receieved.
@@ -300,9 +297,11 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
 
                     let latest_log_index = self.latest_log_index();
                     if latest_log_index < leader_prev_log_index {
+                        // If the previous entries index was not the same we'd leave a gap! Reply failure.
                         scoped_debug!("AppendEntriesRequest: inconsistent previous log index: leader: {}, local: {}",
                                       leader_prev_log_index, latest_log_index);
-                        messages::append_entries_response_inconsistent_prev_entry(self.current_term())
+                        messages::append_entries_response_inconsistent_prev_entry(self.current_term(),
+                            leader_prev_log_index)
                     } else {
                         let existing_term = if leader_prev_log_index == LogIndex::from(0) {
                             Term::from(0)
@@ -313,14 +312,20 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                         if existing_term != leader_prev_log_term {
                             scoped_debug!("AppendEntriesRequest: inconsistent previous log term: leader: {}, local: {}",
                                           leader_prev_log_term, existing_term);
-                            messages::append_entries_response_inconsistent_prev_entry(self.current_term())
+                            // If an existing entry conflicts with a new one (same index but different terms),
+                            // delete the existing entry and all that follow it
+                            messages::append_entries_response_inconsistent_prev_entry(self.current_term(),
+                                leader_prev_log_index)
                         } else {
                             let entries = request.get_entries().unwrap();
                             let num_entries = entries.len();
                             if num_entries > 0 {
                                 let mut entries_vec = Vec::with_capacity(num_entries as usize);
                                 for i in 0..num_entries {
-                                    entries_vec.push((leader_term, entries.get(i).unwrap()));
+                                    let entry = entries.get(i);
+                                    let term = entry.get_term().into();
+                                    let data = entry.get_data().unwrap();
+                                    entries_vec.push((term, data));
                                 }
                                 self.persistent_log.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
                             }
@@ -400,12 +405,11 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                 self.leader_state.set_match_index(from, follower_latest_log_index);
                 self.advance_commit_index(actions);
             }
-            Ok(append_entries_response::Which::InconsistentPrevEntry(..)) => {
+            Ok(append_entries_response::Which::InconsistentPrevEntry(next_index)) => {
                 scoped_assert!(self.is_leader());
-                let next_index = self.leader_state.next_index(&from) - 1;
                 scoped_debug!("responder had inconsistent previous entry, rolling it back to {}",
                     next_index);
-                self.leader_state.set_next_index(from, next_index);
+                self.leader_state.set_next_index(from, next_index.into());
             }
             Ok(append_entries_response::Which::StaleTerm(..)) => {
                 // The peer is reporting a stale term, but the term number matches the local term.
@@ -437,24 +441,23 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                     self.persistent_log.entry(prev_log_index).unwrap().0
                 };
 
-            let mut message = MallocMessageBuilder::new_default();
-            {
-                let mut request = message.init_root::<message::Builder>()
-                                         .init_append_entries_request();
-                request.set_term(local_term.into());
-                request.set_prev_log_index(prev_log_index.into());
-                request.set_prev_log_term(prev_log_term.into());
-                request.set_leader_commit(self.commit_index.into());
+            let from_index = Into::<u64>::into(next_index);
+            let until_index = Into::<u64>::into(local_latest_log_index) + 1;
 
-                let from_index = Into::<u64>::into(next_index);
-                let until_index = Into::<u64>::into(local_latest_log_index) + 1;
-                let mut entries = request.init_entries((until_index - from_index) as u32);
-                for (n, index) in (from_index..until_index).enumerate() {
-                    entries.set(n as u32, self.persistent_log.entry(LogIndex::from(index)).unwrap().1);
-                }
+            let mut entries = vec![];
+            for index in (from_index .. until_index) {
+                entries.push(self.persistent_log.entry(LogIndex::from(index)).unwrap())
             }
+
+            let message = messages::append_entries_request(
+                local_term.into(),
+                prev_log_index.into(),
+                prev_log_term.into(),
+                &entries,
+                self.commit_index.into());
+
             self.leader_state.set_next_index(from, local_latest_log_index + 1);
-            actions.peer_messages.push((from, Rc::new(message)));
+            actions.peer_messages.push((from, message));
         } else {
             // If the peer is caught up, set a heartbeat timeout.
             scoped_debug!("responder is caught up");
@@ -573,7 +576,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                 let message = messages::append_entries_request(term,
                                                                prev_log_index,
                                                                prev_log_term,
-                                                               &[entry],
+                                                               &[(term, entry)],
                                                                self.commit_index);
                 // In a multi-node cluster must message peers and wait.
                 for &peer in self.peers.keys() {
