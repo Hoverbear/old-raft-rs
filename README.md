@@ -1,9 +1,9 @@
-# Raft #
+# Raft-rs #
 
 > Note: This project is of **alpha** quality. **APIs are still in some flux, but they are ready for you to play with them.** A stable version will be released when we feel it is ready.
 
-[![Build Status](https://img.shields.io/travis/Hoverbear/raft/master.svg)](https://travis-ci.org/Hoverbear/raft)
-[![Coverage Status](https://img.shields.io/coveralls/Hoverbear/raft/master.svg)](https://coveralls.io/github/Hoverbear/raft)
+[![Build Status](https://img.shields.io/travis/Hoverbear/raft-rs/master.svg)](https://travis-ci.org/Hoverbear/raft-rs)
+[![Coverage Status](https://img.shields.io/coveralls/Hoverbear/raft-rs/master.svg)](https://coveralls.io/github/Hoverbear/raft-rs)
 
 **[Development Updates](http://www.hoverbear.org/tag/raft/)**
 
@@ -55,8 +55,8 @@ sudo make install
 Finally, clone the repository and build it:
 
 ```bash
-git clone git@github.com:Hoverbear/raft.git && \
-cd raft && \
+git clone git@github.com:Hoverbear/raft-rs.git && \
+cd raft-rs && \
 cargo build
 ```
 
@@ -87,7 +87,7 @@ We'd love it if you contributed your own or expanded on ours!
 
 ## Testing ##
 
-You can run `raft`'s full bank of tests with all debug output like so:
+You can run the `raft` crate's full bank of tests with all debug output like so:
 
 ```bash
 RUST_BACKTRACE=1 RUST_LOG=raft=debug cargo test -- --nocapture
