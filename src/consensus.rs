@@ -231,7 +231,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                         self.persistent_log.entry(LogIndex(prev_log_index)).unwrap().0
                     };
 
-                let mut entries = vec![];
+                let mut entries = Vec::with_capacity((until_index - from_index) as usize);
                 for index in (from_index .. until_index) {
                     entries.push(self.persistent_log.entry(LogIndex::from(index)).unwrap())
                 }
@@ -297,9 +297,9 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
 
                     let latest_log_index = self.latest_log_index();
                     if latest_log_index < leader_prev_log_index {
+                        // If the previous entries index was not the same we'd leave a gap! Reply failure.
                         scoped_debug!("AppendEntriesRequest: inconsistent previous log index: leader: {}, local: {}",
                                       leader_prev_log_index, latest_log_index);
-                        // Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
                         messages::append_entries_response_inconsistent_prev_entry(self.current_term(),
                             leader_prev_log_index)
                     } else {
@@ -405,9 +405,8 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                 self.leader_state.set_match_index(from, follower_latest_log_index);
                 self.advance_commit_index(actions);
             }
-            Ok(append_entries_response::Which::InconsistentPrevEntry(index)) => {
+            Ok(append_entries_response::Which::InconsistentPrevEntry(next_index)) => {
                 scoped_assert!(self.is_leader());
-                let next_index = index;
                 scoped_debug!("responder had inconsistent previous entry, rolling it back to {}",
                     next_index);
                 self.leader_state.set_next_index(from, next_index.into());
