@@ -587,6 +587,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                 for &peer in self.peers.keys() {
                     if self.leader_state.next_index(&peer) == log_index {
                         actions.peer_messages.push((peer, message.clone()));
+                        self.leader_state.set_next_index(peer, log_index + 1);
                     }
                 }
             }
