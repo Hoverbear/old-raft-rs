@@ -160,8 +160,6 @@ pub enum RaftError {
     UnknownConnectionType,
     /// An invalid peer in in the peer set. Returned Server::new().
     InvalidPeerSet,
-    /// Registering a connection failed
-    ConnectionRegisterFailed,
     /// Failed to find a leader in the cluster. Try again later.
     LeaderSearchExhausted,
 }
