@@ -43,17 +43,18 @@ pub enum ServerTimeout {
     Reconnect(Token),
 }
 
-/// The `Server` is responsible for receiving events from remote `Server` or `Client` instances,
-/// as well as setting election and heartbeat timeouts.  When an event is received, it is applied
-/// to the local `Consensus`. The `Consensus` may optionally return a new event which must be
-/// dispatched to either the `Server` or `Client` which sent the original event, or to all
-/// `Server` instances.
+/// The `Server` is responsible for receiving events from peer `Server` instance or clients,
+/// as well as managing election and heartbeat timeouts. When an event is received, it is applied
+/// to the local `Consensus`. The `Consensus` may optionally return a set of events to be
+/// dispatched to either remote peers or clients.
 ///
-/// Because messages are passed asyncronously between `Server` instances, a `Server` could get
-/// into a situation where multiple events are ready to be dispatched to a single remote `Server`.
-/// In this situation, the `Server` will replace the existing event with the new event, except in
-/// one special circumstance: if the new and existing messages are both `AppendEntryRequest`s with
-/// the same `term`, then the new message will be dropped.
+/// ## Logging
+///
+/// Server instances log events according to frequency and importance. It is recommended to use at
+/// least info level logging when running in production. The warn level is used for unexpected,
+/// but recoverable events. The info level is used for infrequent events such as connection resets
+/// and election results. The debug level is used for frequent events such as client proposals and
+/// heartbeats. The trace level is used for very high frequency debugging output.
 pub struct Server<L, M> where L: Log, M: StateMachine {
 
     /// Id of this server.
@@ -167,9 +168,20 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
     fn execute_actions(&mut self,
                        event_loop: &mut EventLoop<Server<L, M>>,
                        actions: Actions) {
-        scoped_debug!("executing actions: {:?}", actions);
-        let Actions { peer_messages, client_messages, timeouts, clear_timeouts } = actions;
+        scoped_trace!("executing actions: {:?}", actions);
+        let Actions {
+            peer_messages,
+            client_messages,
+            timeouts,
+            clear_timeouts,
+            clear_peer_messages,
+        } = actions;
 
+        if clear_peer_messages {
+            for &token in self.peer_tokens.values() {
+                self.connections[token].clear_messages();
+            }
+        }
         for (peer, message) in peer_messages {
             let token = self.peer_tokens[&peer];
             if self.connections[token].send_message(message) {
@@ -301,7 +313,7 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
                         },
                         connection_preamble::id::Which::Client(Ok(id)) => {
                             let client_id = try!(ClientId::from_bytes(id));
-                            scoped_debug!("received new connection from {:?}", client_id);
+                            scoped_debug!("received new client connection from {}", client_id);
                             self.connections[token]
                                 .set_kind(ConnectionKind::Client(client_id));
                             let prev_token = self.client_tokens
@@ -341,8 +353,8 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
                         self.reset_connection(event_loop, token);
                         Err(Error::Raft(RaftError::ConnectionRegisterFailed))
                     })
-                    .map(|_|
-                        scoped_debug!("new connection accepted: {:?}", self.connections[token]))
+                    .map(|_| scoped_debug!("new connection accepted from {}",
+                                           self.connections[token].addr()))
             )
     }
 }
@@ -453,7 +465,6 @@ impl <L, M> fmt::Debug for Server<L, M> where L: Log, M: StateMachine {
 mod tests {
 
     extern crate env_logger;
-    extern crate test;
 
     use std::collections::HashMap;
     use std::io::{self, Read, Write};
@@ -462,7 +473,6 @@ mod tests {
 
     use capnp::{serialize, MessageReader, ReaderOptions};
     use mio::EventLoop;
-    use test::Bencher;
 
     use ClientId;
     use Result;
@@ -798,36 +808,5 @@ mod tests {
         event_loop.run_once(&mut server).unwrap();
 
         assert_eq!(peer_id, read_server_preamble(&mut in_stream));
-    }
-
-    /// Literally the same thing as above.
-    #[bench]
-    fn bench_connection_send(b: &mut Bencher) {
-        setup_test!("test_connection_send");
-        b.iter(|| {
-            let peer_id = ServerId::from(1);
-
-            let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
-
-            let mut peers = HashMap::new();
-            let peer_addr = peer_listener.local_addr().unwrap();
-            peers.insert(peer_id, peer_addr);
-            let (mut server, mut event_loop) = new_test_server(peers).unwrap();
-
-            // Accept the server's connection.
-            let (mut in_stream, _)  = peer_listener.accept().unwrap();
-
-            // Accept the preamble.
-            event_loop.run_once(&mut server).unwrap();
-            assert_eq!(ServerId::from(0), read_server_preamble(&mut in_stream));
-
-            // Send a test message (the type is not important).
-            let mut actions = Actions::new();
-            actions.peer_messages.push((peer_id, messages::server_connection_preamble(peer_id, &peer_addr)));
-            server.execute_actions(&mut event_loop, actions);
-            event_loop.run_once(&mut server).unwrap();
-
-            assert_eq!(peer_id, read_server_preamble(&mut in_stream));
-        })
     }
 }

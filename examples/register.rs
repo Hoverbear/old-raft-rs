@@ -1,35 +1,21 @@
-//! This example demonstrates using Raft to implement a replicated hashmap over `n` servers and
-//! interact with them over `m` clients.
-//!
-//! This example uses Bincode serialization.
-//!
-//! Comments below will aim to be tailored towards Raft and it's usage. If you have any questions,
-//! Please, just open an issue.
-//!
-//! TODO: For the sake of simplicity of this example, we don't implement a `Log` and just use a
-//! simple testing one. We should improve this in the future.
-
 // In order to use Serde we need to enable these nightly features.
 #![feature(plugin)]
 #![feature(custom_derive)]
 #![plugin(serde_macros)]
 
-extern crate raft; // <--- Kind of a big deal for this!
+extern crate bincode;
 extern crate docopt;
 extern crate env_logger;
-extern crate serde;
+extern crate raft;
 extern crate rustc_serialize;
-extern crate bincode;
+extern crate serde;
 
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::str::FromStr;
 use std::collections::HashMap;
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::process;
 
 use docopt::Docopt;
-use bincode::serde::{serialize, deserialize};
-use bincode::SizeLimit;
 
-// Raft's major components. See comments in code on usage and things.
 use raft::{
     state_machine,
     persistent_log,
@@ -38,17 +24,31 @@ use raft::{
     Client,
 };
 
-/// This is the defined message type for this example. For the sake of simplicity we don't go very
-/// far with this. In a "real" application you may want to more distinctly distinguish between
-/// data meant for `.query()` and data meant for `.propose()`.
-#[derive(Serialize, Deserialize, PartialEq)]
-enum Message {
-    Get,
-    Put(Vec<u8>),
-    Cas(Vec<u8>, Vec<u8>),
+/// Proposal operations supported by the distributed register. Proposals may
+/// mutate the register, and will be durably replicated to a quorum of peers
+/// before completing.
+#[derive(Serialize, Deserialize)]
+enum Proposal {
+    Put(String),
+    Cas(String, String),
 }
 
-// Using docopt we define the overall usage of the application.
+/// Query operations supported by the distributed register. Queries may
+/// not mutate the register, and are serviced by the the current master replica.
+#[derive(Serialize, Deserialize)]
+enum Query {
+    Get,
+}
+
+/// A response to a get, put or cas operation.
+#[derive(Serialize, Deserialize)]
+enum Response {
+    /// The operation succeeded.
+    Ok(String),
+    /// The operation failed.
+    Err(String),
+}
+
 static USAGE: &'static str = "
 A replicated mutable value. Operations on the register have serializable
 consistency, but no durability (once all register servers are terminated the
@@ -67,8 +67,8 @@ Commands:
           value.
 
   cas     (compare and set) Conditionally sets the value of the register if the
-          current value matches an expected value, returning true if the
-          register was set.
+          current value matches an expected value, and returns the previous
+          value.
 
   server  Starts a register server. Servers must be provided a unique ID and
           address (ip:port) at startup, along with the ID and address of all
@@ -92,9 +92,6 @@ struct Args {
     cmd_put: bool,
     cmd_cas: bool,
 
-    // When creating a server you will necessarily need some sort of unique ID for it as well
-    // as a list of peers. In this example we just accept them straight from args. You might
-    // find it best to use a `toml` or `yaml` or `json` file.
     arg_id: Option<u64>,
     arg_node_id: Vec<u64>,
     arg_node_address: Vec<String>,
@@ -104,7 +101,6 @@ struct Args {
     arg_expected_value: String,
 }
 
-/// Just a plain old boring "parse args and dispatch" call.
 fn main() {
     let _ = env_logger::init();
     let args: Args = Docopt::new(USAGE)
@@ -121,7 +117,7 @@ fn main() {
     }
 }
 
-/// A simple convenience method since this is an example and it should exit if given invalid params.
+/// Parses a socket address from a string, or panics with an error message.
 fn parse_addr(addr: &str) -> SocketAddr {
     addr.to_socket_addrs()
         .ok()
@@ -130,180 +126,140 @@ fn parse_addr(addr: &str) -> SocketAddr {
         .unwrap()
 }
 
-/// Creates a Raft server using the specified ID from the list of nodes.
+/// Creates a new client connection to the raft servers specified in the arguments.
+fn create_client(args: &Args) -> Client {
+    // Parse raft server addresses from arguments.
+    let cluster = args.arg_node_address.iter()
+        .map(|v| parse_addr(&v))
+        .collect();
+
+    Client::new(cluster)
+}
+
+/// Handles a response message by printing the value on success, or printing the
+/// error and exiting on failure.
+fn handle_response(response: Vec<u8>) {
+    match bincode::serde::deserialize(&response).unwrap() {
+        Response::Ok(val) => println!("{}", val),
+        Response::Err(err) => {
+            println!("{}", err);
+            process::exit(1);
+        }
+    }
+}
+
+/// Creates a raft server running on the current thread with options provided by `args`.
 fn server(args: &Args) {
     // Creating a raft server requires several things:
 
-    // A persistent log implementation, which manages the persistent, replicated log...
-    let persistent_log = persistent_log::MemLog::new();
+    // A log implementation, which manages the persistent, replicated log.
+    let log = persistent_log::MemLog::new();
 
-    // A state machine which replicated state. This state should be the same on all nodes.
+    // A state machine implementation. The state machine type must be the same
+    // on all nodes.
     let state_machine = RegisterStateMachine::new();
 
-    // As well as a unique server id.
+    // A unique server id.
     let id = ServerId::from(args.arg_id.unwrap());
 
-    // ...  And a list of peers.
+    // A list of peers.
     let mut peers = args.arg_node_id
                     .iter()
                     .zip(args.arg_node_address.iter())
                     .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
                     .collect::<HashMap<_,_>>();
 
-    // The Raft Server will error if it's ID is inside of it's peer set. Don't do that.
-    // Instead, take it out and use it!
+    // The peer set must not include the local server's ID.
     let addr = peers.remove(&id).unwrap();
 
-    // Using all of the above components.
-    // You probably shouldn't `.unwrap()` in production code unless you're totally sure it works
-    // 100% of the time, all the time.
-    Server::run(id, addr, peers, persistent_log, state_machine).unwrap();
+    // Run the raft server.
+    Server::run(id, addr, peers, log, state_machine).unwrap();
 }
 
-/// Gets a value for the register from the provided Raft cluster.
+/// Retrieves the value of the register from the provided raft cluster.
+///
+/// Panics if the get fails.
 fn get(args: &Args) {
-    // Clients necessarily need to now the valid set of nodes which they can talk to.
-    // This is both so they can try to talk to all the nodes if some are failing, and so that it
-    // can verify that it's not being lead astray somehow in redirections on leadership changes.
-    let cluster = args.arg_node_address.iter()
-        .map(|v| parse_addr(&v))
-        .collect();
-
-    // Clients and be stored and reused, or used once and discarded.
-    // There is very small overhead in connecting a new client to a cluster as it must discover and
-    // identify itself to the leader.
-    let mut client = Client::new(cluster);
-
-    // Bincode makes it very easy to encode and fire off random enums and structs.
-    let payload = Message::Get;
-    let encoded = serialize(&payload, SizeLimit::Infinite).unwrap();
-
-    // A query executes **immutably** on the leader of the cluster and does not pass through the
-    // persistent log. This is intended for querying the current state of the state machine.
-    let response = client.query(&encoded).unwrap();
-
-    // A response will block until it's query is complete. This is intended and expected behavior
-    // based on the papers specifications.
-    let val = deserialize::<String>(&response).unwrap();
-    println!("{}", val)
+    let mut client = create_client(args);
+    let request = bincode::serde::serialize(&Query::Get, bincode::SizeLimit::Infinite).unwrap();
+    handle_response(client.query(&request).unwrap());
 }
 
-/// Sets a value for a given key in the provided Raft cluster.
+/// Sets a value for a given key in the provided raft cluster.
 fn put(args: &Args) {
-    // Same as above.
-    let cluster = args.arg_node_address.iter()
-        .map(|v| parse_addr(&v))
-        .collect();
-    let mut client = Client::new(cluster);
-
-    let payload = Message::Put(args.arg_new_value.clone().into_bytes());
-    let encoded = serialize(&payload, SizeLimit::Infinite).unwrap();
-
-    // A propose will go through the persistent log and mutably modify the state machine in some
-    // way. This is **much** slower than `.query()`.
-    let response = client.propose(&encoded).unwrap();
-
-    let val = deserialize::<String>(&response).unwrap();
-    println!("{}", val)
+    let mut client = create_client(args);
+    let proposal = Proposal::Put(args.arg_new_value.clone());
+    let request = bincode::serde::serialize(&proposal, bincode::SizeLimit::Infinite).unwrap();
+    handle_response(client.propose(&request).unwrap());
 }
 
-/// Compares and sets a value for a given key in the provided Raft cluster if the value is what is
-/// expected.
+/// Atomically sets the register value if the current value equals the expected
+/// value.
 fn cas(args: &Args) {
-    // Same as above.
-    let cluster = args.arg_node_address.iter()
-        .map(|v| parse_addr(&v))
-        .collect();
-    let mut client = Client::new(cluster);
-
-    let payload = Message::Cas(
-        args.arg_expected_value.clone().into_bytes(),
-        args.arg_new_value.clone().into_bytes());
-    let encoded = serialize(&payload, SizeLimit::Infinite).unwrap();
-
-    let response = client.propose(&encoded).unwrap();
-
-    let val = deserialize::<String>(&response).unwrap();
-    println!("{}", val)
+    let mut client = create_client(args);
+    let proposal = Proposal::Cas(args.arg_expected_value.clone(),
+                                 args.arg_new_value.clone());
+    let request = bincode::serde::serialize(&proposal, bincode::SizeLimit::Infinite).unwrap();
+    handle_response(client.propose(&request).unwrap());
 }
 
-/// A state machine that holds a single mutable value.
+/// A state machine that holds a single mutable string value.
 #[derive(Debug)]
 pub struct RegisterStateMachine {
-    value: Vec<u8>,
+    value: String,
 }
 
-/// Implement anything you want... A `new()` is generally a great idea.
 impl RegisterStateMachine {
+
+    /// Creates a new register state machine with empty state.
     pub fn new() -> RegisterStateMachine {
-        RegisterStateMachine { value: vec![] }
+        RegisterStateMachine { value: String::new() }
     }
 }
 
-/// Implementing `state_machine::StateMachine` allows your application specific state machine to be
-/// used in Raft. Feel encouraged to base yours of one of ours in these examples.
+/// `StateMachine` implementation that provides register semantics.
+///
+/// The register is mutated by calls to `apply`, and queried by calls to
+/// `query`.
 impl state_machine::StateMachine for RegisterStateMachine {
 
-    /// `apply()` is called on when a client's `.propose()` is committed and
-    /// reaches the state machine. At this point the proposal is durably stored
-    /// on a majority of peers. The proposal will be applied to follower's state
-    /// machines after the next communication with the master.
     fn apply(&mut self, proposal: &[u8]) -> Vec<u8> {
-        // Store the old value (example specific)
-        let old_value = self.value.clone();
 
-        // Deserialize
-        let message = deserialize::<Message>(&proposal).unwrap();
+        let message = match bincode::serde::deserialize::<Proposal>(&proposal) {
+            Ok(proposal) => proposal,
+            Err(err) => return format!("{}", err).into_bytes(),
+        };
 
-        // Handle
-        let response = (match message {
-            Message::Put(val) => {
-                self.value.clear();
-                self.value.extend(val);
-                serialize(&old_value, SizeLimit::Infinite)
-            },
-            Message::Get => serialize(&old_value, SizeLimit::Infinite),
-            Message::Cas(test, new) => {
-                if test == old_value {
-                    self.value.clear();
-                    self.value.extend(new);
-                    serialize(&true, SizeLimit::Infinite)
-                } else {
-                    serialize(&false, SizeLimit::Infinite)
+        // Encoding the current value should never fail.
+        let response = bincode::serde::serialize(&Response::Ok(self.value.clone()),
+                                                 bincode::SizeLimit::Infinite).unwrap();
+        match message {
+            Proposal::Put(val) => self.value = val,
+            Proposal::Cas(test, new) => {
+                if test == self.value {
+                    self.value = new;
                 }
             },
-        }).unwrap();
+        }
 
-        // Respond.
         response
     }
 
-    /// `query()` is called on when a client's `.query()` is received. It does not go through the
-    /// persistent log, it does not mutate the state of the state machine, and it is intended to be
-    /// fast.
     fn query(&self, query: &[u8]) -> Vec<u8> {
-        // Store the old value (example specific)
-        let old_value = self.value.clone();
+        if let Err(err) = bincode::serde::deserialize::<Query>(&query) {
+            return format!("{}", err).into_bytes();
+        }
 
-        // Deserialize
-        let message = deserialize::<Message>(&query).unwrap();
-
-        // Handle
-        let response = (match message {
-            Message::Get => serialize(&old_value, SizeLimit::Infinite),
-            _ => panic!("Cannot mutate from query!"),
-        }).unwrap();
-
-        // Respond.
-        response
+        // Encoding the current value should never fail.
+        bincode::serde::serialize(&Response::Ok(self.value.clone()),
+                                  bincode::SizeLimit::Infinite).unwrap()
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        self.value.clone()
+        self.value.clone().into_bytes()
     }
 
-    fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) {
-        self.value = snapshot_value;
-        ()
+    fn restore_snapshot(&mut self, value: Vec<u8>) {
+        self.value = String::from_utf8(value).unwrap();
     }
 }
