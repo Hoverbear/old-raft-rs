@@ -62,7 +62,8 @@ impl ConsensusTimeout {
     }
 }
 
-/// The set of actions for the server to carry out after applying requests to the consensus module.
+/// A set of actions for the `Server` to carry out asyncronously in response to applying an event
+/// to a `Consensus` state machine.
 pub struct Actions {
     /// Messages to be sent to peers.
     pub peer_messages: Vec<(ServerId, Rc<MallocMessageBuilder>)>,
@@ -113,7 +114,7 @@ pub struct Consensus<L, M> {
     peers: HashMap<ServerId, SocketAddr>,
 
     /// The persistent log.
-    persistent_log: L,
+    log: L,
     /// The client state machine to which client commands are applied.
     state_machine: M,
 
@@ -136,15 +137,15 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
     /// Creates a `Consensus`.
     pub fn new(id: ServerId,
                peers: HashMap<ServerId, SocketAddr>,
-               persistent_log: L,
+               log: L,
                state_machine: M)
                -> Consensus<L, M> {
-        let leader_state = LeaderState::new(persistent_log.latest_log_index().unwrap(),
+        let leader_state = LeaderState::new(log.latest_log_index().unwrap(),
                                             &peers.keys().cloned().collect());
         Consensus {
             id: id,
             peers: peers,
-            persistent_log: persistent_log,
+            log: log,
             state_machine: state_machine,
             commit_index: LogIndex(0),
             last_applied: LogIndex(0),
@@ -185,8 +186,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         };
     }
 
-    /// Applies a client message to the consensus module. This function dispatches a generic
-    /// request to its appropriate handler.
+    /// Applies a client message to the consensus state machine.
     pub fn apply_client_message<R>(&mut self,
                                    from: ClientId,
                                    message: &R,
@@ -232,12 +232,12 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                     if prev_log_index == LogIndex::from(0) {
                         Term::from(0)
                     } else {
-                        self.persistent_log.entry(prev_log_index).unwrap().0
+                        self.log.entry(prev_log_index).unwrap().0
                     };
 
                 let mut entries = Vec::with_capacity((until_index - from_index) as usize);
                 for index in from_index.as_u64()..until_index.as_u64() {
-                    entries.push(self.persistent_log.entry(LogIndex::from(index)).unwrap())
+                    entries.push(self.log.entry(LogIndex::from(index)).unwrap())
                 }
 
                 let message = messages::append_entries_request(
@@ -255,7 +255,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                 if self.candidate_state.peer_voted(peer) { return; }
                 let current_term = self.current_term();
                 let latest_index = self.latest_log_index();
-                let latest_term = self.persistent_log.latest_log_term().unwrap();
+                let latest_term = self.log.latest_log_term().unwrap();
 
                 let message = messages::request_vote_request(current_term,
                                                              latest_index,
@@ -292,7 +292,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
             ConsensusState::Follower => {
                 let message = {
                     if current_term < leader_term {
-                        self.persistent_log.set_current_term(leader_term).unwrap();
+                        self.log.set_current_term(leader_term).unwrap();
                         self.follower_state.set_leader(from);
                     }
 
@@ -311,7 +311,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                         let existing_term = if leader_prev_log_index == LogIndex::from(0) {
                             Term::from(0)
                         } else {
-                            self.persistent_log.entry(leader_prev_log_index).unwrap().0
+                            self.log.entry(leader_prev_log_index).unwrap().0
                         };
 
                         if existing_term != leader_prev_log_term {
@@ -335,13 +335,14 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                                     let data = entry.get_data().unwrap();
                                     entries_vec.push((term, data));
                                 }
-                                self.persistent_log.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
+                                self.log.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
                             }
                             let latest_log_index = leader_prev_log_index + num_entries as u64;
                             // We are matching the leaders log up to and including `latest_log_index`.
                             self.commit_index = cmp::min(leader_commit_index, latest_log_index);
                             self.apply_commits();
-                            messages::append_entries_response_success(self.current_term(), self.persistent_log.latest_log_index().unwrap())
+                            messages::append_entries_response_success(
+                                self.current_term(), self.log.latest_log_index().unwrap())
                         }
                     }
                 };
@@ -446,7 +447,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                 if prev_log_index == LogIndex(0) {
                     Term(0)
                 } else {
-                    self.persistent_log.entry(prev_log_index).unwrap().0
+                    self.log.entry(prev_log_index).unwrap().0
                 };
 
             let from_index = next_index;
@@ -454,7 +455,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
 
             let mut entries = vec![];
             for index in from_index.as_u64()..until_index.as_u64() {
-                entries.push(self.persistent_log.entry(LogIndex::from(index)).unwrap())
+                entries.push(self.log.entry(LogIndex::from(index)).unwrap())
             }
 
             let message = messages::append_entries_request(
@@ -502,9 +503,9 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                || candidate_log_index < self.latest_log_index() {
             messages::request_vote_response_inconsistent_log(new_local_term)
         } else {
-            match self.persistent_log.voted_for().unwrap() {
+            match self.log.voted_for().unwrap() {
                 None => {
-                    self.persistent_log.set_voted_for(candidate).unwrap();
+                    self.log.set_voted_for(candidate).unwrap();
                     messages::request_vote_response_granted(new_local_term)
                 },
                 Some(voted_for) if voted_for == candidate => {
@@ -571,7 +572,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
             let log_index = prev_log_index + 1;
             // TODO: This is probably not exactly safe.
             let entry = request.get_entry().unwrap();
-            self.persistent_log.append_entries(log_index, &[(term, entry)]).unwrap();
+            self.log.append_entries(log_index, &[(term, entry)]).unwrap();
             self.leader_state.proposals.push_back((from, log_index));
             if self.peers.len() == 0 {
                 scoped_debug!("ProposalRequest from client {}: entry {}", from, log_index);
@@ -626,7 +627,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                                      .init_append_entries_request();
             request.set_term(self.current_term().as_u64());
             request.set_prev_log_index(self.latest_log_index().as_u64());
-            request.set_prev_log_term(self.persistent_log.latest_log_term().unwrap().as_u64());
+            request.set_prev_log_term(self.log.latest_log_term().unwrap().as_u64());
             request.set_leader_commit(self.commit_index.as_u64());
             request.init_entries(0);
         }
@@ -637,12 +638,12 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
     fn election_timeout(&mut self, actions: &mut Actions) {
         scoped_assert!(!self.is_leader());
         if self.peers.is_empty() {
-            // Solitary consensus module special case; jump straight to leader status
+            // Solitary replica special case; jump straight to Leader state.
             scoped_info!("ElectionTimeout: transitioning to Leader");
             scoped_assert!(self.is_follower());
-            scoped_assert!(self.persistent_log.voted_for().unwrap().is_none());
-            self.persistent_log.inc_current_term().unwrap();
-            self.persistent_log.set_voted_for(self.id).unwrap();
+            scoped_assert!(self.log.voted_for().unwrap().is_none());
+            self.log.inc_current_term().unwrap();
+            self.log.set_voted_for(self.id).unwrap();
             let latest_log_index = self.latest_log_index();
             self.state = ConsensusState::Leader;
             self.leader_state.reinitialize(latest_log_index);
@@ -657,7 +658,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         scoped_trace!("transitioning to Leader");
         let current_term = self.current_term();
         let latest_log_index = self.latest_log_index();
-        let latest_log_term = self.persistent_log.latest_log_term().unwrap();
+        let latest_log_term = self.log.latest_log_term().unwrap();
         self.state = ConsensusState::Leader;
         self.leader_state.reinitialize(latest_log_index);
 
@@ -677,15 +678,15 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
     /// Transitions the consensus state machine to Candidate state.
     fn transition_to_candidate(&mut self, actions: &mut Actions) {
         scoped_trace!("transitioning to Candidate");
-        self.persistent_log.inc_current_term().unwrap();
-        self.persistent_log.set_voted_for(self.id).unwrap();
+        self.log.inc_current_term().unwrap();
+        self.log.set_voted_for(self.id).unwrap();
         self.state = ConsensusState::Candidate;
         self.candidate_state.clear();
         self.candidate_state.record_vote(self.id);
 
         let message = messages::request_vote_request(self.current_term(),
                                                      self.latest_log_index(),
-                                                     self.persistent_log.latest_log_term().unwrap());
+                                                     self.log.latest_log_term().unwrap());
 
         for &peer in self.peers().keys() {
             actions.peer_messages.push((peer, message.clone()));
@@ -699,7 +700,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         scoped_assert!(self.is_leader());
         let majority = self.majority();
         // TODO: Figure out failure condition here.
-        while self.commit_index < self.persistent_log.latest_log_index().unwrap() {
+        while self.commit_index < self.log.latest_log_index().unwrap() {
             if self.leader_state.count_match_indexes(self.commit_index + 1) >= majority {
                 self.commit_index = self.commit_index + 1;
                 scoped_debug!("commit index advanced to {}", self.commit_index);
@@ -731,7 +732,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         let mut results = HashMap::new();
         while self.last_applied < self.commit_index {
             // Unwrap justified here since we know there is an entry here.
-            let (_, entry) = self.persistent_log.entry(self.last_applied + 1).unwrap();
+            let (_, entry) = self.log.entry(self.last_applied + 1).unwrap();
 
             if !entry.is_empty() {
                 let result = self.state_machine.apply(entry);
@@ -750,7 +751,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                               leader: ServerId,
                               actions: &mut Actions) {
         scoped_trace!("transitioning to Follower");
-        self.persistent_log.set_current_term(term).unwrap();
+        self.log.set_current_term(term).unwrap();
         self.state = ConsensusState::Follower;
         self.follower_state.set_leader(leader);
         actions.clear_timeouts = true;
@@ -768,24 +769,24 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
         self.state == ConsensusState::Follower
     }
 
-    /// Returns whether the consensus module is currently a Candidate.
+    /// Returns whether the consensus state machine is currently a Candidate.
     fn is_candidate(&self) -> bool {
         self.state == ConsensusState::Candidate
     }
 
     /// Returns the current term.
     fn current_term(&self) -> Term {
-        self.persistent_log.current_term().unwrap()
+        self.log.current_term().unwrap()
     }
 
     /// Returns the term of the latest applied log entry.
     fn latest_log_term(&self) -> Term {
-        self.persistent_log.latest_log_term().unwrap()
+        self.log.latest_log_term().unwrap()
     }
 
     /// Returns the index of the latest applied log entry.
     fn latest_log_index(&self) -> LogIndex {
-        self.persistent_log.latest_log_index().unwrap()
+        self.log.latest_log_index().unwrap()
     }
 
     /// Get the cluster quorum majority size.
@@ -838,9 +839,9 @@ mod tests {
     use state_machine::NullStateMachine;
     use persistent_log::{MemLog, Log};
 
-    type TestModule = Consensus<MemLog, NullStateMachine>;
+    type TestPeer = Consensus<MemLog, NullStateMachine>;
 
-    fn new_cluster(size: u64) -> HashMap<ServerId, TestModule> {
+    fn new_cluster(size: u64) -> HashMap<ServerId, TestPeer> {
         let ids: HashMap<ServerId, SocketAddr> =
             (0..size).map(Into::into)
                      .map(|id| (id, SocketAddr::from_str(&format!("127.0.0.1:{}", id)).unwrap()))
@@ -861,11 +862,11 @@ mod tests {
         serialize::read_message(&mut buf, ReaderOptions::new()).unwrap()
     }
 
-    /// Applies the actions to the consensus modules (and recursively applies any resulting
+    /// Applies the actions to the consensus peers (and recursively applies any resulting
     /// actions), and returns any client messages.
     fn apply_actions(from: ServerId,
                      mut actions: Actions,
-                     consensus_modules: &mut HashMap<ServerId, TestModule>)
+                     peers: &mut HashMap<ServerId, TestPeer>)
                      -> Vec<(ClientId, Rc<MallocMessageBuilder>)> {
         let mut queue: VecDeque<(ServerId, ServerId, Rc<MallocMessageBuilder>)> = VecDeque::new();
 
@@ -876,7 +877,7 @@ mod tests {
 
         while let Some((from, to, message)) = queue.pop_front() {
             let reader = into_reader(&*message);
-            consensus_modules.get_mut(&to).unwrap().apply_peer_message(from, &reader, &mut actions);
+            peers.get_mut(&to).unwrap().apply_peer_message(from, &reader, &mut actions);
             let inner_from = to;
             for (inner_to, message) in actions.peer_messages.iter().cloned() {
                 queue.push_back((inner_from, inner_to, message));
@@ -890,44 +891,41 @@ mod tests {
 
     /// Elect `leader` as the leader of a cluster with the provided followers.
     /// The leader and the followers must be in the same term.
-    fn elect_leader(leader: ServerId,
-                    consensus_modules: &mut HashMap<ServerId, TestModule>) {
+    fn elect_leader(leader: ServerId, peers: &mut HashMap<ServerId, TestPeer>) {
         let mut actions = Actions::new();
-        consensus_modules.get_mut(&leader).unwrap().apply_timeout(ConsensusTimeout::Election, &mut actions);
-        let client_messages = apply_actions(leader, actions, consensus_modules);
+        peers.get_mut(&leader).unwrap().apply_timeout(ConsensusTimeout::Election, &mut actions);
+        let client_messages = apply_actions(leader, actions, peers);
         assert!(client_messages.is_empty());
-        assert!(consensus_modules[&leader].is_leader());
+        assert!(peers[&leader].is_leader());
     }
 
     /// Tests the majority function.
     #[test]
     fn test_majority () {
-        let (_, consensus_module) = new_cluster(1).into_iter().next().unwrap();
-        assert_eq!(1, consensus_module.majority());
+        let (_, peer) = new_cluster(1).into_iter().next().unwrap();
+        assert_eq!(1, peer.majority());
 
-        let (_, consensus_module) = new_cluster(2).into_iter().next().unwrap();
-        assert_eq!(2, consensus_module.majority());
+        let (_, peer) = new_cluster(2).into_iter().next().unwrap();
+        assert_eq!(2, peer.majority());
 
-        let (_, consensus_module) = new_cluster(3).into_iter().next().unwrap();
-        assert_eq!(2, consensus_module.majority());
+        let (_, peer) = new_cluster(3).into_iter().next().unwrap();
+        assert_eq!(2, peer.majority());
 
-        let (_, consensus_module) = new_cluster(4).into_iter().next().unwrap();
-        assert_eq!(3, consensus_module.majority());
+        let (_, peer) = new_cluster(4).into_iter().next().unwrap();
+        assert_eq!(3, peer.majority());
     }
 
-    /// Tests that a single-consensus module cluster will behave appropriately.
-    ///
-    /// The single consensus module should transition straight to the Leader state upon the first
-    /// timeout.
+    /// Tests that a consensus state machine with no peers will transitition immediately to the
+    /// Leader state upon the first election timeout.
     #[test]
     fn test_solitary_consensus_transition_to_leader() {
         setup_test!("test_solitary_consensus_transition_to_leader");
-        let (_, mut consensus_module) = new_cluster(1).into_iter().next().unwrap();
-        assert!(consensus_module.is_follower());
+        let (_, mut peer) = new_cluster(1).into_iter().next().unwrap();
+        assert!(peer.is_follower());
 
         let mut actions = Actions::new();
-        consensus_module.apply_timeout(ConsensusTimeout::Election, &mut actions);
-        assert!(consensus_module.is_leader());
+        peer.apply_timeout(ConsensusTimeout::Election, &mut actions);
+        assert!(peer.is_leader());
         assert!(actions.peer_messages.is_empty());
         assert!(actions.client_messages.is_empty());
         assert!(actions.timeouts.is_empty());
@@ -939,13 +937,13 @@ mod tests {
         setup_test!("test_election");
 
         for group_size in 1..10 {
-            let mut consensus_modules = new_cluster(group_size);
-            let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
-            let leader = &module_ids[0];
-            elect_leader(leader.clone(), &mut consensus_modules);
-            assert!(consensus_modules[leader].is_leader());
-            for follower in module_ids.iter().skip(1) {
-                assert!(consensus_modules[follower].is_follower());
+            let mut peers = new_cluster(group_size);
+            let peer_ids: Vec<ServerId> = peers.keys().cloned().collect();
+            let leader = &peer_ids[0];
+            elect_leader(leader.clone(), &mut peers);
+            assert!(peers[leader].is_leader());
+            for follower in peer_ids.iter().skip(1) {
+                assert!(peers[follower].is_follower());
             }
         }
     }
@@ -957,16 +955,16 @@ mod tests {
     #[test]
     fn test_heartbeat() {
         setup_test!("test_heartbeat");
-        let mut consensus_modules = new_cluster(2);
-        let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
-        let leader_id = &module_ids[0];
-        let follower_id = &module_ids[1];
-        elect_leader(leader_id.clone(), &mut consensus_modules);
+        let mut peers = new_cluster(2);
+        let peer_ids: Vec<ServerId> = peers.keys().cloned().collect();
+        let leader_id = &peer_ids[0];
+        let follower_id = &peer_ids[1];
+        elect_leader(leader_id.clone(), &mut peers);
 
         // Leader pings with a heartbeat timeout.
         let leader_append_entries = {
             let mut actions = Actions::new();
-            let leader = consensus_modules.get_mut(&leader_id).unwrap();
+            let leader = peers.get_mut(&leader_id).unwrap();
             leader.heartbeat_timeout(follower_id.clone(), &mut actions);
 
             let peer_message = actions.peer_messages.iter().next().unwrap();
@@ -978,7 +976,7 @@ mod tests {
         // Follower responds.
         let follower_response = {
             let mut actions = Actions::new();
-            let follower = consensus_modules.get_mut(&follower_id).unwrap();
+            let follower = peers.get_mut(&follower_id).unwrap();
             follower.apply_peer_message(leader_id.clone(), &reader, &mut actions);
 
             let election_timeout = actions.timeouts.iter().next().unwrap();
@@ -991,7 +989,7 @@ mod tests {
         let reader = into_reader(&*follower_response);
 
         // Leader applies and sends back a heartbeat to establish leadership.
-        let leader = consensus_modules.get_mut(&leader_id).unwrap();
+        let leader = peers.get_mut(&leader_id).unwrap();
         let mut actions = Actions::new();
         leader.apply_peer_message(follower_id.clone(), &reader, &mut actions);
         let heartbeat_timeout = actions.timeouts.iter().next().unwrap();
@@ -1008,33 +1006,33 @@ mod tests {
     #[test]
     fn test_slow_heartbeat() {
         setup_test!("test_heartbeat");
-        let mut consensus_modules = new_cluster(2);
-        let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
-        let module_0 = &module_ids[0];
-        let module_1 = &module_ids[1];
-        elect_leader(module_0.clone(), &mut consensus_modules);
+        let mut peers = new_cluster(2);
+        let peer_ids: Vec<ServerId> = peers.keys().cloned().collect();
+        let peer_0 = &peer_ids[0];
+        let peer_1 = &peer_ids[1];
+        elect_leader(peer_0.clone(), &mut peers);
 
-        let mut module_0_actions = Actions::new();
-        consensus_modules.get_mut(module_0)
-                .unwrap()
-                .apply_timeout(ConsensusTimeout::Heartbeat(*module_1), &mut module_0_actions);
-        assert!(consensus_modules[module_0].is_leader());
+        let mut peer_0_actions = Actions::new();
+        peers.get_mut(peer_0)
+             .unwrap()
+             .apply_timeout(ConsensusTimeout::Heartbeat(*peer_1), &mut peer_0_actions);
+        assert!(peers[peer_0].is_leader());
 
-        let mut module_1_actions = Actions::new();
-        consensus_modules.get_mut(module_1)
-                .unwrap()
-                .apply_timeout(ConsensusTimeout::Election, &mut module_1_actions);
-        assert!(consensus_modules[module_1].is_candidate());
+        let mut peer_1_actions = Actions::new();
+        peers.get_mut(peer_1)
+             .unwrap()
+             .apply_timeout(ConsensusTimeout::Election, &mut peer_1_actions);
+        assert!(peers[peer_1].is_candidate());
 
         // Apply candidate messages.
-        assert!(apply_actions(*module_1, module_1_actions, &mut consensus_modules).is_empty());
-        assert!(consensus_modules[module_0].is_follower());
-        assert!(consensus_modules[module_1].is_leader());
+        assert!(apply_actions(*peer_1, peer_1_actions, &mut peers).is_empty());
+        assert!(peers[peer_0].is_follower());
+        assert!(peers[peer_1].is_leader());
 
         // Apply stale heartbeat.
-        assert!(apply_actions(*module_0, module_0_actions, &mut consensus_modules).is_empty());
-        assert!(consensus_modules[module_0].is_follower());
-        assert!(consensus_modules[module_1].is_leader());
+        assert!(apply_actions(*peer_0, peer_0_actions, &mut peers).is_empty());
+        assert!(peers[peer_0].is_follower());
+        assert!(peers[peer_1].is_leader());
     }
 
     /// Tests that a client proposal is correctly replicated to peers, and the client is notified
@@ -1045,10 +1043,10 @@ mod tests {
         // Test various sizes.
         for i in 1..7 {
             scoped_debug!("testing size {} cluster", i);
-            let mut consensus_modules = new_cluster(i);
-            let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
-            let leader = module_ids[0];
-            elect_leader(leader, &mut consensus_modules);
+            let mut peers = new_cluster(i);
+            let peer_ids: Vec<ServerId> = peers.keys().cloned().collect();
+            let leader = peer_ids[0];
+            elect_leader(leader, &mut peers);
 
             let value: &[u8] = b"foo";
             let proposal = into_reader(&messages::proposal_request(value));
@@ -1056,14 +1054,14 @@ mod tests {
 
             let client = ClientId::new();
 
-            consensus_modules.get_mut(&leader)
-                    .unwrap()
-                    .apply_client_message(client, &proposal, &mut actions);
+            peers.get_mut(&leader)
+                 .unwrap()
+                 .apply_client_message(client, &proposal, &mut actions);
 
-            let client_messages = apply_actions(leader, actions, &mut consensus_modules);
+            let client_messages = apply_actions(leader, actions, &mut peers);
             assert_eq!(1, client_messages.len());
-            for module in consensus_modules.values() {
-                assert_eq!((Term(1), value), module.persistent_log.entry(LogIndex(1)).unwrap());
+            for peer in peers.values() {
+                assert_eq!((Term(1), value), peer.log.entry(LogIndex(1)).unwrap());
             }
         }
     }
@@ -1076,10 +1074,10 @@ mod tests {
         // Test various sizes.
         for i in 1..7 {
             scoped_debug!("testing size {} cluster", i);
-            let mut consensus_modules = new_cluster(i);
-            let module_ids: Vec<ServerId> = consensus_modules.keys().cloned().collect();
-            let leader = module_ids[0];
-            elect_leader(leader, &mut consensus_modules);
+            let mut peers = new_cluster(i);
+            let peer_ids: Vec<ServerId> = peers.keys().cloned().collect();
+            let leader = peer_ids[0];
+            elect_leader(leader, &mut peers);
 
             let value: &[u8] = b"foo";
             let query = into_reader(&messages::proposal_request(value));
@@ -1087,14 +1085,14 @@ mod tests {
 
             let client = ClientId::new();
 
-            consensus_modules.get_mut(&leader)
-                    .unwrap()
-                    .apply_client_message(client, &query, &mut actions);
+            peers.get_mut(&leader)
+                 .unwrap()
+                 .apply_client_message(client, &query, &mut actions);
 
-            let client_messages = apply_actions(leader, actions, &mut consensus_modules);
+            let client_messages = apply_actions(leader, actions, &mut peers);
             assert_eq!(1, client_messages.len());
-            for module in consensus_modules.values() {
-                assert_eq!((Term(1), value), module.persistent_log.entry(LogIndex(1)).unwrap());
+            for peer in peers.values() {
+                assert_eq!((Term(1), value), peer.log.entry(LogIndex(1)).unwrap());
             }
         }
     }
