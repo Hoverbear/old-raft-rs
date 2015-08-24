@@ -285,9 +285,6 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
             return;
         }
 
-        let leader_commit_index = LogIndex::from(request.get_leader_commit());
-        scoped_assert!(self.commit_index <= leader_commit_index);
-
         match self.state {
             ConsensusState::Follower => {
                 let message = {
@@ -339,7 +336,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                             }
                             let latest_log_index = leader_prev_log_index + num_entries as u64;
                             // We are matching the leaders log up to and including `latest_log_index`.
-                            self.commit_index = cmp::min(leader_commit_index, latest_log_index);
+                            self.commit_index = cmp::min(LogIndex::from(request.get_leader_commit()), latest_log_index);
                             self.apply_commits();
                             messages::append_entries_response_success(
                                 self.current_term(), self.log.latest_log_index().unwrap())
