@@ -3,8 +3,6 @@
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Hoverbear/raft/master/raft.png")]
 #![doc(html_root_url = "https://hoverbear.github.io/raft/raft/")]
 
-#![feature(test)]
-
 //! This is the Raft Distributed Consensus Protocol implemented for Rust.
 //! [Raft](http://raftconsensus.github.io/) is described as:
 //!
@@ -79,7 +77,6 @@ extern crate capnp;
 extern crate mio;
 extern crate rand;
 extern crate uuid;
-extern crate test;
 #[macro_use] extern crate log;
 #[macro_use] extern crate scoped_log;
 #[macro_use] extern crate wrapped_enum;
