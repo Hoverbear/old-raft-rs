@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::io::Write;
+use std::time::Duration;
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::str::FromStr;
@@ -75,7 +76,12 @@ impl Client {
                     // Send the preamble.
                     let preamble = messages::client_connection_preamble(self.id);
                     let mut stream = match TcpStream::connect(leader) {
-                        Ok(stream) => BufStream::new(stream),
+                        Ok(stream) => {
+                            if let Err(_) = stream.set_read_timeout(Some(Duration::from_millis(1500))) {
+                                continue
+                            }
+                            BufStream::new(stream)
+                        },
                         Err(_) => continue,
                     };
                     scoped_debug!("connected");
