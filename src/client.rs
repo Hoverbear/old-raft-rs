@@ -18,6 +18,8 @@ use ClientId;
 use Result;
 use RaftError;
 
+const CLIENT_TIMEOUT: u64 = 1500;
+
 /// The representation of a Client connection to the cluster.
 pub struct Client {
     /// The `Uuid` of the client, should be unique in the cluster.
@@ -77,7 +79,8 @@ impl Client {
                     let preamble = messages::client_connection_preamble(self.id);
                     let mut stream = match TcpStream::connect(leader) {
                         Ok(stream) => {
-                            if let Err(_) = stream.set_read_timeout(Some(Duration::from_millis(1500))) {
+                            let timeout = Some(Duration::from_millis(CLIENT_TIMEOUT));
+                            if let Err(_) = stream.set_read_timeout(timeout) {
                                 continue
                             }
                             BufStream::new(stream)
