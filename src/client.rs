@@ -61,6 +61,9 @@ impl Client {
         let mut members = self.cluster.iter().cloned();
 
         loop {
+            // We presume in this loop that most errors are temporary and it may take a redirect
+            // (or more!) to find a leader in bad network conditions.
+            // TODO: Have timouts.
             let mut connection = match self.leader_connection.take() {
                 Some(cxn) => {
                     scoped_debug!("had existing connection {:?}", cxn.get_ref().peer_addr());
@@ -71,31 +74,41 @@ impl Client {
                     scoped_debug!("connecting to potential leader {}", leader);
                     // Send the preamble.
                     let preamble = messages::client_connection_preamble(self.id);
-                    let mut stream = BufStream::new(try!(TcpStream::connect(leader)));
+                    let mut stream = match TcpStream::connect(leader) {
+                        Ok(stream) => BufStream::new(stream),
+                        Err(_) => continue,
+                    };
                     scoped_debug!("connected");
-                    try!(serialize::write_message(&mut stream, &*preamble));
+                    if let Err(_) = serialize::write_message(&mut stream, &*preamble) { continue };
                     stream
                 }
             };
-            try!(serialize::write_message(&mut connection, message));
-            try!(connection.flush());
+            if let Err(_) = serialize::write_message(&mut connection, message) { continue };
+            if let Err(_) = connection.flush() { continue };
             scoped_debug!("awaiting response from connection");
-            let response = try!(serialize::read_message(&mut connection, ReaderOptions::new()));
-            match try!(response.get_root::<client_response::Reader>()).which().unwrap() {
-                client_response::Which::Proposal(Ok(response)) => {
-                    match response.which().unwrap() {
-                        command_response::Which::Success(data) => {
+            let response = match serialize::read_message(&mut connection, ReaderOptions::new()) {
+                Ok(res) => res,
+                Err(_) => continue,
+            };
+            let reader = match response.get_root::<client_response::Reader>() {
+                Ok(reader) => reader,
+                Err(_) => continue,
+            };
+            match reader.which() {
+                Ok(client_response::Which::Proposal(Ok(status))) => {
+                    match status.which() {
+                        Ok(command_response::Which::Success(data)) => {
                             scoped_debug!("received response Success");
                             self.leader_connection = Some(connection);
                             return data
                                 .map(|v| Vec::from(v))
                                 .map_err(|e| e.into()) // Exit the function.
                         },
-                        command_response::Which::UnknownLeader(()) => {
+                        Ok(command_response::Which::UnknownLeader(())) => {
                             scoped_debug!("received response UnknownLeader");
                             () // Keep looping.
                         },
-                        command_response::Which::NotLeader(leader) => {
+                        Ok(command_response::Which::NotLeader(leader)) => {
                             scoped_debug!("received response NotLeader");
                             let leader_str = try!(leader);
                             if !self.cluster.contains(&try!(SocketAddr::from_str(leader_str))) {
@@ -104,13 +117,16 @@ impl Client {
                             }
                             let mut connection: TcpStream = try!(TcpStream::connect(leader_str));
                             let preamble = messages::client_connection_preamble(self.id);
-                            try!(serialize::write_message(&mut connection, &*preamble));
+                            if let Err(_) = serialize::write_message(&mut connection, &*preamble) {
+                                continue
+                            };
                             self.leader_connection = Some(BufStream::new(connection));
-                        }
+                        },
+                        Err(_) => continue,
                     }
                 },
                 _ => panic!("Unexpected message type"), // TODO: return a proper error
-            }
+            };
         }
     }
 }
