@@ -18,7 +18,7 @@ Two well known Distributed Consensus Algorithms are Paxos and Raft. Paxos is use
 
 ## Documentation ##
 
-* [Raft Crate Documentation](https://hoverbear.github.io/raft/raft/)
+* [Raft Crate Documentation](https://hoverbear.github.io/raft-rs/raft/)
 * [The Raft site](https://raftconsensus.github.io/)
 * [The Secret Lives of Data - Raft](http://thesecretlivesofdata.com/raft/)
 * [Raft Paper](http://ramcloud.stanford.edu/raft.pdf)
