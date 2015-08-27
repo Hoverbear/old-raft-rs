@@ -29,7 +29,7 @@
 //! 3. Interact with the cluster by issuing `.propose()` and `.query()` calls via the `Client`
 //! 4. React to calls to `.propose()` and `.query()` from the implemented `StateMachine`
 //!
-//! ## Peristent Log
+//! ## Persistent Log
 //!
 //! A `Log` represents the **replicated, persistent log** of your application. It has a
 //! strong ordering such that `A → B → C` and should **only** act to store information. Entries
@@ -53,7 +53,7 @@
 //!
 //! In the `StateMachine` there are both mutable (`.apply()`) and immutable (`.query()`) calls.
 //! There is a considerable performance difference, as `.query()` calls do not pass through the
-//! durablable `Log` while `.apply()` events do.
+//! durable `Log` while `.apply()` events do.
 //!
 //! Some ideas for a State Machine implementation:
 //!
