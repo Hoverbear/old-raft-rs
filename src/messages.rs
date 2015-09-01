@@ -4,18 +4,10 @@
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use capnp::{
-    MallocMessageBuilder,
-    MessageBuilder,
-};
+use capnp::{MallocMessageBuilder, MessageBuilder};
 
-use {ClientId, Term, LogIndex, ServerId};
-use messages_capnp::{
-    client_request,
-    client_response,
-    connection_preamble,
-    message
-};
+use {ClientId, LogIndex, ServerId, Term};
+use messages_capnp::{client_request, client_response, connection_preamble, message};
 
 // ConnectionPreamble
 
@@ -101,9 +93,7 @@ pub fn append_entries_response_inconsistent_prev_entry(term: Term, index: LogInd
     Rc::new(message)
 }
 
-pub fn append_entries_response_internal_error(term: Term,
-                                              error: &str)
-                                              -> Rc<MallocMessageBuilder> {
+pub fn append_entries_response_internal_error(term: Term, error: &str) -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
@@ -116,10 +106,7 @@ pub fn append_entries_response_internal_error(term: Term,
 
 // RequestVote
 
-pub fn request_vote_request(term: Term,
-                            last_log_index: LogIndex,
-                            last_log_term: Term)
-                            -> Rc<MallocMessageBuilder> {
+pub fn request_vote_request(term: Term, last_log_index: LogIndex, last_log_term: Term) -> Rc<MallocMessageBuilder> {
     let mut message = MallocMessageBuilder::new_default();
     {
         let mut request = message.init_root::<message::Builder>()

@@ -5,24 +5,9 @@ use std::rc::Rc;
 
 use mio::tcp::TcpStream;
 use mio::Timeout as TimeoutHandle;
-use mio::{
-    EventLoop,
-    EventSet,
-    PollOpt,
-    Token,
-};
-use capnp::{
-    MallocMessageBuilder,
-    OwnedSpaceMessageReader,
-    ReaderOptions,
-};
-use capnp::serialize::{
-    read_message_async,
-    write_message_async,
-    AsyncValue,
-    ReadContinuation,
-    WriteContinuation,
-};
+use mio::{EventLoop, EventSet, PollOpt, Token};
+use capnp::{MallocMessageBuilder, OwnedSpaceMessageReader, ReaderOptions};
+use capnp::serialize::{AsyncValue, ReadContinuation, WriteContinuation, read_message_async, write_message_async};
 
 use ClientId;
 use Result;
@@ -45,7 +30,7 @@ pub enum ConnectionKind {
     /// A client which is asking the Raft cluster to do things.
     Client(ClientId),
     /// Something else.
-    Unknown,
+    Unknown
 }
 
 impl ConnectionKind {
@@ -76,7 +61,7 @@ pub struct Connection {
     read_continuation: Option<ReadContinuation>,
     write_continuation: Option<WriteContinuation>,
     write_queue: VecDeque<Rc<MallocMessageBuilder>>,
-    is_connected: bool,
+    is_connected: bool
 }
 
 impl Connection {
@@ -90,32 +75,32 @@ impl Connection {
     pub fn unknown(socket: TcpStream) -> Result<Connection> {
         let addr = try!(socket.peer_addr());
         Ok(Connection {
-            kind: ConnectionKind::Unknown,
-            addr: addr,
-            stream: socket,
-            backoff: Backoff::with_duration_range(50, 10000),
-            events: EventSet::hup() | EventSet::readable(),
-            read_continuation: None,
-            write_continuation: None,
-            write_queue: VecDeque::new(),
-            is_connected: true,
-        })
+                kind: ConnectionKind::Unknown,
+                addr: addr,
+                stream: socket,
+                backoff: Backoff::with_duration_range(50, 10000),
+                events: EventSet::hup() | EventSet::readable(),
+                read_continuation: None,
+                write_continuation: None,
+                write_queue: VecDeque::new(),
+                is_connected: true
+            })
     }
 
     /// Creates a new peer connection.
     pub fn peer(id: ServerId, addr: SocketAddr) -> Result<Connection> {
         let stream = try!(TcpStream::connect(&addr));
         Ok(Connection {
-            kind: ConnectionKind::Peer(id),
-            addr: addr,
-            stream: stream,
-            backoff: Backoff::with_duration_range(50, 10000),
-            events: EventSet::hup() | EventSet::readable(),
-            read_continuation: None,
-            write_continuation: None,
-            write_queue: VecDeque::new(),
-            is_connected: true,
-        })
+                kind: ConnectionKind::Peer(id),
+                addr: addr,
+                stream: stream,
+                backoff: Backoff::with_duration_range(50, 10000),
+                events: EventSet::hup() | EventSet::readable(),
+                read_continuation: None,
+                write_continuation: None,
+                write_queue: VecDeque::new(),
+                is_connected: true
+            })
     }
 
     pub fn kind(&self) -> &ConnectionKind {
@@ -143,7 +128,7 @@ impl Connection {
             let continuation = self.write_continuation.take();
             match write_message_async(&mut self.stream, &*message, continuation) {
                 Ok(AsyncValue::Complete(())) => (),
-                Ok(AsyncValue::Continue(continuation)) =>  {
+                Ok(AsyncValue::Continue(continuation)) => {
                     // The write only partially completed. Save the continuation and add the
                     // message back to the front of the queue.
                     self.write_continuation = Some(continuation);
@@ -182,12 +167,12 @@ impl Connection {
         match read {
             AsyncValue::Complete(message) => {
                 Ok(Some(message))
-            },
+            }
             AsyncValue::Continue(continuation) => {
                 // the read only partially completed. Save the continuation and return.
                 self.read_continuation = Some(continuation);
                 Ok(None)
-            },
+            }
         }
     }
 
@@ -208,7 +193,9 @@ impl Connection {
 
     /// Registers the connection with the event loop.
     pub fn register<L, M>(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token) -> Result<()>
-    where L: Log, M: StateMachine {
+        where L: Log,
+              M: StateMachine
+    {
         scoped_trace!("{:?}: register", self);
         event_loop.register_opt(&self.stream, token, self.events, poll_opt())
                   .map_err(|error| {
@@ -219,7 +206,9 @@ impl Connection {
 
     /// Reregisters the connection with the event loop.
     pub fn reregister<L, M>(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token) -> Result<()>
-    where L: Log, M: StateMachine {
+        where L: Log,
+              M: StateMachine
+    {
         scoped_trace!("{:?}: reregister", self);
         event_loop.reregister(&self.stream, token, self.events, poll_opt())
                   .map_err(|error| {
@@ -246,7 +235,9 @@ impl Connection {
                             event_loop: &mut EventLoop<Server<L, M>>,
                             token: Token)
                             -> Result<(ServerTimeout, TimeoutHandle)>
-    where L: Log, M: StateMachine {
+        where L: Log,
+              M: StateMachine
+    {
         scoped_assert!(self.kind.is_peer());
         let duration = self.backoff.next_backoff_ms();
         self.read_continuation = None;
@@ -276,13 +267,13 @@ impl fmt::Debug for Connection {
         match self.kind {
             ConnectionKind::Peer(id) => {
                 write!(fmt, "PeerConnection({})", id)
-            },
+            }
             ConnectionKind::Client(id) => {
                 write!(fmt, "ClientConnection({})", id)
-            },
+            }
             ConnectionKind::Unknown => {
                 write!(fmt, "UnknownConnection({})", &self.addr)
-            },
+            }
         }
     }
 }

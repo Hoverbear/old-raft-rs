@@ -16,8 +16,10 @@
 
 extern crate raft; // <--- Kind of a big deal for this!
 extern crate env_logger;
-#[macro_use] extern crate log;
-#[macro_use] extern crate scoped_log;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate scoped_log;
 extern crate docopt;
 extern crate serde;
 extern crate serde_json;
@@ -31,13 +33,7 @@ use serde_json::Value;
 use docopt::Docopt;
 
 // Raft's major components. See comments in code on usage and things.
-use raft::{
-    Server,
-    Client,
-    state_machine,
-    persistent_log,
-    ServerId,
-};
+use raft::{Client, Server, ServerId, persistent_log, state_machine};
 // A payload datatype. We're just using a simple enum. You can use whatever.
 use Message::*;
 
@@ -86,19 +82,17 @@ struct Args {
     cmd_get: bool,
     cmd_put: bool,
     cmd_cas: bool,
-
     // When creating a server you will necessarily need some sort of unique ID for it as well
     // as a list of peers. In this example we just accept them straight from args. You might
     // find it best to use a `toml` or `yaml` or `json` file.
     arg_id: Option<u64>,
     arg_node_id: Vec<u64>,
     arg_node_address: Vec<String>,
-
     // In this example keys and values are associated. In your application you can model your data
     // however you please.
     arg_key: String,
     arg_new_value: String,
-    arg_expected_value: String,
+    arg_expected_value: String
 }
 
 /// This is the defined message type for this example. For the sake of simplicity we don't go very
@@ -108,7 +102,7 @@ struct Args {
 pub enum Message {
     Get(String),
     Put(String, Value),
-    Cas(String, Value, Value),
+    Cas(String, Value, Value)
 }
 
 /// Just a plain old boring "parse args and dispatch" call.
@@ -238,15 +232,13 @@ fn cas(args: &Args) {
 /// A state machine that holds a hashmap.
 #[derive(Debug)]
 pub struct HashmapStateMachine {
-    map: HashMap<String, Value>,
+    map: HashMap<String, Value>
 }
 
 /// Implement anything you want... A `new()` is generally a great idea.
 impl HashmapStateMachine {
     pub fn new() -> HashmapStateMachine {
-        HashmapStateMachine {
-            map: HashMap::new(),
-        }
+        HashmapStateMachine { map: HashMap::new() }
     }
 }
 
@@ -268,11 +260,11 @@ impl state_machine::StateMachine for HashmapStateMachine {
             Get(key) => {
                 let old_value = &self.map.get(&key).map(|v| v.clone());
                 serde_json::to_string(old_value)
-            },
+            }
             Put(key, value) => {
                 let old_value = &self.map.insert(key, value);
                 serde_json::to_string(old_value)
-            },
+            }
             Cas(key, old_check, new) => {
                 if *self.map.get(&key).unwrap() == old_check {
                     let _ = self.map.insert(key, new);
@@ -280,7 +272,7 @@ impl state_machine::StateMachine for HashmapStateMachine {
                 } else {
                     serde_json::to_string(&false)
                 }
-            },
+            }
         };
 
         // Respond.
@@ -301,7 +293,7 @@ impl state_machine::StateMachine for HashmapStateMachine {
             Get(key) => {
                 let old_value = &self.map.get(&key).map(|v| v.clone());
                 serde_json::to_string(old_value)
-            },
+            }
             _ => panic!("Can't do mutating requests in query"),
         };
 

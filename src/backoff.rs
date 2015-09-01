@@ -8,15 +8,12 @@ use rand::{self, Rng};
 /// (http://dthain.blogspot.com/2009/02/exponential-backoff-in-distributed.html)
 /// for algorithm details.
 pub struct Backoff {
-
     /// Initial backoff duration.
     initial: u32,
-
     /// Maximum backoff duration.
     max: u32,
-
     /// Number of retries since last reset.
-    retries: u32,
+    retries: u32
 }
 
 impl Backoff {
@@ -29,11 +26,7 @@ impl Backoff {
     /// 1ms on average but in 10ms for 99% of requests, then set t=10.
     pub fn with_duration_range(initial: u32, max: u32) -> Backoff {
         assert!(initial > 0, "round-trip time must be greater than 0");
-        Backoff {
-            initial: initial,
-            max: max,
-            retries: 0
-        }
+        Backoff { initial: initial, max: max, retries: 0 }
     }
 
     /// Resets the backoff to the initial state.
