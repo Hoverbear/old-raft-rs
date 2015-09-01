@@ -16,7 +16,7 @@ use ServerId;
 pub enum ConsensusState {
     Follower,
     Candidate,
-    Leader,
+    Leader
 }
 
 /// The state associated with a Raft consensus module in the `Leader` state.
@@ -25,7 +25,7 @@ pub struct LeaderState {
     next_index: HashMap<ServerId, LogIndex>,
     match_index: HashMap<ServerId, LogIndex>,
     /// Stores in-flight client proposals.
-    pub proposals: VecDeque<(ClientId, LogIndex)>,
+    pub proposals: VecDeque<(ClientId, LogIndex)>
 }
 
 impl LeaderState {
@@ -41,11 +41,7 @@ impl LeaderState {
         let next_index = peers.iter().cloned().map(|peer| (peer, latest_log_index + 1)).collect();
         let match_index = peers.iter().cloned().map(|peer| (peer, LogIndex::from(0))).collect();
 
-        LeaderState {
-            next_index: next_index,
-            match_index: match_index,
-            proposals: VecDeque::new(),
-        }
+        LeaderState { next_index: next_index, match_index: match_index, proposals: VecDeque::new() }
     }
 
     /// Returns the next log entry index of the follower.
@@ -91,7 +87,7 @@ impl LeaderState {
 /// The state associated with a Raft consensus module in the `Candidate` state.
 #[derive(Clone, Debug)]
 pub struct CandidateState {
-    granted_votes: HashSet<ServerId>,
+    granted_votes: HashSet<ServerId>
 }
 
 impl CandidateState {
@@ -127,7 +123,7 @@ impl CandidateState {
 pub struct FollowerState {
     /// The most recent leader of the follower. The leader is not guaranteed to be active, so this
     /// should only be used as a hint.
-    pub leader: Option<ServerId>,
+    pub leader: Option<ServerId>
 }
 
 impl FollowerState {

@@ -16,13 +16,7 @@ use std::process;
 
 use docopt::Docopt;
 
-use raft::{
-    state_machine,
-    persistent_log,
-    ServerId,
-    Server,
-    Client,
-};
+use raft::{Client, Server, ServerId, persistent_log, state_machine};
 
 /// Proposal operations supported by the distributed register. Proposals may
 /// mutate the register, and will be durably replicated to a quorum of peers
@@ -30,14 +24,14 @@ use raft::{
 #[derive(Serialize, Deserialize)]
 enum Proposal {
     Put(String),
-    Cas(String, String),
+    Cas(String, String)
 }
 
 /// Query operations supported by the distributed register. Queries may
 /// not mutate the register, and are serviced by the the current master replica.
 #[derive(Serialize, Deserialize)]
 enum Query {
-    Get,
+    Get
 }
 
 /// A response to a get, put or cas operation.
@@ -46,9 +40,10 @@ enum Response {
     /// The operation succeeded.
     Ok(String),
     /// The operation failed.
-    Err(String),
+    Err(String)
 }
 
+#[rustfmt_skip]
 static USAGE: &'static str = "
 A replicated mutable value. Operations on the register have serializable
 consistency, but no durability (once all register servers are terminated the
@@ -91,14 +86,12 @@ struct Args {
     cmd_get: bool,
     cmd_put: bool,
     cmd_cas: bool,
-
     arg_id: Option<u64>,
     arg_node_id: Vec<u64>,
     arg_node_address: Vec<String>,
     arg_server_id: Option<u64>,
-
     arg_new_value: String,
-    arg_expected_value: String,
+    arg_expected_value: String
 }
 
 fn main() {
@@ -197,8 +190,7 @@ fn put(args: &Args) {
 /// value.
 fn cas(args: &Args) {
     let mut client = create_client(args);
-    let proposal = Proposal::Cas(args.arg_expected_value.clone(),
-                                 args.arg_new_value.clone());
+    let proposal = Proposal::Cas(args.arg_expected_value.clone(), args.arg_new_value.clone());
     let request = bincode::serde::serialize(&proposal, bincode::SizeLimit::Infinite).unwrap();
     handle_response(client.propose(&request).unwrap());
 }
@@ -206,7 +198,7 @@ fn cas(args: &Args) {
 /// A state machine that holds a single mutable string value.
 #[derive(Debug)]
 pub struct RegisterStateMachine {
-    value: String,
+    value: String
 }
 
 impl RegisterStateMachine {
@@ -239,7 +231,7 @@ impl state_machine::StateMachine for RegisterStateMachine {
                 if test == self.value {
                     self.value = new;
                 }
-            },
+            }
         }
 
         response

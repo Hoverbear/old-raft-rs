@@ -11,11 +11,12 @@ use Term;
 pub struct MemLog {
     current_term: Term,
     voted_for: Option<ServerId>,
-    entries: Vec<(Term, Vec<u8>)>,
+    entries: Vec<(Term, Vec<u8>)>
 }
 
 /// Non-instantiable error type for MemLog
-pub enum Error { }
+pub enum Error {
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, _fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -38,11 +39,7 @@ impl error::Error for Error {
 impl MemLog {
 
     pub fn new() -> MemLog {
-        MemLog {
-            current_term: Term(0),
-            voted_for: None,
-            entries: Vec::new(),
-        }
+        MemLog { current_term: Term(0), voted_for: None, entries: Vec::new() }
     }
 }
 
@@ -91,10 +88,7 @@ impl Log for MemLog {
         Ok((term, &bytes))
     }
 
-    fn append_entries(&mut self,
-                      from: LogIndex,
-                      entries: &[(Term, &[u8])])
-                      -> result::Result<(), Error> {
+    fn append_entries(&mut self, from: LogIndex, entries: &[(Term, &[u8])]) -> result::Result<(), Error> {
         assert!(self.latest_log_index().unwrap() + 1 >= from);
         self.entries.truncate((from - 1).as_u64() as usize);
         Ok(self.entries.extend(entries.iter().map(|&(term, command)| (term, command.to_vec()))))
