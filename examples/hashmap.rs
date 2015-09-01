@@ -42,6 +42,7 @@ use raft::{
 use Message::*;
 
 // Using docopt we define the overall usage of the application.
+#[rustfmt_skip]
 static USAGE: &'static str = "
 A replicated mutable hashmap. Operations on the register have serializable
 consistency, but no durability (once all register servers are terminated the

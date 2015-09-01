@@ -49,6 +49,7 @@ enum Response {
     Err(String),
 }
 
+#[rustfmt_skip]
 static USAGE: &'static str = "
 A replicated mutable value. Operations on the register have serializable
 consistency, but no durability (once all register servers are terminated the
