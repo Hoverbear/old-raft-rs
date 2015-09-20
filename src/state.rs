@@ -58,6 +58,8 @@ impl LeaderState {
         self.next_index.insert(follower, index);
     }
 
+    // TODO: why is this never used?
+    #[allow(dead_code)]
     /// Returns the index of the highest log entry known to be replicated on
     /// the follower.
     pub fn match_index(&self, follower: &ServerId) -> LogIndex {

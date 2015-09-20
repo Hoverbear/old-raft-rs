@@ -56,13 +56,6 @@ impl ConnectionKind {
             _ => false,
         }
     }
-    /// Returns if the `Connection` is a client type.
-    fn is_client(&self) -> bool {
-        match *self {
-            ConnectionKind::Client(..) => true,
-            _ => false,
-        }
-    }
 }
 
 pub struct Connection {
