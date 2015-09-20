@@ -320,24 +320,23 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                             messages::append_entries_response_inconsistent_prev_entry(self.current_term(),
                                 leader_prev_log_index)
                         } else {
-                            let entries = request.get_entries().unwrap();
-                            let num_entries = entries.len();
-                            scoped_debug!("AppendEntriesRequest: {} entries from leader: {}",
-                                          num_entries, from);
-                            if num_entries > 0 {
-                                let mut entries_vec = Vec::with_capacity(num_entries as usize);
-                                for i in 0..num_entries {
-                                    let entry = entries.get(i);
-                                    let term = Term::from(entry.get_term());
-                                    let data = entry.get_data().unwrap();
-                                    entries_vec.push((term, data));
-                                }
+                            if let Ok(entries) = request.get_entries() {
+                                let num_entries: u32 = entries.len();
+                                scoped_debug!("AppendEntriesRequest: {} entries from leader: {}",
+                                              num_entries, from);
+
+                                let entries_vec: Vec<(Term, &[u8])> = entries.iter().map(
+                                    |entry| (Term::from(entry.get_term()), entry.get_data().unwrap_or(b""))
+                                ).collect();
+
                                 self.log.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
+                                let latest_log_index = leader_prev_log_index + num_entries as u64;
+                                // We are matching the leader's log up to and including `latest_log_index`.
+                                self.commit_index = cmp::min(LogIndex::from(request.get_leader_commit()), latest_log_index);
+                                self.apply_commits();
+                            } else {
+                                panic!("AppendEntriesRequest: no entry list")
                             }
-                            let latest_log_index = leader_prev_log_index + num_entries as u64;
-                            // We are matching the leaders log up to and including `latest_log_index`.
-                            self.commit_index = cmp::min(LogIndex::from(request.get_leader_commit()), latest_log_index);
-                            self.apply_commits();
                             messages::append_entries_response_success(
                                 self.current_term(), self.log.latest_log_index().unwrap())
                         }
