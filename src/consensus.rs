@@ -554,13 +554,11 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
             let message =
                 messages::command_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
             actions.client_messages.push((from, message));
-        } else {
+        } else if let Ok(entry) = request.get_entry() {
             let prev_log_index = self.latest_log_index();
             let prev_log_term = self.latest_log_term();
             let term = self.current_term();
             let log_index = prev_log_index + 1;
-            // TODO: This is probably not exactly safe.
-            let entry = request.get_entry().unwrap();
             self.log.append_entries(log_index, &[(term, entry)]).unwrap();
             self.leader_state.proposals.push_back((from, log_index));
             if self.peers.len() == 0 {
@@ -581,6 +579,8 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                     }
                 }
             }
+        } else {
+            panic!("ProposalRequest: no entry given")
         }
     }
 
