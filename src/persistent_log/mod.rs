@@ -51,6 +51,20 @@ pub trait Log: Clone + Debug + Send + 'static {
     /// This method will panic if the index greater than the largest index.
     fn entry(&self, index: LogIndex) -> result::Result<(Term, &[u8]), Self::Error>;
 
+    /// Returns the given range of entries (excluding the right endpoint).
+    ///
+    /// # Panic
+    ///
+    /// This method will panic if the range contains an index greater than
+    /// the largest index.
+    fn entries(&self, lo: LogIndex, hi: LogIndex) -> Vec<(Term, &[u8])> {
+        // TODO: can make LogIndex compatible for use in ranges.
+       (lo.as_u64()..hi.as_u64())
+            .map(|index| self.entry(LogIndex::from(index)).unwrap())
+            .collect::<Vec<_>>()
+    }
+
+
     /// Appends the provided entries to the log beginning at the given index.
     fn append_entries(&mut self, from: LogIndex, entries: &[(Term, &[u8])]) -> result::Result<(), Self::Error>;
 }

@@ -235,11 +235,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                         self.log.entry(prev_log_index).unwrap().0
                     };
 
-                let mut entries = Vec::with_capacity((until_index - from_index) as usize);
-                for index in from_index.as_u64()..until_index.as_u64() {
-                    entries.push(self.log.entry(LogIndex::from(index)).unwrap())
-                }
-
+                let entries = self.log.entries(from_index, until_index);
                 let message = messages::append_entries_request(
                     self.current_term(),
                     prev_log_index,
@@ -443,16 +439,13 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                 if prev_log_index == LogIndex(0) {
                     Term(0)
                 } else {
-                    self.log.entry(prev_log_index).unwrap().0
+                    self.log.entries(prev_log_index, prev_log_index+1).first().unwrap().0
                 };
 
             let from_index = next_index;
             let until_index = local_latest_log_index + 1;
 
-            let mut entries = vec![];
-            for index in from_index.as_u64()..until_index.as_u64() {
-                entries.push(self.log.entry(LogIndex::from(index)).unwrap())
-            }
+            let entries = self.log.entries(LogIndex::from(from_index), LogIndex::from(until_index));
 
             let message = messages::append_entries_request(
                 local_term,
