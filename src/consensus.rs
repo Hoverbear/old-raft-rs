@@ -235,7 +235,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                         self.log.entry(prev_log_index).unwrap().0
                     };
 
-                let entries = self.log.entries(from_index, until_index);
+                let entries = self.log.entries(from_index, until_index).unwrap();
                 let message = messages::append_entries_request(
                     self.current_term(),
                     prev_log_index,
@@ -439,13 +439,13 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                 if prev_log_index == LogIndex(0) {
                     Term(0)
                 } else {
-                    self.log.entries(prev_log_index, prev_log_index+1).first().unwrap().0
+                    self.log.entry(prev_log_index).unwrap().0
                 };
 
             let from_index = next_index;
             let until_index = local_latest_log_index + 1;
 
-            let entries = self.log.entries(LogIndex::from(from_index), LogIndex::from(until_index));
+            let entries = self.log.entries(LogIndex::from(from_index), LogIndex::from(until_index)).unwrap();
 
             let message = messages::append_entries_request(
                 local_term,

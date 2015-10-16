@@ -7,6 +7,11 @@ use Term;
 
 /// This is a `Log` implementation that stores entries in a simple in-memory vector. Other data
 /// is stored in a struct. It is chiefly intended for testing.
+///
+/// # Panic
+///
+/// No bounds checking is performed and attempted access to non-existing log
+/// indexes will panic.
 #[derive(Clone, Debug)]
 pub struct MemLog {
     current_term: Term,

@@ -45,23 +45,14 @@ pub trait Log: Clone + Debug + Send + 'static {
     fn latest_log_term(&self) -> result::Result<Term, Self::Error>;
 
     /// Returns the entry at the provided log index.
-    ///
-    /// # Panic
-    ///
-    /// This method will panic if the index greater than the largest index.
     fn entry(&self, index: LogIndex) -> result::Result<(Term, &[u8]), Self::Error>;
 
     /// Returns the given range of entries (excluding the right endpoint).
-    ///
-    /// # Panic
-    ///
-    /// This method will panic if the range contains an index greater than
-    /// the largest index.
-    fn entries(&self, lo: LogIndex, hi: LogIndex) -> Vec<(Term, &[u8])> {
+    fn entries(&self, lo: LogIndex, hi: LogIndex) -> result::Result<Vec<(Term, &[u8])>, Self::Error> {
         // TODO: can make LogIndex compatible for use in ranges.
        (lo.as_u64()..hi.as_u64())
-            .map(|index| self.entry(LogIndex::from(index)).unwrap())
-            .collect::<Vec<_>>()
+            .map(|index| self.entry(LogIndex::from(index)))
+            .collect::<Result<_, _>>()
     }
 
 
