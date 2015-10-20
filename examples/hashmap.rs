@@ -24,7 +24,6 @@ extern crate serde_json;
 extern crate rustc_serialize;
 
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::str::FromStr;
 use std::collections::HashMap;
 
 use serde_json::Value;

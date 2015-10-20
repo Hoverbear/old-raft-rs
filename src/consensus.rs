@@ -235,11 +235,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                         self.log.entry(prev_log_index).unwrap().0
                     };
 
-                let mut entries = Vec::with_capacity((until_index - from_index) as usize);
-                for index in from_index.as_u64()..until_index.as_u64() {
-                    entries.push(self.log.entry(LogIndex::from(index)).unwrap())
-                }
-
+                let entries = self.log.entries(from_index, until_index).unwrap();
                 let message = messages::append_entries_request(
                     self.current_term(),
                     prev_log_index,
@@ -320,24 +316,23 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                             messages::append_entries_response_inconsistent_prev_entry(self.current_term(),
                                 leader_prev_log_index)
                         } else {
-                            let entries = request.get_entries().unwrap();
-                            let num_entries = entries.len();
-                            scoped_debug!("AppendEntriesRequest: {} entries from leader: {}",
-                                          num_entries, from);
-                            if num_entries > 0 {
-                                let mut entries_vec = Vec::with_capacity(num_entries as usize);
-                                for i in 0..num_entries {
-                                    let entry = entries.get(i);
-                                    let term = Term::from(entry.get_term());
-                                    let data = entry.get_data().unwrap();
-                                    entries_vec.push((term, data));
-                                }
+                            if let Ok(entries) = request.get_entries() {
+                                let num_entries: u32 = entries.len();
+                                scoped_debug!("AppendEntriesRequest: {} entries from leader: {}",
+                                              num_entries, from);
+
+                                let entries_vec: Vec<(Term, &[u8])> = entries.iter().map(
+                                    |entry| (Term::from(entry.get_term()), entry.get_data().unwrap_or(b""))
+                                ).collect();
+
                                 self.log.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
+                                let latest_log_index = leader_prev_log_index + num_entries as u64;
+                                // We are matching the leader's log up to and including `latest_log_index`.
+                                self.commit_index = cmp::min(LogIndex::from(request.get_leader_commit()), latest_log_index);
+                                self.apply_commits();
+                            } else {
+                                panic!("AppendEntriesRequest: no entry list")
                             }
-                            let latest_log_index = leader_prev_log_index + num_entries as u64;
-                            // We are matching the leaders log up to and including `latest_log_index`.
-                            self.commit_index = cmp::min(LogIndex::from(request.get_leader_commit()), latest_log_index);
-                            self.apply_commits();
                             messages::append_entries_response_success(
                                 self.current_term(), self.log.latest_log_index().unwrap())
                         }
@@ -450,10 +445,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
             let from_index = next_index;
             let until_index = local_latest_log_index + 1;
 
-            let mut entries = vec![];
-            for index in from_index.as_u64()..until_index.as_u64() {
-                entries.push(self.log.entry(LogIndex::from(index)).unwrap())
-            }
+            let entries = self.log.entries(LogIndex::from(from_index), LogIndex::from(until_index)).unwrap();
 
             let message = messages::append_entries_request(
                 local_term,
@@ -562,13 +554,11 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
             let message =
                 messages::command_response_not_leader(&self.peers[&self.follower_state.leader.unwrap()]);
             actions.client_messages.push((from, message));
-        } else {
+        } else if let Ok(entry) = request.get_entry() {
             let prev_log_index = self.latest_log_index();
             let prev_log_term = self.latest_log_term();
             let term = self.current_term();
             let log_index = prev_log_index + 1;
-            // TODO: This is probably not exactly safe.
-            let entry = request.get_entry().unwrap();
             self.log.append_entries(log_index, &[(term, entry)]).unwrap();
             self.leader_state.proposals.push_back((from, log_index));
             if self.peers.len() == 0 {
@@ -589,6 +579,8 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                     }
                 }
             }
+        } else {
+            panic!("ProposalRequest: no entry given")
         }
     }
 

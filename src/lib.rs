@@ -72,8 +72,6 @@
 //! you wish to only read data and not have it pass through the persisted log.
 //!
 
-#![feature(socket_timeout)]
-
 extern crate bufstream;
 extern crate capnp;
 extern crate mio;
