@@ -72,6 +72,7 @@
 //! you wish to only read data and not have it pass through the persisted log.
 //!
 
+#![feature(test)]
 extern crate bufstream;
 extern crate capnp;
 extern crate mio;

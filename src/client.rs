@@ -353,7 +353,7 @@ mod tests {
             Some(stream)
         };
 
-        // Should be err, change leader connectio but to wrong ip..
+        // Should be err, change leader connection but to wrong ip..
         assert!(client.propose(to_propose).is_err());
         assert!(client.leader_connection.is_none());
 

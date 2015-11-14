@@ -807,8 +807,8 @@ impl <L, M> fmt::Debug for Consensus<L, M> where L: Log, M: StateMachine {
 
 #[cfg(test)]
 mod tests {
-
     extern crate env_logger;
+    extern crate test;
 
     use std::collections::{HashMap, VecDeque};
     use std::io::Cursor;
@@ -1055,34 +1055,40 @@ mod tests {
         }
     }
 
-    /// Tests that a client query is correctly responded to, and the client is notified
-    /// of the success.
-    #[test]
-    fn test_query() {
-        setup_test!("test_query");
-        // Test various sizes.
-        for i in 1..7 {
-            scoped_debug!("testing size {} cluster", i);
-            let mut peers = new_cluster(i);
-            let peer_ids: Vec<ServerId> = peers.keys().cloned().collect();
-            let leader = peer_ids[0];
-            elect_leader(leader, &mut peers);
+    #[bench]
+    fn bench_proposal_1(b: &mut test::Bencher) {
+        bench_n(b, 1)
+    }
 
-            let value: &[u8] = b"foo";
-            let query = into_reader(&messages::proposal_request(value));
+    #[bench]
+    fn bench_proposal_3(b: &mut test::Bencher) {
+        bench_n(b, 3)
+    }
+
+    #[bench]
+    fn bench_proposal_5(b: &mut test::Bencher) {
+        bench_n(b, 5)
+    }
+
+    fn bench_n(b: &mut test::Bencher, size: u64) {
+        let mut peers = new_cluster(size);
+        let peer_ids: Vec<ServerId> = peers.keys().cloned().collect();
+        let leader = peer_ids[0];
+        elect_leader(leader, &mut peers);
+
+        let value: &[u8] = b"foo";
+        let proposal = into_reader(&messages::proposal_request(value));
+        let client = ClientId::new();
+
+
+        b.iter(|| {
             let mut actions = Actions::new();
-
-            let client = ClientId::new();
-
             peers.get_mut(&leader)
                  .unwrap()
-                 .apply_client_message(client, &query, &mut actions);
+                 .apply_client_message(client, &proposal, &mut actions);
 
             let client_messages = apply_actions(leader, actions, &mut peers);
             assert_eq!(1, client_messages.len());
-            for peer in peers.values() {
-                assert_eq!((Term(1), value), peer.log.entry(LogIndex(1)).unwrap());
-            }
-        }
+        });
     }
 }
