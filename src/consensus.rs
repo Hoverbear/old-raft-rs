@@ -807,8 +807,8 @@ impl <L, M> fmt::Debug for Consensus<L, M> where L: Log, M: StateMachine {
 
 #[cfg(test)]
 mod tests {
-
     extern crate env_logger;
+    extern crate test;
 
     use std::collections::{HashMap, VecDeque};
     use std::io::Cursor;
@@ -1053,5 +1053,42 @@ mod tests {
                 assert_eq!((Term(1), value), peer.log.entry(LogIndex(1)).unwrap());
             }
         }
+    }
+
+    #[bench]
+    fn bench_proposal_1(b: &mut test::Bencher) {
+        bench_n(b, 1)
+    }
+
+    #[bench]
+    fn bench_proposal_3(b: &mut test::Bencher) {
+        bench_n(b, 3)
+    }
+
+    #[bench]
+    fn bench_proposal_5(b: &mut test::Bencher) {
+        bench_n(b, 5)
+    }
+
+    fn bench_n(b: &mut test::Bencher, size: u64) {
+        let mut peers = new_cluster(size);
+        let peer_ids: Vec<ServerId> = peers.keys().cloned().collect();
+        let leader = peer_ids[0];
+        elect_leader(leader, &mut peers);
+
+        let value: &[u8] = b"foo";
+        let proposal = into_reader(&messages::proposal_request(value));
+        let client = ClientId::new();
+
+
+        b.iter(|| {
+            let mut actions = Actions::new();
+            peers.get_mut(&leader)
+                 .unwrap()
+                 .apply_client_message(client, &proposal, &mut actions);
+
+            let client_messages = apply_actions(leader, actions, &mut peers);
+            assert_eq!(1, client_messages.len());
+        });
     }
 }
