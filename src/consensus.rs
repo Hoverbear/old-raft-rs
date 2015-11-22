@@ -17,10 +17,11 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use capnp::{
-    MallocMessageBuilder,
-    MessageBuilder,
-    MessageReader,
+use capnp::message::{
+    Builder,
+    HeapAllocator,
+    Reader,
+    ReaderSegments,
 };
 use rand::{self, Rng};
 
@@ -66,9 +67,9 @@ impl ConsensusTimeout {
 /// to a `Consensus` state machine.
 pub struct Actions {
     /// Messages to be sent to peers.
-    pub peer_messages: Vec<(ServerId, Rc<MallocMessageBuilder>)>,
+    pub peer_messages: Vec<(ServerId, Rc<Builder<HeapAllocator>>)>,
     /// Messages to be send to clients.
-    pub client_messages: Vec<(ClientId, Rc<MallocMessageBuilder>)>,
+    pub client_messages: Vec<(ClientId, Rc<Builder<HeapAllocator>>)>,
     /// Whether to clear existing consensus timeouts.
     pub clear_timeouts: bool,
     /// Any new timeouts to create.
@@ -169,8 +170,11 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
     }
 
     /// Applies a peer message to the consensus state machine.
-    pub fn apply_peer_message<R>(&mut self, from: ServerId, message: &R, actions: &mut Actions)
-    where R: MessageReader {
+    pub fn apply_peer_message<S>(&mut self,
+                                 from: ServerId,
+                                 message: &Reader<S>,
+                                 actions: &mut Actions)
+    where S: ReaderSegments {
         push_log_scope!("{:?}", self);
         let reader = message.get_root::<message::Reader>().unwrap().which().unwrap();
         match reader {
@@ -187,11 +191,11 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
     }
 
     /// Applies a client message to the consensus state machine.
-    pub fn apply_client_message<R>(&mut self,
+    pub fn apply_client_message<S>(&mut self,
                                    from: ClientId,
-                                   message: &R,
+                                   message: &Reader<S>,
                                    actions: &mut Actions)
-    where R: MessageReader {
+    where S: ReaderSegments {
         push_log_scope!("{:?}", self);
         let reader = message.get_root::<client_request::Reader>().unwrap().which().unwrap();
         match reader {
@@ -610,7 +614,7 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
     fn heartbeat_timeout(&mut self, peer: ServerId, actions: &mut Actions) {
         scoped_assert!(self.is_leader());
         scoped_debug!("HeartbeatTimeout for peer: {}", peer);
-        let mut message = MallocMessageBuilder::new_default();
+        let mut message = Builder::new_default();
         {
             let mut request = message.init_root::<message::Builder>()
                                      .init_append_entries_request();
@@ -816,9 +820,14 @@ mod tests {
     use std::rc::Rc;
     use std::str::FromStr;
 
-    use capnp::{MallocMessageBuilder, MessageBuilder, ReaderOptions};
-    use capnp::serialize::{self, OwnedSpaceMessageReader};
-
+    use capnp::serialize::{self, OwnedSegments};
+    use capnp::message::{
+        Allocator,
+        Builder,
+        HeapAllocator,
+        Reader,
+        ReaderOptions,
+    };
     use ClientId;
     use LogIndex;
     use ServerId;
@@ -843,7 +852,7 @@ mod tests {
         }).collect()
     }
 
-    fn into_reader<M>(message: &M) -> OwnedSpaceMessageReader where M: MessageBuilder {
+    fn into_reader<A>(message: &Builder<A>) -> Reader<OwnedSegments> where A: Allocator {
         let mut buf = Cursor::new(Vec::new());
 
         serialize::write_message(&mut buf, message).unwrap();
@@ -856,8 +865,8 @@ mod tests {
     fn apply_actions(from: ServerId,
                      mut actions: Actions,
                      peers: &mut HashMap<ServerId, TestPeer>)
-                     -> Vec<(ClientId, Rc<MallocMessageBuilder>)> {
-        let mut queue: VecDeque<(ServerId, ServerId, Rc<MallocMessageBuilder>)> = VecDeque::new();
+                     -> Vec<(ClientId, Rc<Builder<HeapAllocator>>)> {
+        let mut queue: VecDeque<(ServerId, ServerId, Rc<Builder<HeapAllocator>>)> = VecDeque::new();
 
         for (to, message) in actions.peer_messages.iter().cloned() {
             queue.push_back((from, to, message));

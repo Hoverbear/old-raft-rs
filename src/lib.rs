@@ -72,9 +72,10 @@
 //! you wish to only read data and not have it pass through the persisted log.
 //!
 
-#![feature(test)]
+#![cfg_attr(test, feature(test))]
 extern crate bufstream;
 extern crate capnp;
+extern crate capnp_nonblock;
 extern crate mio;
 extern crate rand;
 extern crate uuid;

@@ -1,5 +1,4 @@
 use std::fmt;
-use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
@@ -11,17 +10,15 @@ use mio::{
     PollOpt,
     Token,
 };
-use capnp::{
-    MallocMessageBuilder,
-    OwnedSpaceMessageReader,
+use capnp::message::{
+    Builder,
+    HeapAllocator,
+    Reader,
     ReaderOptions,
 };
-use capnp::serialize::{
-    read_message_async,
-    write_message_async,
-    AsyncValue,
-    ReadContinuation,
-    WriteContinuation,
+use capnp_nonblock::{
+    MessageStream,
+    Segments,
 };
 
 use ClientId;
@@ -63,13 +60,8 @@ pub struct Connection {
     /// The address to reconnect to - for a connection initiated by the remote,
     /// this is not the remote address.
     addr: SocketAddr,
-    stream: TcpStream,
+    stream: Option<MessageStream<TcpStream, HeapAllocator, Rc<Builder<HeapAllocator>>>>,
     backoff: Backoff,
-    events: EventSet,
-    read_continuation: Option<ReadContinuation>,
-    write_continuation: Option<WriteContinuation>,
-    write_queue: VecDeque<Rc<MallocMessageBuilder>>,
-    is_connected: bool,
 }
 
 impl Connection {
@@ -85,13 +77,8 @@ impl Connection {
         Ok(Connection {
             kind: ConnectionKind::Unknown,
             addr: addr,
-            stream: socket,
+            stream: Some(MessageStream::new(socket, ReaderOptions::new())),
             backoff: Backoff::with_duration_range(50, 10000),
-            events: EventSet::hup() | EventSet::readable(),
-            read_continuation: None,
-            write_continuation: None,
-            write_queue: VecDeque::new(),
-            is_connected: true,
         })
     }
 
@@ -101,13 +88,8 @@ impl Connection {
         Ok(Connection {
             kind: ConnectionKind::Peer(id),
             addr: addr,
-            stream: stream,
+            stream: Some(MessageStream::new(stream, ReaderOptions::new())),
             backoff: Backoff::with_duration_range(50, 10000),
-            events: EventSet::hup() | EventSet::readable(),
-            read_continuation: None,
-            write_continuation: None,
-            write_queue: VecDeque::new(),
-            is_connected: true,
         })
     }
 
@@ -127,36 +109,34 @@ impl Connection {
         self.addr = addr;
     }
 
+    /// Returns the connection's stream.
+    /// Must only be called while the connection is active.
+    fn stream(&self) -> &MessageStream<TcpStream, HeapAllocator, Rc<Builder<HeapAllocator>>> {
+        match self.stream {
+            Some(ref stream) => stream,
+            None => panic!(format!("{:?}: not connected", self)),
+        }
+    }
+
+    /// Returns the connection's mutable stream.
+    /// Must only be called while the connection is active.
+    fn stream_mut(&mut self) -> &mut MessageStream<TcpStream, HeapAllocator, Rc<Builder<HeapAllocator>>> {
+        match self.stream {
+            Some(ref mut stream) => stream,
+            None => panic!(format!("{:?}: not connected", self)),
+        }
+    }
+
     /// Writes queued messages to the socket.
     pub fn writable(&mut self) -> Result<()> {
-        scoped_trace!("{:?}: writable; queued message count: {}", self, self.write_queue.len());
-        scoped_assert!(self.is_connected, "{:?}: writable event while not connected", self);
-
-        while let Some(message) = self.write_queue.pop_front() {
-            let continuation = self.write_continuation.take();
-            match write_message_async(&mut self.stream, &*message, continuation) {
-                Ok(AsyncValue::Complete(())) => (),
-                Ok(AsyncValue::Continue(continuation)) =>  {
-                    // The write only partially completed. Save the continuation and add the
-                    // message back to the front of the queue.
-                    self.write_continuation = Some(continuation);
-                    self.write_queue.push_front(message);
-                    break;
-                }
-                Err(error) => {
-                    // The write failed; reinsert the message back to the write queue.
-                    self.write_queue.push_front(message);
-                    return Err(From::from(error));
-                }
-            }
+        scoped_trace!("{:?}: writable", self);
+        if let Connection { stream: Some(ref mut stream), ref mut backoff, .. } = *self {
+            try!(stream.write());
+            backoff.reset();
+            Ok(())
+        } else {
+            panic!("{:?}: writable event while not connected", self);
         }
-
-        if self.write_queue.is_empty() {
-            self.events.remove(EventSet::writable());
-        }
-
-        self.backoff.reset();
-        Ok(())
     }
 
     /// Reads a message from the connection's stream, or if a full message is
@@ -164,46 +144,42 @@ impl Connection {
     ///
     /// Connections are edge-triggered, so the handler must continue calling
     /// until no more messages are returned.
-    pub fn readable(&mut self) -> Result<Option<OwnedSpaceMessageReader>> {
+    pub fn readable(&mut self) -> Result<Option<Reader<Segments>>> {
         scoped_trace!("{:?}: readable", self);
-        scoped_assert!(self.is_connected, "{:?}: readable event while not connected", self);
-
-        let read = try!(read_message_async(&mut self.stream,
-                                           ReaderOptions::new(),
-                                           self.read_continuation.take()));
-        self.backoff.reset();
-        match read {
-            AsyncValue::Complete(message) => {
-                Ok(Some(message))
-            },
-            AsyncValue::Continue(continuation) => {
-                // the read only partially completed. Save the continuation and return.
-                self.read_continuation = Some(continuation);
-                Ok(None)
-            },
-        }
+        self.stream_mut().read_message().map_err(From::from)
     }
 
     /// Queues a message to send to the connection. Returns `true` if the connection should be
     /// reregistered with the event loop.
-    pub fn send_message(&mut self, message: Rc<MallocMessageBuilder>) -> bool {
+    pub fn send_message(&mut self, message: Rc<Builder<HeapAllocator>>) -> Result<bool> {
         scoped_trace!("{:?}: send_message", self);
-        let mut reregister = false;
-        if self.is_connected {
-            if self.write_queue.is_empty() {
-                self.events.insert(EventSet::writable());
-                reregister = true;
-            }
-            self.write_queue.push_back(message);
+        match self.stream {
+            Some(ref mut stream) => {
+                // Reregister if the connection is not already registered, and
+                // there are still messages left to send. MessageStream
+                // optimistically sends messages, so it's likely that small
+                // messages can be sent without ever registering.
+                let unregistered = stream.outbound_queue_len() == 0;
+                try!(stream.write_message(message));
+                Ok(unregistered && stream.outbound_queue_len() > 0)
+            },
+            None => Ok(false),
         }
-        reregister
+    }
+
+    fn events(&self) -> EventSet {
+        let mut events = EventSet::all();
+        if self.stream().outbound_queue_len() == 0 {
+            events = events - EventSet::writable();
+        }
+        events
     }
 
     /// Registers the connection with the event loop.
     pub fn register<L, M>(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token) -> Result<()>
     where L: Log, M: StateMachine {
         scoped_trace!("{:?}: register", self);
-        event_loop.register_opt(&self.stream, token, self.events, poll_opt())
+        event_loop.register_opt(self.stream().inner(), token, self.events(), poll_opt())
                   .map_err(|error| {
                       scoped_warn!("{:?}: reregister failed: {}", self, error);
                       From::from(error)
@@ -214,7 +190,7 @@ impl Connection {
     pub fn reregister<L, M>(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token) -> Result<()>
     where L: Log, M: StateMachine {
         scoped_trace!("{:?}: reregister", self);
-        event_loop.reregister(&self.stream, token, self.events, poll_opt())
+        event_loop.reregister(self.stream().inner(), token, self.events(), poll_opt())
                   .map_err(|error| {
                       scoped_warn!("{:?}: register failed: {}", self, error);
                       From::from(error)
@@ -224,13 +200,11 @@ impl Connection {
     /// Reconnects to the given peer ID and sends the preamble, advertising the
     /// given local address to the peer.
     pub fn reconnect_peer(&mut self, id: ServerId, local_addr: &SocketAddr) -> Result<()> {
+        scoped_assert!(self.kind.is_peer());
         scoped_trace!("{:?}: reconnect", self);
-        self.stream = try!(TcpStream::connect(&self.addr));
-        self.is_connected = true;
-        self.read_continuation = None;
-        self.write_continuation = None;
-        self.write_queue.clear();
-        self.send_message(messages::server_connection_preamble(id, local_addr));
+        self.stream = Some(MessageStream::new(try!(TcpStream::connect(&self.addr)),
+                                              ReaderOptions::new()));
+        try!(self.send_message(messages::server_connection_preamble(id, local_addr)));
         Ok(())
     }
 
@@ -241,11 +215,8 @@ impl Connection {
                             -> Result<(ServerTimeout, TimeoutHandle)>
     where L: Log, M: StateMachine {
         scoped_assert!(self.kind.is_peer());
+        self.stream = None;
         let duration = self.backoff.next_backoff_ms();
-        self.read_continuation = None;
-        self.write_continuation = None;
-        self.write_queue.clear();
-        self.is_connected = false;
         let timeout = ServerTimeout::Reconnect(token);
         let handle = event_loop.timeout_ms(timeout, duration).unwrap();
 
@@ -254,12 +225,8 @@ impl Connection {
     }
 
     pub fn clear_messages(&mut self) {
-        if self.write_continuation.is_some() {
-            let message = self.write_queue.pop_front().unwrap();
-            self.write_queue.clear();
-            self.write_queue.push_front(message);
-        } else {
-            self.write_queue.clear();
+        if let Some(ref mut stream) = self.stream {
+            stream.clear_outbound_queue();
         }
     }
 }

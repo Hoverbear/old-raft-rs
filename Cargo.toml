@@ -41,20 +41,18 @@ build = "build.rs"
 
 # Dependencies
 [build-dependencies]
-capnpc = "0.2.5"
+capnpc = "0.5"
 
 [dependencies]
 bufstream = "*"
+capnp = "0.5"
+capnp-nonblock = "0.2"
 log = "*"
 mio = "*"
 rand = "*"
 scoped_log = "*"
 uuid = "*"
 wrapped_enum = "*"
-
-[dependencies.capnp]
-git = "https://github.com/danburkert/capnproto-rust"
-branch = "async"
 
 [dev-dependencies]
 env_logger = "*"
