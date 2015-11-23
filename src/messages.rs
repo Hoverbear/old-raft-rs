@@ -4,9 +4,9 @@
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use capnp::{
-    MallocMessageBuilder,
-    MessageBuilder,
+use capnp::message::{
+    Builder,
+    HeapAllocator,
 };
 
 use {ClientId, Term, LogIndex, ServerId};
@@ -19,8 +19,8 @@ use messages_capnp::{
 
 // ConnectionPreamble
 
-pub fn server_connection_preamble(id: ServerId, addr: &SocketAddr) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn server_connection_preamble(id: ServerId, addr: &SocketAddr) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut server = message.init_root::<connection_preamble::Builder>()
                                 .init_id()
@@ -31,8 +31,8 @@ pub fn server_connection_preamble(id: ServerId, addr: &SocketAddr) -> Rc<MallocM
     Rc::new(message)
 }
 
-pub fn client_connection_preamble(id: ClientId) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn client_connection_preamble(id: ClientId) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         message.init_root::<connection_preamble::Builder>()
                .init_id()
@@ -48,8 +48,8 @@ pub fn append_entries_request(term: Term,
                               prev_log_term: Term,
                               entries: &[(Term, &[u8])],
                               leader_commit: LogIndex)
-                              -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+                              -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut request = message.init_root::<message::Builder>()
                                  .init_append_entries_request();
@@ -68,8 +68,8 @@ pub fn append_entries_request(term: Term,
     Rc::new(message)
 }
 
-pub fn append_entries_response_success(term: Term, log_index: LogIndex) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn append_entries_response_success(term: Term, log_index: LogIndex) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
                                   .init_append_entries_response();
@@ -79,8 +79,8 @@ pub fn append_entries_response_success(term: Term, log_index: LogIndex) -> Rc<Ma
     Rc::new(message)
 }
 
-pub fn append_entries_response_stale_term(term: Term) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn append_entries_response_stale_term(term: Term) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
                                   .init_append_entries_response();
@@ -90,8 +90,8 @@ pub fn append_entries_response_stale_term(term: Term) -> Rc<MallocMessageBuilder
     Rc::new(message)
 }
 
-pub fn append_entries_response_inconsistent_prev_entry(term: Term, index: LogIndex) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn append_entries_response_inconsistent_prev_entry(term: Term, index: LogIndex) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
                                   .init_append_entries_response();
@@ -103,8 +103,8 @@ pub fn append_entries_response_inconsistent_prev_entry(term: Term, index: LogInd
 
 pub fn append_entries_response_internal_error(term: Term,
                                               error: &str)
-                                              -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+                                              -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
                                   .init_append_entries_response();
@@ -119,8 +119,8 @@ pub fn append_entries_response_internal_error(term: Term,
 pub fn request_vote_request(term: Term,
                             last_log_index: LogIndex,
                             last_log_term: Term)
-                            -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+                            -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut request = message.init_root::<message::Builder>()
                                  .init_request_vote_request();
@@ -131,8 +131,8 @@ pub fn request_vote_request(term: Term,
     Rc::new(message)
 }
 
-pub fn request_vote_response_granted(term: Term) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn request_vote_response_granted(term: Term) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
                                   .init_request_vote_response();
@@ -142,8 +142,8 @@ pub fn request_vote_response_granted(term: Term) -> Rc<MallocMessageBuilder> {
     Rc::new(message)
 }
 
-pub fn request_vote_response_stale_term(term: Term) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn request_vote_response_stale_term(term: Term) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
                                   .init_request_vote_response();
@@ -153,8 +153,8 @@ pub fn request_vote_response_stale_term(term: Term) -> Rc<MallocMessageBuilder> 
     Rc::new(message)
 }
 
-pub fn request_vote_response_already_voted(term: Term) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn request_vote_response_already_voted(term: Term) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
                                   .init_request_vote_response();
@@ -164,8 +164,8 @@ pub fn request_vote_response_already_voted(term: Term) -> Rc<MallocMessageBuilde
     Rc::new(message)
 }
 
-pub fn request_vote_response_inconsistent_log(term: Term) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn request_vote_response_inconsistent_log(term: Term) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
                                   .init_request_vote_response();
@@ -175,8 +175,8 @@ pub fn request_vote_response_inconsistent_log(term: Term) -> Rc<MallocMessageBui
     Rc::new(message)
 }
 
-pub fn request_vote_response_internal_error(term: Term, error: &str) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn request_vote_response_internal_error(term: Term, error: &str) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
                                   .init_request_vote_response();
@@ -188,8 +188,8 @@ pub fn request_vote_response_internal_error(term: Term, error: &str) -> Rc<Mallo
 
 // Ping
 
-pub fn ping_request() -> MallocMessageBuilder {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn ping_request() -> Builder<HeapAllocator> {
+    let mut message = Builder::new_default();
     {
         message.init_root::<client_request::Builder>()
                .init_ping();
@@ -199,8 +199,8 @@ pub fn ping_request() -> MallocMessageBuilder {
 
 // Query
 
-pub fn query_request(entry: &[u8]) -> MallocMessageBuilder {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn query_request(entry: &[u8]) -> Builder<HeapAllocator> {
+    let mut message = Builder::new_default();
     {
         message.init_root::<client_request::Builder>()
                .init_query()
@@ -212,8 +212,8 @@ pub fn query_request(entry: &[u8]) -> MallocMessageBuilder {
 
 // Proposal
 
-pub fn proposal_request(entry: &[u8]) -> MallocMessageBuilder {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn proposal_request(entry: &[u8]) -> Builder<HeapAllocator> {
+    let mut message = Builder::new_default();
     {
         message.init_root::<client_request::Builder>()
                .init_proposal()
@@ -224,8 +224,8 @@ pub fn proposal_request(entry: &[u8]) -> MallocMessageBuilder {
 
 // Query / Proposal Response
 
-pub fn command_response_success(data: &[u8]) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn command_response_success(data: &[u8]) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         message.init_root::<client_response::Builder>()
                .init_proposal()
@@ -234,8 +234,8 @@ pub fn command_response_success(data: &[u8]) -> Rc<MallocMessageBuilder> {
     Rc::new(message)
 }
 
-pub fn command_response_unknown_leader() -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn command_response_unknown_leader() -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         message.init_root::<client_response::Builder>()
                .init_proposal()
@@ -244,8 +244,8 @@ pub fn command_response_unknown_leader() -> Rc<MallocMessageBuilder> {
     Rc::new(message)
 }
 
-pub fn command_response_not_leader(leader_hint: &SocketAddr) -> Rc<MallocMessageBuilder> {
-    let mut message = MallocMessageBuilder::new_default();
+pub fn command_response_not_leader(leader_hint: &SocketAddr) -> Rc<Builder<HeapAllocator>> {
+    let mut message = Builder::new_default();
     {
         message.init_root::<client_response::Builder>()
                .init_proposal()

@@ -8,6 +8,7 @@ use std::str::FromStr;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::thread::{self, JoinHandle};
+use std::rc::Rc;
 
 use mio::tcp::TcpListener;
 use mio::util::Slab;
@@ -18,8 +19,10 @@ use mio::{
     Token,
 };
 use mio::Timeout as TimeoutHandle;
-use capnp::{
-    MessageReader,
+use capnp::message::{
+    Builder,
+    HeapAllocator,
+    Reader,
 };
 
 use ClientId;
@@ -118,9 +121,9 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
                                           .map_err(|_| Error::Raft(RaftError::ConnectionLimitReached)));
             scoped_assert!(server.peer_tokens.insert(peer_id, token).is_none());
 
-            let mut connection = &mut server.connections[token];
-            connection.send_message(messages::server_connection_preamble(id, &addr));
-            try!(connection.register(&mut event_loop, token));
+            try!(server.connections[token].register(&mut event_loop, token));
+            server.send_message(&mut event_loop, token,
+                              messages::server_connection_preamble(id, &addr));
         }
 
         Ok((server, event_loop))
@@ -165,6 +168,26 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
         }).map_err(From::from)
     }
 
+    /// Sends the message to the connection associated with the provided token.
+    /// If sending the message fails, the connection is reset.
+    fn send_message(&mut self,
+                    event_loop: &mut EventLoop<Server<L, M>>,
+                    token: Token,
+                    message: Rc<Builder<HeapAllocator>>) {
+        match self.connections[token].send_message(message) {
+            Ok(false) => (),
+            Ok(true) => {
+                self.connections[token]
+                .reregister(event_loop, token)
+                .unwrap_or_else(|_| self.reset_connection(event_loop, token));
+            }
+            Err(error) => {
+                scoped_warn!("{:?}: error while sending message: {:?}", self, error);
+                self.reset_connection(event_loop, token);
+            }
+        }
+    }
+
     fn execute_actions(&mut self,
                        event_loop: &mut EventLoop<Server<L, M>>,
                        actions: Actions) {
@@ -184,19 +207,11 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
         }
         for (peer, message) in peer_messages {
             let token = self.peer_tokens[&peer];
-            if self.connections[token].send_message(message) {
-                self.connections[token]
-                    .reregister(event_loop, token)
-                    .unwrap_or_else(|_| self.reset_connection(event_loop, token));
-            }
+            self.send_message(event_loop, token, message);
         }
         for (client, message) in client_messages {
             if let Some(&token) = self.client_tokens.get(&client) {
-                if self.connections[token].send_message(message) {
-                    self.connections[token]
-                        .reregister(event_loop, token)
-                        .unwrap_or_else(|_| self.reset_connection(event_loop, token));
-                }
+                self.send_message(event_loop, token, message);
             }
         }
         if clear_timeouts {
@@ -471,7 +486,11 @@ mod tests {
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::str::FromStr;
 
-    use capnp::{serialize, MessageReader, ReaderOptions};
+    use capnp::message::{
+        Reader,
+        ReaderOptions,
+    };
+    use capnp::serialize;
     use mio::EventLoop;
 
     use ClientId;
@@ -756,28 +775,18 @@ mod tests {
         assert!(!client_connected(&server, client_id));
     }
 
-    /// Tests that a Server will attempt to reconnect to an unreachable peer
-    /// after failing to connect at startup.
+    /// Tests that a Server will attempt to connect to peers on startup, and
+    /// immediately reset the connection if unreachable.
     #[test]
-    fn test_unreachable_peer_reconnect() {
+    fn test_unreachable_peer() {
         setup_test!("test_unreachable_peer_reconnect");
         let peer_id = ServerId::from(1);
         let mut peers = HashMap::new();
         peers.insert(peer_id, get_unbound_address());
 
-        // Creates the Server, which registers the peer connection.
-        let (mut server, mut event_loop) = new_test_server(peers).unwrap();
-
-        // Error event for the peer connection; connection is reset.
-        event_loop.run_once(&mut server).unwrap();
-        assert!(!peer_connected(&mut server, peer_id));
-
-        // Reconnection timeout fires and connection stream is recreated.
-        event_loop.run_once(&mut server).unwrap();
-        assert!(peer_connected(&mut server, peer_id));
-
-        // Error event for the new peer connection; connection is reset.
-        event_loop.run_once(&mut server).unwrap();
+        // Creates the Server, which registers the peer connection, and
+        // immediately resets it.
+        let (mut server, _) = new_test_server(peers).unwrap();
         assert!(!peer_connected(&mut server, peer_id));
     }
 

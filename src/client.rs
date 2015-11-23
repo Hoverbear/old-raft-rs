@@ -10,7 +10,13 @@ use std::net::TcpStream;
 use std::str::FromStr;
 
 use bufstream::BufStream;
-use capnp::{serialize, MessageReader, ReaderOptions, MallocMessageBuilder};
+use capnp::serialize;
+use capnp::message::{
+    Allocator,
+    Builder,
+    Reader,
+    ReaderOptions,
+};
 
 use messages_capnp::{client_response, command_response};
 use messages;
@@ -60,7 +66,7 @@ impl Client {
         self.send_message(&mut message)
     }
 
-    fn send_message(&mut self, message: &mut MallocMessageBuilder) -> Result<Vec<u8>> {
+    fn send_message<A>(&mut self, message: &mut Builder<A>) -> Result<Vec<u8>> where A: Allocator {
         let mut members = self.cluster.iter().cloned();
 
         loop {
@@ -157,8 +163,8 @@ mod tests {
     use std::thread;
 
     use uuid::Uuid;
-    use capnp::{serialize, ReaderOptions};
-    use capnp::message::MessageReader;
+    use capnp::serialize;
+    use capnp::message::ReaderOptions;
     use bufstream::BufStream;
 
     use {Client, messages, Result};
