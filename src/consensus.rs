@@ -322,6 +322,13 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                         } else {
                             if let Ok(entries) = request.get_entries() {
                                 let num_entries: u32 = entries.len();
+                                let new_latest_log_index = leader_prev_log_index + num_entries as u64;
+                                if new_latest_log_index < self.follower_state.min_index {
+                                    // Stale entry; ignore. This guards against overwriting a
+                                    // possibly committed part of the log if messages get
+                                    // rearranged; see ktoso/akka-raft#66.
+                                    return
+                                }
                                 scoped_debug!("AppendEntriesRequest: {} entries from leader: {}",
                                               num_entries, from);
 
@@ -330,9 +337,9 @@ impl <L, M> Consensus<L, M> where L: Log, M: StateMachine {
                                 ).collect();
 
                                 self.log.append_entries(leader_prev_log_index + 1, &entries_vec).unwrap();
-                                let latest_log_index = leader_prev_log_index + num_entries as u64;
-                                // We are matching the leader's log up to and including `latest_log_index`.
-                                self.commit_index = cmp::min(LogIndex::from(request.get_leader_commit()), latest_log_index);
+                                self.follower_state.min_index = new_latest_log_index;
+                                // We are matching the leader's log up to and including `new_latest_log_index`.
+                                self.commit_index = cmp::min(LogIndex::from(request.get_leader_commit()), new_latest_log_index);
                                 self.apply_commits();
                             } else {
                                 panic!("AppendEntriesRequest: no entry list")
@@ -1062,6 +1069,38 @@ mod tests {
                 assert_eq!((Term(1), value), peer.log.entry(LogIndex(1)).unwrap());
             }
         }
+    }
+
+    #[test]
+    // Verify that out-of-order appends don't lead to the log tail being
+    // dropped. See https://github.com/ktoso/akka-raft/issues/66; it's
+    // not actually something that can happen in practice with TCP, but
+    // wise to avoid it altogether.
+    fn test_append_reorder() {
+        setup_test!("test_append_reorder");
+        let mut peers = new_cluster(2);
+        let peer_ids: Vec<ServerId> = peers.keys().cloned().collect();
+        let mut actions = Actions::new();
+        let mut follower = peers.get_mut(&peer_ids[0]).unwrap();
+        let value: &[u8] = b"foo";
+        let entries = vec![(Term(1), value), (Term(1), value)];
+        let msg1 = into_reader(&*messages::append_entries_request(
+            Term(1),
+            LogIndex(0),
+            Term(0),
+            &entries,
+            LogIndex(0)));
+        let msg2 = into_reader(&*messages::append_entries_request(
+            Term(1),
+            LogIndex(0),
+            Term(0),
+            &entries[0 .. 1],
+            LogIndex(0)));
+        follower.apply_peer_message(peer_ids[1], &msg1, &mut actions);
+        follower.apply_peer_message(peer_ids[1], &msg2, &mut actions);
+
+        assert_eq!((Term(1), value), follower.log.entry(LogIndex(1)).unwrap());
+        assert_eq!((Term(1), value), follower.log.entry(LogIndex(2)).unwrap());
     }
 
     #[bench]

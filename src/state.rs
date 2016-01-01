@@ -122,18 +122,25 @@ pub struct FollowerState {
     /// The most recent leader of the follower. The leader is not guaranteed to be active, so this
     /// should only be used as a hint.
     pub leader: Option<ServerId>,
+    /// The minimal index at which entries can be appended. This bit of state
+    /// allows avoiding overwriting of possibly committed parts of the log
+    /// when messages arrive out of order. It is reset on set_leader() and
+    /// otherwise left untouched.
+    /// See see ktoso/akka-raft#66.
+    pub min_index: LogIndex,
 }
 
 impl FollowerState {
 
     /// Returns a new `FollowerState`.
     pub fn new() -> FollowerState {
-        FollowerState { leader: None }
+        FollowerState { leader: None, min_index: LogIndex(0) }
     }
 
     /// Sets a new leader.
     pub fn set_leader(&mut self, leader: ServerId) {
-        self.leader = Some(leader)
+        self.leader = Some(leader);
+        self.min_index = LogIndex(0);
     }
 }
 
