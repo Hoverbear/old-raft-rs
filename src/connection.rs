@@ -179,7 +179,7 @@ impl Connection {
     pub fn register<L, M>(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token) -> Result<()>
     where L: Log, M: StateMachine {
         scoped_trace!("{:?}: register", self);
-        event_loop.register_opt(self.stream().inner(), token, self.events(), poll_opt())
+        event_loop.register(self.stream().inner(), token, self.events(), poll_opt())
                   .map_err(|error| {
                       scoped_warn!("{:?}: reregister failed: {}", self, error);
                       From::from(error)

@@ -14,7 +14,6 @@ use capnp::serialize;
 use capnp::message::{
     Allocator,
     Builder,
-    Reader,
     ReaderOptions,
 };
 

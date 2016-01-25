@@ -16,14 +16,11 @@ use mio::{
     EventLoop,
     EventSet,
     Handler,
+    PollOpt,
     Token,
 };
 use mio::Timeout as TimeoutHandle;
-use capnp::message::{
-    Builder,
-    HeapAllocator,
-    Reader,
-};
+use capnp::message::{Builder, HeapAllocator};
 
 use ClientId;
 use Result;
@@ -102,7 +99,7 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
         let consensus = Consensus::new(id, peers.clone(), store, state_machine);
         let mut event_loop = try!(EventLoop::<Server<L, M>>::new());
         let listener = try!(TcpListener::bind(&addr));
-        try!(event_loop.register(&listener, LISTENER));
+        try!(event_loop.register(&listener, LISTENER, EventSet::all(), PollOpt::level()));
 
         let mut server = Server {
             id: id,
@@ -354,7 +351,7 @@ impl<L, M> Server<L, M> where L: Log, M: StateMachine {
         self.listener.accept().map_err(From::from)
             .and_then(|stream_opt| stream_opt.ok_or(Error::Io(
                     io::Error::new(io::ErrorKind::WouldBlock, "listener.accept() returned None"))))
-            .and_then(|stream| Connection::unknown(stream))
+            .and_then(|(stream, _)| Connection::unknown(stream))
             .and_then(|conn| self.connections.insert(conn)
                                  .map_err(|_| Error::Raft(RaftError::ConnectionLimitReached)))
             .and_then(|token|
@@ -486,10 +483,7 @@ mod tests {
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::str::FromStr;
 
-    use capnp::message::{
-        Reader,
-        ReaderOptions,
-    };
+    use capnp::message::ReaderOptions;
     use capnp::serialize;
     use mio::EventLoop;
 
@@ -589,23 +583,21 @@ mod tests {
         let (mut stream, _)  = peer_listener.accept().unwrap();
 
         // Check that the server sends a valid preamble.
-        event_loop.run_once(&mut server).unwrap();
         assert_eq!(ServerId::from(0), read_server_preamble(&mut stream));
         assert!(peer_connected(&server, peer_id));
 
         // Drop the connection.
         drop(stream);
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
         assert!(!peer_connected(&server, peer_id));
 
         // Check that the server reconnects after a timeout.
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
         assert!(peer_connected(&server, peer_id));
         let (mut stream, _)  = peer_listener.accept().unwrap();
 
         // Check that the server sends a valid preamble after the connection is
         // established.
-        event_loop.run_once(&mut server).unwrap();
         assert_eq!(ServerId::from(0), read_server_preamble(&mut stream));
         assert!(peer_connected(&server, peer_id));
     }
@@ -627,7 +619,6 @@ mod tests {
         let (mut in_stream, _)  = peer_listener.accept().unwrap();
 
         // Check that the server sends a valid preamble.
-        event_loop.run_once(&mut server).unwrap();
         assert_eq!(ServerId::from(0), read_server_preamble(&mut in_stream));
         assert!(peer_connected(&server, peer_id));
 
@@ -635,15 +626,15 @@ mod tests {
 
         // Open a replacement connection to the server.
         let mut out_stream = TcpStream::connect(server_addr).unwrap();
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
 
         // This is what the new peer tells the server is listening address is.
         let fake_peer_addr = SocketAddr::from_str("192.168.0.1:12345").unwrap();
         // Send server the preamble message to the server.
         serialize::write_message(&mut out_stream, &*messages::server_connection_preamble(peer_id, &fake_peer_addr))
-                 .unwrap();
+                  .unwrap();
         out_stream.flush().unwrap();
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
 
         // Make sure that reconnecting updated the peer address
         // known to `Consensus` with the one given in the preamble.
@@ -666,7 +657,7 @@ mod tests {
         // Connect to the server.
         let server_addr = server.listener.local_addr().unwrap();
         let mut stream = TcpStream::connect(server_addr).unwrap();
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
 
         let client_id = ClientId::new();
 
@@ -674,7 +665,7 @@ mod tests {
         serialize::write_message(&mut stream, &*messages::client_connection_preamble(client_id))
                  .unwrap();
         stream.flush().unwrap();
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
 
         // Check that the server holds on to the client connection.
         assert!(client_connected(&server, client_id));
@@ -682,7 +673,7 @@ mod tests {
         // Check that the server disposes of the client connection when the TCP
         // stream is dropped.
         drop(stream);
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
         assert!(!client_connected(&server, client_id));
     }
 
@@ -697,12 +688,12 @@ mod tests {
         // Connect to the server.
         let server_addr = server.listener.local_addr().unwrap();
         let mut stream = TcpStream::connect(server_addr).unwrap();
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
 
         // Send an invalid preamble.
         stream.write(b"foo bar baz").unwrap();
         stream.flush().unwrap();
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
 
         // Check that the server disposes of the connection.
         assert!(stream_shutdown(&mut stream));
@@ -726,19 +717,18 @@ mod tests {
         let (mut stream_a, _)  = peer_listener.accept().unwrap();
 
         // Read the server's preamble.
-        event_loop.run_once(&mut server).unwrap();
         assert_eq!(ServerId::from(0), read_server_preamble(&mut stream_a));
 
         // Send an invalid message.
         stream_a.write(b"foo bar baz").unwrap();
         stream_a.flush().unwrap();
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
 
         // Check that the server resets the connection.
         assert!(!peer_connected(&server, peer_id));
 
         // Check that the server reconnects after a timeout.
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
         assert!(peer_connected(&server, peer_id));
     }
 
@@ -753,15 +743,15 @@ mod tests {
         // Connect to the server.
         let server_addr = server.listener.local_addr().unwrap();
         let mut stream = TcpStream::connect(server_addr).unwrap();
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
 
         let client_id = ClientId::new();
 
         // Send the client preamble message to the server.
         serialize::write_message(&mut stream, &*messages::client_connection_preamble(client_id))
-                 .unwrap();
+                  .unwrap();
         stream.flush().unwrap();
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
 
         // Check that the server holds on to the client connection.
         assert!(client_connected(&server, client_id));
@@ -769,7 +759,7 @@ mod tests {
         // Send an invalid client message to the server.
         stream.write(b"foo bar baz").unwrap();
         stream.flush().unwrap();
-        event_loop.run_once(&mut server).unwrap();
+        event_loop.run_once(&mut server, None).unwrap();
 
         // Check that the server disposes of the client connection.
         assert!(!client_connected(&server, client_id));
@@ -807,14 +797,12 @@ mod tests {
         let (mut in_stream, _)  = peer_listener.accept().unwrap();
 
         // Accept the preamble.
-        event_loop.run_once(&mut server).unwrap();
         assert_eq!(ServerId::from(0), read_server_preamble(&mut in_stream));
 
         // Send a test message (the type is not important).
         let mut actions = Actions::new();
         actions.peer_messages.push((peer_id, messages::server_connection_preamble(peer_id, &peer_addr)));
         server.execute_actions(&mut event_loop, actions);
-        event_loop.run_once(&mut server).unwrap();
 
         assert_eq!(peer_id, read_server_preamble(&mut in_stream));
     }
