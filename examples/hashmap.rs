@@ -65,7 +65,7 @@ Commands:
 
   server  Starts a key server. Servers must be provided a unique ID and
           address (ip:port) at startup, along with the ID and address of all
-          peer servers.register
+          peer servers.
 
 Usage:
   hashmap get <key> (<node-address>)...
@@ -155,7 +155,7 @@ fn server(args: &Args) {
                     .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
                     .collect::<HashMap<_,_>>();
 
-    // The Raft Server will return an error if it's ID is inside of it's peer set. Don't do that.
+    // The Raft Server will return an error if its ID is inside of its peer set. Don't do that.
     // Instead, take it out and use it!
     let addr = peers.remove(&id).unwrap();
 
@@ -174,7 +174,7 @@ fn get(args: &Args) {
         .map(|v| parse_addr(&v))
         .collect();
 
-    // Clients and be stored and reused, or used once and discarded.
+    // Clients can be stored and reused, or used once and discarded.
     // There is very small overhead in connecting a new client to a cluster as it must discover and
     // identify itself to the leader.
     let mut client = Client::new(cluster);
