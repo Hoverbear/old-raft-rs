@@ -14,7 +14,9 @@ use messages_capnp::{
     client_request,
     client_response,
     connection_preamble,
-    message
+    message,
+    install_snapshot_request,
+    install_snapshot_response,
 };
 
 // ConnectionPreamble
@@ -250,6 +252,36 @@ pub fn command_response_not_leader(leader_hint: &SocketAddr) -> Rc<Builder<HeapA
         message.init_root::<client_response::Builder>()
                .init_proposal()
                .set_not_leader(&format!("{}", leader_hint));
+    }
+    Rc::new(message)
+}
+
+pub fn install_snapshot_request(term: Term,
+                                leader_id: ServerId,
+                                last_included_index: LogIndex,
+                                last_included_term: Term,
+                                offset: u64,
+                                data: &[u8],
+                                done: bool) -> Rc<MallocMessageBuilder> {
+    let mut message = MallocMessageBuilder::new_default();
+    {
+        let mut request = message.init_root::<install_snapshot_request::Builder>();
+        request.set_term(term.0);
+        request.set_leader_id(leader_id.0);
+        request.set_last_included_index(last_included_index.0);
+        request.set_last_included_term(last_included_term.0);
+        request.set_offset(offset);
+        request.set_data(data);
+        request.set_done(done);
+    }
+    Rc::new(message)
+}
+
+pub fn install_snapshot_response(term: Term) -> Rc<MallocMessageBuilder> {
+    let mut message = MallocMessageBuilder::new_default();
+    {
+        message.init_root::<install_snapshot_response::Builder>()
+               .set_term(term.0);
     }
     Rc::new(message)
 }
