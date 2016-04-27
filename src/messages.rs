@@ -14,7 +14,9 @@ use messages_capnp::{
     client_request,
     client_response,
     connection_preamble,
-    message
+    message,
+    membership_request,
+    membership_response,
 };
 
 // ConnectionPreamble
@@ -250,6 +252,53 @@ pub fn command_response_not_leader(leader_hint: &SocketAddr) -> Rc<Builder<HeapA
         message.init_root::<client_response::Builder>()
                .init_proposal()
                .set_not_leader(&format!("{}", leader_hint));
+    }
+    Rc::new(message)
+}
+
+// Add / Remove Member
+
+pub fn membership_request_add(new: &SocketAddr) -> Rc<MallocMessageBuilder> {
+    let mut message = MallocMessageBuilder::new_default();
+    {
+        message.init_root::<membership_request::Builder>()
+            .set_add(&format!("{}", new));
+    }
+    Rc::new(message)
+}
+
+pub fn membership_request_remove(old: &SocketAddr) -> Rc<MallocMessageBuilder> {
+    let mut message = MallocMessageBuilder::new_default();
+    {
+        message.init_root::<membership_request::Builder>()
+            .set_remove(&format!("{}", old));
+    }
+    Rc::new(message)
+}
+
+pub fn membership_response_success(leader: &SocketAddr) -> Rc<MallocMessageBuilder> {
+    let mut message = MallocMessageBuilder::new_default();
+    {
+        message.init_root::<membership_response::Builder>()
+            .set_success(&format!("{}", leader));
+    }
+    Rc::new(message)
+}
+
+pub fn membership_response_not_leader(leader: &SocketAddr) -> Rc<MallocMessageBuilder> {
+    let mut message = MallocMessageBuilder::new_default();
+    {
+        message.init_root::<membership_response::Builder>()
+            .set_not_leader(&format!("{}", leader));
+    }
+    Rc::new(message)
+}
+
+pub fn membership_response_timeout(leader: &SocketAddr) -> Rc<MallocMessageBuilder> {
+    let mut message = MallocMessageBuilder::new_default();
+    {
+        message.init_root::<membership_response::Builder>()
+            .set_timeout(());
     }
     Rc::new(message)
 }
