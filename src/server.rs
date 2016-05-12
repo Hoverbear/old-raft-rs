@@ -363,8 +363,10 @@ impl<L, M> Server<L, M>
             .accept()
             .map_err(From::from)
             .and_then(|stream_opt| {
-                stream_opt.ok_or(Error::Io(io::Error::new(io::ErrorKind::WouldBlock,
-                                                          "listener.accept() returned None")))
+                stream_opt.ok_or_else(|| {
+                    Error::Io(io::Error::new(io::ErrorKind::WouldBlock,
+                                             "listener.accept() returned None"))
+                })
             })
             .and_then(|(stream, _)| Connection::unknown(stream))
             .and_then(|conn| {
