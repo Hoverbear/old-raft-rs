@@ -91,7 +91,7 @@ impl Log for MemLog {
 
     fn entry(&self, index: LogIndex) -> result::Result<(Term, &[u8]), Error> {
         let (term, ref bytes) = self.entries[(index - 1).as_u64() as usize];
-        Ok((term, &bytes))
+        Ok((term, bytes))
     }
 
     fn append_entries(&mut self,
