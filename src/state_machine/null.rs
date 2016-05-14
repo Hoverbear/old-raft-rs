@@ -5,7 +5,6 @@ use state_machine::StateMachine;
 pub struct NullStateMachine;
 
 impl StateMachine for NullStateMachine {
-
     fn apply(&mut self, _command: &[u8]) -> Vec<u8> {
         Vec::new()
     }

@@ -79,11 +79,16 @@ extern crate capnp_nonblock;
 extern crate mio;
 extern crate rand;
 extern crate uuid;
-#[macro_use] extern crate log;
-#[macro_use] extern crate scoped_log;
-#[macro_use] extern crate wrapped_enum;
-#[cfg(test)] extern crate env_logger;
-#[cfg(feature = "serde")] extern crate serde;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate scoped_log;
+#[macro_use]
+extern crate wrapped_enum;
+#[cfg(test)]
+extern crate env_logger;
+#[cfg(feature = "serde")]
+extern crate serde;
 
 /// Prepares the environment testing. Should be called as the first line of every test with the
 /// name of the test as the only argument.
@@ -132,15 +137,15 @@ wrapped_enum!{
     #[doc = "[`FromError`](https://doc.rust-lang.org/std/error/#the-fromerror-trait)."]
     #[derive(Debug)]
     pub enum Error {
-        /// An error originating from the [Cap'n Proto](https://github.com/dwrensha/capnproto-rust) library.
+/// An error originating from the [Cap'n Proto](https://github.com/dwrensha/capnproto-rust) library.
         CapnProto(capnp::Error),
-        /// A specific error produced when a bad Cap'n proto message is discovered.
+/// A specific error produced when a bad Cap'n proto message is discovered.
         SchemaError(capnp::NotInSchema),
-        /// Errors originating from `std::io`.
+/// Errors originating from `std::io`.
         Io(io::Error),
-        /// Raft specific errors.
+/// Raft specific errors.
         Raft(RaftError),
-        /// Errors related to parsing addresses.
+/// Errors related to parsing addresses.
         AddrParse(net::AddrParseError),
     }
 }
@@ -245,7 +250,7 @@ impl ops::Sub<u64> for LogIndex {
 }
 /// Find the offset between two log indices.
 impl ops::Sub for LogIndex {
-    type Output=u64;
+    type Output = u64;
     fn sub(self, rhs: LogIndex) -> u64 {
         self.0.checked_sub(rhs.0).expect("underflow while subtracting LogIndex")
     }
