@@ -4,18 +4,10 @@
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use capnp::message::{
-    Builder,
-    HeapAllocator,
-};
+use capnp::message::{Builder, HeapAllocator};
 
 use {ClientId, Term, LogIndex, ServerId};
-use messages_capnp::{
-    client_request,
-    client_response,
-    connection_preamble,
-    message
-};
+use messages_capnp::{client_request, client_response, connection_preamble, message};
 
 // ConnectionPreamble
 
@@ -68,7 +60,9 @@ pub fn append_entries_request(term: Term,
     Rc::new(message)
 }
 
-pub fn append_entries_response_success(term: Term, log_index: LogIndex) -> Rc<Builder<HeapAllocator>> {
+pub fn append_entries_response_success(term: Term,
+                                       log_index: LogIndex)
+                                       -> Rc<Builder<HeapAllocator>> {
     let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
@@ -90,7 +84,9 @@ pub fn append_entries_response_stale_term(term: Term) -> Rc<Builder<HeapAllocato
     Rc::new(message)
 }
 
-pub fn append_entries_response_inconsistent_prev_entry(term: Term, index: LogIndex) -> Rc<Builder<HeapAllocator>> {
+pub fn append_entries_response_inconsistent_prev_entry(term: Term,
+                                                       index: LogIndex)
+                                                       -> Rc<Builder<HeapAllocator>> {
     let mut message = Builder::new_default();
     {
         let mut response = message.init_root::<message::Builder>()
