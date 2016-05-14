@@ -35,7 +35,8 @@ addons:
 install:
     - git clone https://github.com/kentonv/capnproto.git
     - cd capnproto/c++
-    - git checkout release-0.5.3
+    # Use master to avoid autotools breakage (13 May 2016)
+    #- git checkout release-0.5.3
     - ./setup-autotools.sh
     - autoreconf -i
     - ./configure --disable-shared
