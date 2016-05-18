@@ -615,7 +615,7 @@ impl<L, M> Consensus<L, M>
             let log_index = prev_log_index + 1;
             self.log.append_entries(log_index, &[(term, entry)]).unwrap();
             self.leader_state.proposals.push_back((from, log_index));
-            if self.peers.len() == 0 {
+            if self.peers.is_empty() {
                 scoped_debug!("ProposalRequest from client {}: entry {}", from, log_index);
                 self.advance_commit_index(actions);
             } else {
