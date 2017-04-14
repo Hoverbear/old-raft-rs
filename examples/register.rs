@@ -1,14 +1,10 @@
-// In order to use Serde we need to enable these nightly features.
-#![feature(plugin)]
-#![feature(custom_derive)]
-#![plugin(serde_macros)]
-
 extern crate bincode;
 extern crate docopt;
 extern crate env_logger;
 extern crate raft;
 extern crate rustc_serialize;
 extern crate serde;
+#[macro_use] extern crate serde_derive;
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -139,7 +135,7 @@ fn create_client(args: &Args) -> Client {
 /// Handles a response message by printing the value on success, or printing the
 /// error and exiting on failure.
 fn handle_response(response: Vec<u8>) {
-    match bincode::serde::deserialize(&response).unwrap() {
+    match bincode::deserialize(&response).unwrap() {
         Response::Ok(val) => println!("{}", val),
         Response::Err(err) => {
             println!("{}", err);
@@ -181,7 +177,7 @@ fn server(args: &Args) {
 /// Panics if the get fails.
 fn get(args: &Args) {
     let mut client = create_client(args);
-    let request = bincode::serde::serialize(&Query::Get, bincode::SizeLimit::Infinite).unwrap();
+    let request = bincode::serialize(&Query::Get, bincode::Infinite).unwrap();
     handle_response(client.query(&request).unwrap());
 }
 
@@ -189,7 +185,7 @@ fn get(args: &Args) {
 fn put(args: &Args) {
     let mut client = create_client(args);
     let proposal = Proposal::Put(args.arg_new_value.clone());
-    let request = bincode::serde::serialize(&proposal, bincode::SizeLimit::Infinite).unwrap();
+    let request = bincode::serialize(&proposal, bincode::Infinite).unwrap();
     handle_response(client.propose(&request).unwrap());
 }
 
@@ -199,7 +195,7 @@ fn cas(args: &Args) {
     let mut client = create_client(args);
     let proposal = Proposal::Cas(args.arg_expected_value.clone(),
                                  args.arg_new_value.clone());
-    let request = bincode::serde::serialize(&proposal, bincode::SizeLimit::Infinite).unwrap();
+    let request = bincode::serialize(&proposal, bincode::Infinite).unwrap();
     handle_response(client.propose(&request).unwrap());
 }
 
@@ -225,14 +221,14 @@ impl state_machine::StateMachine for RegisterStateMachine {
 
     fn apply(&mut self, proposal: &[u8]) -> Vec<u8> {
 
-        let message = match bincode::serde::deserialize::<Proposal>(&proposal) {
+        let message = match bincode::deserialize::<Proposal>(&proposal) {
             Ok(proposal) => proposal,
             Err(err) => return format!("{}", err).into_bytes(),
         };
 
         // Encoding the current value should never fail.
-        let response = bincode::serde::serialize(&Response::Ok(self.value.clone()),
-                                                 bincode::SizeLimit::Infinite).unwrap();
+        let response = bincode::serialize(&Response::Ok(self.value.clone()),
+                                                 bincode::Infinite).unwrap();
         match message {
             Proposal::Put(val) => self.value = val,
             Proposal::Cas(test, new) => {
@@ -246,13 +242,13 @@ impl state_machine::StateMachine for RegisterStateMachine {
     }
 
     fn query(&self, query: &[u8]) -> Vec<u8> {
-        if let Err(err) = bincode::serde::deserialize::<Query>(&query) {
+        if let Err(err) = bincode::deserialize::<Query>(&query) {
             return format!("{}", err).into_bytes();
         }
 
         // Encoding the current value should never fail.
-        bincode::serde::serialize(&Response::Ok(self.value.clone()),
-                                  bincode::SizeLimit::Infinite).unwrap()
+        bincode::serialize(&Response::Ok(self.value.clone()),
+                                  bincode::Infinite).unwrap()
     }
 
     fn snapshot(&self) -> Vec<u8> {

@@ -9,11 +9,6 @@
 //! TODO: For the sake of simplicity of this example, we don't implement a `Log` and just use a
 //! simple testing one. We should improve this in the future.
 
-// In order to use Serde we need to enable these nightly features.
-#![feature(plugin)]
-#![feature(custom_derive)]
-#![plugin(serde_macros)]
-
 extern crate raft; // <--- Kind of a big deal for this!
 extern crate env_logger;
 #[macro_use] extern crate log;
@@ -21,6 +16,7 @@ extern crate env_logger;
 extern crate docopt;
 extern crate serde;
 extern crate serde_json;
+#[macro_use] extern crate serde_derive;
 extern crate rustc_serialize;
 
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -202,7 +198,7 @@ fn put(args: &Args) {
 
     let mut client = Client::new(cluster);
 
-    let new_value = serde_json::to_value(&args.arg_new_value);
+    let new_value = serde_json::to_value(&args.arg_new_value).unwrap();
     let payload = serde_json::to_string(&Message::Put(args.arg_key.clone(), new_value)).unwrap();
 
     // A propose will go through the persistent log and mutably modify the state machine in some
@@ -224,8 +220,8 @@ fn cas(args: &Args) {
 
     let mut client = Client::new(cluster);
 
-    let new_value = serde_json::to_value(&args.arg_new_value);
-    let expected_value = serde_json::to_value(&args.arg_expected_value);
+    let new_value = serde_json::to_value(&args.arg_new_value).unwrap();
+    let expected_value = serde_json::to_value(&args.arg_expected_value).unwrap();
     let payload = serde_json::to_string(&Message::Cas(args.arg_key.clone(), expected_value, new_value)).unwrap();
 
     let response = client.propose(payload.as_bytes()).unwrap();
