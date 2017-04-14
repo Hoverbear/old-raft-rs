@@ -55,11 +55,11 @@ uuid = "0.1"
 wrapped_enum = "0.1"
 
 [dev-dependencies]
-env_logger = "*"
+env_logger = "0.4"
 # Used in Examples
-docopt = "*"
-serde = "*"
-serde_json = "*"
-serde_macros = "*"
-rustc-serialize = "*"
-bincode = "*"
+docopt = "0.7"
+serde = "0.9"
+serde_json = "0.9"
+serde_derive = "0.9"
+rustc-serialize = "0.3"
+bincode = "1.0.0-alpha7"
