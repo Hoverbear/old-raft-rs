@@ -158,7 +158,17 @@ fn server(args: &Args) {
     // Using all of the above components.
     // You probably shouldn't `.unwrap()` in production code unless you're totally sure it works
     // 100% of the time, all the time.
-    Server::run(id, addr, peers, persistent_log, state_machine).unwrap();
+    let mut server = Server::builder()
+        .with_id(id)
+        .with_addr(addr)
+        .with_peers(peers)
+        .with_store(persistent_log)
+        .with_state_machine(state_machine)
+        .with_election_min_millis(1500)
+        .with_election_max_millis(3000)
+        .with_heartbeat_millis(1000)
+        .finalize().unwrap();
+    server.run().unwrap();
 }
 
 /// Gets a value for a given key from the provided Raft cluster.
