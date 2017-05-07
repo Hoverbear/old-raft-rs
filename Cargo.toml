@@ -45,6 +45,7 @@ capnpc = "0.5"
 
 [dependencies]
 bufstream = "0.1"
+byteorder = "*"
 capnp = "0.6"
 capnp-nonblock = "0.3"
 log = "0.3"

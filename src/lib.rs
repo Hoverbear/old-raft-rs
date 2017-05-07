@@ -75,6 +75,7 @@
 
 #![cfg_attr(test, feature(test))]
 extern crate bufstream;
+extern crate byteorder;
 extern crate capnp;
 extern crate capnp_nonblock;
 extern crate mio;
@@ -266,8 +267,9 @@ impl fmt::Display for LogIndex {
 /// consensus group.
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ServerId(u64);
+
 impl ServerId {
-    fn as_u64(self) -> u64 {
+    pub fn as_u64(self) -> u64 {
         self.0
     }
 }
