@@ -169,12 +169,7 @@ fn server(args: &Args) {
     let addr = peers.remove(&id).unwrap();
 
     // Run the raft server.
-    let mut server = Server::builder()
-        .with_id(id)
-        .with_addr(addr)
-        .with_peers(peers)
-        .with_store(log)
-        .with_state_machine(state_machine)
+    let mut server = Server::new(id, addr, peers, log, state_machine)
         .with_election_min_millis(1500)
         .with_election_max_millis(3000)
         .with_heartbeat_millis(1000)

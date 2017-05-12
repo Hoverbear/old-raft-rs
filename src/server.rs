@@ -43,12 +43,12 @@ where
     L: Log,
     M: StateMachine,
 {
-    id: Option<ServerId>,
-    addr: Option<SocketAddr>,
+    id: ServerId,
+    addr: SocketAddr,
     peers: Option<HashMap<ServerId, SocketAddr>>,
-    max_connections: usize,
     store: Option<L>,
     state_machine: Option<M>,
+    max_connections: usize,
     election_min_millis: u64,
     election_max_millis: u64,
     heartbeat_millis: u64,
@@ -59,27 +59,29 @@ where
     L: Log,
     M: StateMachine
 {
-    fn new() -> ServerBuilder<L, M> {
+    fn new(id: ServerId, addr: SocketAddr, peers: HashMap<ServerId, SocketAddr>, store: L, state_machine: M) -> ServerBuilder<L, M> {
+        /// Create a ServerBuilder with default values
+        /// for optional members.
         ServerBuilder {
-            id: None,
-            addr: None,
-            peers: None,
-            store: None,
-            state_machine: None,
+            id: id,
+            addr: addr,
+            peers: Some(peers),
+            store: Some(store),
+            state_machine: Some(state_machine),
+            max_connections: 128,
             election_min_millis: 150,
             election_max_millis: 350,
             heartbeat_millis: 60,
-            max_connections: 129,
         }
     }
 
     pub fn finalize(&mut self) -> Result<Server<L, M>> {
-        Server::new(
-            replace(&mut self.id, None).expect("Server not configured with ID"),
-            replace(&mut self.addr, None).expect("Server not configured with SocketAddr"),
-            replace(&mut self.peers, None).unwrap_or(HashMap::new()).clone(),
-            replace(&mut self.store, None).expect("Server not configured with Log"),
-            replace(&mut self.state_machine, None).expect("Server not configured with StateMachine"),
+        Server::create(
+            self.id,
+            self.addr,
+            replace(&mut self.peers, None).expect("An unexpected error occurred creating a server"),
+            replace(&mut self.store, None).expect("An unexpected error occurred creating a server"),
+            replace(&mut self.state_machine, None).expect("An unexpected error occurred creating a server"),
             self.election_min_millis,
             self.election_max_millis,
             self.heartbeat_millis,
@@ -87,28 +89,8 @@ where
         )
     }
 
-    pub fn with_id(mut self, id: ServerId) -> ServerBuilder<L, M> {
-        self.id = Some(id);
-        self
-    }
-    pub fn with_addr(mut self, addr: SocketAddr) -> ServerBuilder<L, M> {
-        self.addr = Some(addr);
-        self
-    }
-    pub fn with_peers(mut self, peers: HashMap<ServerId, SocketAddr>) -> ServerBuilder<L, M> {
-        self.peers = Some(peers);
-        self
-    }
     pub fn with_max_connections(mut self, count: usize) -> ServerBuilder<L, M> {
         self.max_connections = count;
-        self
-    }
-    pub fn with_store(mut self, store: L) -> ServerBuilder<L, M> {
-        self.store = Some(store);
-        self
-    }
-    pub fn with_state_machine(mut self, state_machine: M) -> ServerBuilder<L, M> {
-        self.state_machine = Some(state_machine);
         self
     }
     pub fn with_election_min_millis(mut self, timeout: u64) -> ServerBuilder<L, M> {
@@ -174,22 +156,28 @@ impl<L, M> Server<L, M>
     where L: Log,
           M: StateMachine
 {
-    pub fn builder() -> ServerBuilder<L, M> {
-        ServerBuilder::new()
+    pub fn new(
+            id: ServerId,
+            addr: SocketAddr,
+            peers: HashMap<ServerId, SocketAddr>,
+            store: L,
+            state_machine: M,) -> ServerBuilder<L, M> {
+        ServerBuilder::new(id, addr, peers, store, state_machine)
     }
 
     /// Creates a new instance of the server.
     /// *Gotcha:* `peers` must not contain the local `id`.
-    fn new(id: ServerId,
-           addr: SocketAddr,
-           peers: HashMap<ServerId, SocketAddr>,
-           store: L,
-           state_machine: M,
-           election_min_millis: u64,
-           election_max_millis: u64,
-           heartbeat_millis: u64,
-           max_connections: usize)
-           -> Result<Server<L, M>> {
+    fn create(
+            id: ServerId,
+            addr: SocketAddr,
+            peers: HashMap<ServerId, SocketAddr>,
+            store: L,
+            state_machine: M,
+            election_min_millis: u64,
+            election_max_millis: u64,
+            heartbeat_millis: u64,
+            max_connections: usize)
+            -> Result<Server<L, M>> {
         if peers.contains_key(&id) {
             return Err(Error::Raft(RaftError::InvalidPeerSet));
         }
@@ -280,7 +268,7 @@ impl<L, M> Server<L, M>
         thread::Builder::new()
             .name(format!("raft::Server({})", id))
             .spawn(move || {
-                let mut server = try!(Server::new(id, addr, peers, store, state_machine, 1500, 3000, 1000, 129));
+                let mut server = try!(Server::create(id, addr, peers, store, state_machine, 1500, 3000, 1000, 129));
                 server.run()
             })
             .map_err(From::from)
@@ -647,11 +635,12 @@ mod tests {
                                           SocketAddr::from_str("127.0.0.1:0").unwrap(),
                                           peers,
                                           MemLog::new(),
-                                          NullStateMachine,
-                                          1500,
-                                          3000,
-                                          1000,
-                                          129));
+                                          NullStateMachine)
+                                          .with_election_min_millis(1500)
+                                          .with_election_max_millis(3000)
+                                          .with_heartbeat_millis(1000)
+                                          .with_max_connections(129)
+                                          .finalize());
         let event_loop = try!(server.start_loop());
         Ok((server, event_loop))
     }
