@@ -6,7 +6,6 @@
 use std::{fmt, io};
 use std::str::FromStr;
 use std::collections::HashMap;
-use std::mem::replace;
 use std::net::SocketAddr;
 use std::thread::{self, JoinHandle};
 use std::rc::Rc;
@@ -45,9 +44,9 @@ where
 {
     id: ServerId,
     addr: SocketAddr,
-    peers: Option<HashMap<ServerId, SocketAddr>>,
-    store: Option<L>,
-    state_machine: Option<M>,
+    peers: HashMap<ServerId, SocketAddr>,
+    store: L,
+    state_machine: M,
     max_connections: usize,
     election_min_millis: u64,
     election_max_millis: u64,
@@ -65,9 +64,9 @@ where
         ServerBuilder {
             id: id,
             addr: addr,
-            peers: Some(peers),
-            store: Some(store),
-            state_machine: Some(state_machine),
+            peers: peers,
+            store: store,
+            state_machine: state_machine,
             max_connections: 128,
             election_min_millis: 150,
             election_max_millis: 350,
@@ -75,13 +74,13 @@ where
         }
     }
 
-    pub fn finalize(&mut self) -> Result<Server<L, M>> {
+    pub fn finalize(self) -> Result<Server<L, M>> {
         Server::create(
             self.id,
             self.addr,
-            replace(&mut self.peers, None).expect("An unexpected error occurred creating a server"),
-            replace(&mut self.store, None).expect("An unexpected error occurred creating a server"),
-            replace(&mut self.state_machine, None).expect("An unexpected error occurred creating a server"),
+            self.peers,
+            self.store,
+            self.state_machine,
             self.election_min_millis,
             self.election_max_millis,
             self.heartbeat_millis,
@@ -89,7 +88,7 @@ where
         )
     }
 
-    pub fn run(&mut self) -> Result<()> {
+    pub fn run(self) -> Result<()> {
         let mut server = self.finalize()?;
         server.run()
     }
