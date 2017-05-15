@@ -89,6 +89,11 @@ where
         )
     }
 
+    pub fn run(&mut self) -> Result<()> {
+        let mut server = self.finalize()?;
+        server.run()
+    }
+
     pub fn with_max_connections(mut self, count: usize) -> ServerBuilder<L, M> {
         self.max_connections = count;
         self
