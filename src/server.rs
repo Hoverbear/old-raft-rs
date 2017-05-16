@@ -44,7 +44,7 @@ where
 {
     id: ServerId,
     addr: SocketAddr,
-    peers: HashMap<ServerId, SocketAddr>,
+    peers: Option<HashMap<ServerId, SocketAddr>>,
     store: L,
     state_machine: M,
     max_connections: usize,
@@ -56,15 +56,15 @@ where
 impl <L, M> ServerBuilder<L, M>
 where
     L: Log,
-    M: StateMachine
+    M: StateMachine,
 {
-    fn new(id: ServerId, addr: SocketAddr, peers: HashMap<ServerId, SocketAddr>, store: L, state_machine: M) -> ServerBuilder<L, M> {
+    fn new(id: ServerId, addr: SocketAddr, store: L, state_machine: M) -> ServerBuilder<L, M> {
         /// Create a ServerBuilder with default values
         /// for optional members.
         ServerBuilder {
             id: id,
             addr: addr,
-            peers: peers,
+            peers: None,
             store: store,
             state_machine: state_machine,
             max_connections: 128,
@@ -78,7 +78,7 @@ where
         Server::create(
             self.id,
             self.addr,
-            self.peers,
+            self.peers.unwrap_or_else(|| HashMap::new()),
             self.store,
             self.state_machine,
             self.election_min_millis,
@@ -97,16 +97,24 @@ where
         self.max_connections = count;
         self
     }
+
     pub fn with_election_min_millis(mut self, timeout: u64) -> ServerBuilder<L, M> {
         self.election_min_millis = timeout;
         self
     }
+
     pub fn with_election_max_millis(mut self, timeout: u64) -> ServerBuilder<L, M> {
         self.election_max_millis = timeout;
         self
     }
+
     pub fn with_heartbeat_millis(mut self, timeout: u64) -> ServerBuilder<L, M> {
         self.heartbeat_millis = timeout;
+        self
+    }
+
+    pub fn with_peers(mut self, peers: HashMap<ServerId, SocketAddr>) -> ServerBuilder<L, M> {
+        self.peers = Some(peers);
         self
     }
 }
@@ -161,12 +169,11 @@ impl<L, M> Server<L, M>
           M: StateMachine
 {
     pub fn new(
-            id: ServerId,
-            addr: SocketAddr,
-            peers: HashMap<ServerId, SocketAddr>,
-            store: L,
-            state_machine: M,) -> ServerBuilder<L, M> {
-        ServerBuilder::new(id, addr, peers, store, state_machine)
+        id: ServerId,
+        addr: SocketAddr,
+        store: L,
+        state_machine: M,) -> ServerBuilder<L, M> {
+        ServerBuilder::new(id, addr, store, state_machine)
     }
 
     /// Creates a new instance of the server.
@@ -637,9 +644,9 @@ mod tests {
                        -> Result<(TestServer, EventLoop<TestServer>)> {
         let mut server = try!(Server::new(ServerId::from(0),
                                           SocketAddr::from_str("127.0.0.1:0").unwrap(),
-                                          peers,
                                           MemLog::new(),
                                           NullStateMachine)
+                                          .with_peers(peers)
                                           .with_election_min_millis(1500)
                                           .with_election_max_millis(3000)
                                           .with_heartbeat_millis(1000)
