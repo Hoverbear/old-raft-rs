@@ -82,7 +82,7 @@ impl Client {
                     let mut stream = match TcpStream::connect(leader) {
                         Ok(stream) => {
                             let timeout = Some(Duration::from_millis(CLIENT_TIMEOUT));
-                            if let Err(_) = stream.set_read_timeout(timeout) {
+                            if stream.set_read_timeout(timeout).is_err() {
                                 continue;
                             }
                             BufStream::new(stream)
@@ -90,16 +90,16 @@ impl Client {
                         Err(_) => continue,
                     };
                     scoped_debug!("connected");
-                    if let Err(_) = serialize::write_message(&mut stream, &*preamble) {
+                    if serialize::write_message(&mut stream, &*preamble).is_err() {
                         continue;
                     };
                     stream
                 }
             };
-            if let Err(_) = serialize::write_message(&mut connection, message) {
+            if serialize::write_message(&mut connection, message).is_err() {
                 continue;
             };
-            if let Err(_) = connection.flush() {
+            if connection.flush().is_err() {
                 continue;
             };
             scoped_debug!("awaiting response from connection");
@@ -133,7 +133,7 @@ impl Client {
                             }
                             let mut connection: TcpStream = try!(TcpStream::connect(leader_str));
                             let preamble = messages::client_connection_preamble(self.id);
-                            if let Err(_) = serialize::write_message(&mut connection, &*preamble) {
+                            if serialize::write_message(&mut connection, &*preamble).is_err() {
                                 continue;
                             };
                             self.leader_connection = Some(BufStream::new(connection));

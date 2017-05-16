@@ -125,7 +125,6 @@ fn main() {
 /// A simple convenience method since this is an example and it should exit if given invalid params.
 fn parse_addr(addr: &str) -> SocketAddr {
     addr.to_socket_addrs()
-        .ok()
         .expect(&format!("unable to parse socket address: {}", addr))
         .next()
         .unwrap()
@@ -148,7 +147,7 @@ fn server(args: &Args) {
     let mut peers = args.arg_node_id
         .iter()
         .zip(args.arg_node_address.iter())
-        .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
+        .map(|(&id, addr)| (ServerId::from(id), parse_addr(addr)))
         .collect::<HashMap<_,_>>();
 
     // The Raft Server will return an error if its ID is inside of its peer set. Don't do that.
@@ -173,7 +172,7 @@ fn get(args: &Args) {
     // This is both so they can try to talk to all the nodes if some are failing, and so that it
     // can verify that it's not being lead astray somehow in redirections on leadership changes.
     let cluster = args.arg_node_address.iter()
-        .map(|v| parse_addr(&v))
+        .map(|v| parse_addr(v))
         .collect();
 
     // Clients can be stored and reused, or used once and discarded.
@@ -199,7 +198,7 @@ fn get(args: &Args) {
 fn put(args: &Args) {
     // Same as above.
     let cluster = args.arg_node_address.iter()
-        .map(|v| parse_addr(&v))
+        .map(|v| parse_addr(v))
         .collect();
 
     let mut client = Client::new(cluster);
@@ -221,7 +220,7 @@ fn put(args: &Args) {
 fn cas(args: &Args) {
     // Same as above.
     let cluster = args.arg_node_address.iter()
-        .map(|v| parse_addr(&v))
+        .map(|v| parse_addr(v))
         .collect();
 
     let mut client = Client::new(cluster);
@@ -236,7 +235,7 @@ fn cas(args: &Args) {
 }
 
 /// A state machine that holds a hashmap.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct HashmapStateMachine {
     map: HashMap<String, Value>,
 }
@@ -266,7 +265,7 @@ impl state_machine::StateMachine for HashmapStateMachine {
         // Handle
         let response = match message {
             Get(key) => {
-                let old_value = &self.map.get(&key).map(|v| v.clone());
+                let old_value = &self.map.get(&key).cloned();
                 serde_json::to_string(old_value)
             },
             Put(key, value) => {
@@ -274,7 +273,7 @@ impl state_machine::StateMachine for HashmapStateMachine {
                 serde_json::to_string(old_value)
             },
             Cas(key, old_check, new) => {
-                if *self.map.get(&key).unwrap() == old_check {
+                if self.map[&key] == old_check {
                     let _ = self.map.insert(key, new);
                     serde_json::to_string(&true)
                 } else {
@@ -299,7 +298,7 @@ impl state_machine::StateMachine for HashmapStateMachine {
         // Handle
         let response = match message {
             Get(key) => {
-                let old_value = &self.map.get(&key).map(|v| v.clone());
+                let old_value = &self.map.get(&key).cloned();
                 serde_json::to_string(old_value)
             },
             _ => panic!("Can't do mutating requests in query"),

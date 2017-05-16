@@ -71,10 +71,10 @@ impl LeaderState {
 
     /// Reinitializes the state following an election.
     pub fn reinitialize(&mut self, latest_log_index: LogIndex) {
-        for (_, next_index) in self.next_index.iter_mut() {
+        for next_index in self.next_index.values_mut() {
             *next_index = latest_log_index + 1;
         }
-        for (_, match_index) in self.match_index.iter_mut() {
+        for match_index in self.match_index.values_mut() {
             *match_index = LogIndex::from(0);
         }
         self.proposals.clear();

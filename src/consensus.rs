@@ -381,7 +381,7 @@ impl<L, M> Consensus<L, M>
                              from,
                              leader_term);
                 self.transition_to_follower(leader_term, from, actions);
-                return self.append_entries_request(from, request, actions);
+                self.append_entries_request(from, request, actions);
             }
             ConsensusState::Leader => {
                 if leader_term == current_term {
@@ -399,7 +399,7 @@ impl<L, M> Consensus<L, M>
                              from,
                              leader_term);
                 self.transition_to_follower(leader_term, from, actions);
-                return self.append_entries_request(from, request, actions);
+                self.append_entries_request(from, request, actions);
             }
         }
     }
@@ -589,7 +589,7 @@ impl<L, M> Consensus<L, M>
         } else if self.is_candidate() {
             // A vote was received!
             if let Ok(request_vote_response::Granted(_)) = response.which() {
-                self.candidate_state.record_vote(from.clone());
+                self.candidate_state.record_vote(from);
                 if self.candidate_state.count_votes() >= majority {
                     scoped_info!("election for term {} won; transitioning to Leader",
                                  local_term);
@@ -764,7 +764,7 @@ impl<L, M> Consensus<L, M>
                 scoped_trace!("responding to client {} for entry {}", client, index);
                 // We know that there will be an index here since it was commited
                 // and the index is less than that which has been commited.
-                let result = results.get(&index).unwrap();
+                let result = &results[&index];
                 let message = messages::command_response_success(result);
                 actions.client_messages.push((client, message));
                 self.leader_state.proposals.pop_front();

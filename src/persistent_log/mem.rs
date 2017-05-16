@@ -183,3 +183,10 @@ mod test {
                    store.entry(LogIndex::from(4)).unwrap());
     }
 }
+
+
+impl Default for MemLog {
+    fn default() -> Self {
+        MemLog::new()
+    }
+}
