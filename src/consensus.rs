@@ -28,9 +28,6 @@ use state::{ConsensusState, LeaderState, CandidateState, FollowerState};
 use state_machine::StateMachine;
 use persistent_log::Log;
 
-const ELECTION_MIN: u64 = 1500;
-const ELECTION_MAX: u64 = 3000;
-const HEARTBEAT_DURATION: u64 = 1000;
 
 /// Consensus timeout types.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -41,14 +38,20 @@ pub enum ConsensusTimeout {
     Heartbeat(ServerId),
 }
 
+pub struct TimeoutConfiguration {
+    pub election_min_ms: u64,
+    pub election_max_ms: u64,
+    pub heartbeat_ms: u64,
+}
+
 impl ConsensusTimeout {
     /// Returns the timeout period in milliseconds.
-    pub fn duration_ms(&self) -> u64 {
+    pub fn duration_ms(&self, config: &TimeoutConfiguration) -> u64 {
         match *self {
             ConsensusTimeout::Election => {
-                rand::thread_rng().gen_range::<u64>(ELECTION_MIN, ELECTION_MAX)
+                rand::thread_rng().gen_range::<u64>(config.election_min_ms, config.election_max_ms)
             }
-            ConsensusTimeout::Heartbeat(..) => HEARTBEAT_DURATION,
+            ConsensusTimeout::Heartbeat(..) => config.heartbeat_ms,
         }
     }
 }

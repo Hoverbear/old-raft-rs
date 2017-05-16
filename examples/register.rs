@@ -169,7 +169,13 @@ fn server(args: &Args) {
     let addr = peers.remove(&id).unwrap();
 
     // Run the raft server.
-    Server::run(id, addr, peers, log, state_machine).unwrap();
+    Server::new(id, addr, log, state_machine)
+        .with_election_min_millis(1500)
+        .with_election_max_millis(3000)
+        .with_heartbeat_millis(1000)
+        .with_peers(peers)
+        .run()
+        .unwrap();
 }
 
 /// Retrieves the value of the register from the provided raft cluster.

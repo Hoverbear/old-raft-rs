@@ -136,7 +136,7 @@ fn server(args: &Args) {
     // Creating a raft server requires several things:
 
     // A persistent log implementation, which manages the persistent, replicated log...
-    let persistent_log = persistent_log::MemLog::new();
+    let log = persistent_log::MemLog::new();
 
     // A state machine which replicates state. This state should be the same on all nodes.
     let state_machine = HashmapStateMachine::new();
@@ -146,10 +146,10 @@ fn server(args: &Args) {
 
     // ...  And a list of peers.
     let mut peers = args.arg_node_id
-                    .iter()
-                    .zip(args.arg_node_address.iter())
-                    .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
-                    .collect::<HashMap<_,_>>();
+        .iter()
+        .zip(args.arg_node_address.iter())
+        .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
+        .collect::<HashMap<_,_>>();
 
     // The Raft Server will return an error if its ID is inside of its peer set. Don't do that.
     // Instead, take it out and use it!
@@ -158,7 +158,13 @@ fn server(args: &Args) {
     // Using all of the above components.
     // You probably shouldn't `.unwrap()` in production code unless you're totally sure it works
     // 100% of the time, all the time.
-    Server::run(id, addr, peers, persistent_log, state_machine).unwrap();
+    Server::new(id, addr, log, state_machine)
+        .with_election_min_millis(1500)
+        .with_election_max_millis(3000)
+        .with_heartbeat_millis(1000)
+        .with_peers(peers)
+        .run()
+        .unwrap();
 }
 
 /// Gets a value for a given key from the provided Raft cluster.
