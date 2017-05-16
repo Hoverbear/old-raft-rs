@@ -75,7 +75,7 @@ where
     }
 
     pub fn finalize(self) -> Result<Server<L, M>> {
-        Server::create(
+        Server::finalize(
             self.id,
             self.addr,
             self.peers.unwrap_or_else(|| HashMap::new()),
@@ -178,7 +178,7 @@ impl<L, M> Server<L, M>
 
     /// Creates a new instance of the server.
     /// *Gotcha:* `peers` must not contain the local `id`.
-    fn create(
+    fn finalize(
             id: ServerId,
             addr: SocketAddr,
             peers: HashMap<ServerId, SocketAddr>,
@@ -279,7 +279,7 @@ impl<L, M> Server<L, M>
         thread::Builder::new()
             .name(format!("raft::Server({})", id))
             .spawn(move || {
-                let mut server = try!(Server::create(id, addr, peers, store, state_machine, 1500, 3000, 1000, 129));
+                let mut server = try!(Server::finalize(id, addr, peers, store, state_machine, 1500, 3000, 1000, 129));
                 server.run()
             })
             .map_err(From::from)
