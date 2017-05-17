@@ -78,7 +78,7 @@ where
         Server::finalize(
             self.id,
             self.addr,
-            self.peers.unwrap_or_else(|| HashMap::new()),
+            self.peers.unwrap_or_else(HashMap::new),
             self.store,
             self.state_machine,
             self.election_min_millis,
@@ -168,6 +168,7 @@ impl<L, M> Server<L, M>
     where L: Log,
           M: StateMachine
 {
+    #[cfg_attr(feature = "cargo-clippy", allow(new_ret_no_self))]
     pub fn new(
         id: ServerId,
         addr: SocketAddr,
@@ -178,6 +179,7 @@ impl<L, M> Server<L, M>
 
     /// Creates a new instance of the server.
     /// *Gotcha:* `peers` must not contain the local `id`.
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     fn finalize(
             id: ServerId,
             addr: SocketAddr,
@@ -233,10 +235,10 @@ impl<L, M> Server<L, M>
         try!(event_loop.register(&self.listener, LISTENER, EventSet::all(), PollOpt::level()));
         let mut tokens = vec![];
         for token in self.peer_tokens.values() {
-            tokens.push(token.clone());
+            tokens.push(*token);
         }
         let id = self.id;
-        let addr = self.listener.local_addr().unwrap();
+        let addr = self.listener.local_addr()?;
         for token in tokens {
             try!(self.connections[token].register(&mut event_loop, token));
             self.send_message(&mut event_loop,
@@ -585,7 +587,7 @@ impl<L, M> Handler for Server<L, M>
                     ConnectionKind::Peer(id) => id,
                     _ => unreachable!(),
                 };
-                let addr = self.connections[token].addr().clone();
+                let addr = *self.connections[token].addr();
                 self.connections[token]
                     .reconnect_peer(self.id, &local_addr.unwrap())
                     .and_then(|_| self.connections[token].register(event_loop, token))

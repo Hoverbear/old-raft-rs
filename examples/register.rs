@@ -116,7 +116,6 @@ fn main() {
 /// Parses a socket address from a string, or panics with an error message.
 fn parse_addr(addr: &str) -> SocketAddr {
     addr.to_socket_addrs()
-        .ok()
         .expect(&format!("unable to parse socket address: {}", addr))
         .next()
         .unwrap()
@@ -126,7 +125,7 @@ fn parse_addr(addr: &str) -> SocketAddr {
 fn create_client(args: &Args) -> Client {
     // Parse raft server addresses from arguments.
     let cluster = args.arg_node_address.iter()
-        .map(|v| parse_addr(&v))
+        .map(|v| parse_addr(v))
         .collect();
 
     Client::new(cluster)
@@ -134,8 +133,8 @@ fn create_client(args: &Args) -> Client {
 
 /// Handles a response message by printing the value on success, or printing the
 /// error and exiting on failure.
-fn handle_response(response: Vec<u8>) {
-    match bincode::deserialize(&response).unwrap() {
+fn handle_response(response: &[u8]) {
+    match bincode::deserialize(response).unwrap() {
         Response::Ok(val) => println!("{}", val),
         Response::Err(err) => {
             println!("{}", err);
@@ -162,7 +161,7 @@ fn server(args: &Args) {
     let mut peers = args.arg_node_id
                     .iter()
                     .zip(args.arg_node_address.iter())
-                    .map(|(&id, addr)| (ServerId::from(id), parse_addr(&addr)))
+                    .map(|(&id, addr)| (ServerId::from(id), parse_addr(addr)))
                     .collect::<HashMap<_,_>>();
 
     // The peer set must not include the local server's ID.
@@ -184,7 +183,7 @@ fn server(args: &Args) {
 fn get(args: &Args) {
     let mut client = create_client(args);
     let request = bincode::serialize(&Query::Get, bincode::Infinite).unwrap();
-    handle_response(client.query(&request).unwrap());
+    handle_response(&client.query(&request).unwrap());
 }
 
 /// Sets a value for a given key in the provided raft cluster.
@@ -192,7 +191,7 @@ fn put(args: &Args) {
     let mut client = create_client(args);
     let proposal = Proposal::Put(args.arg_new_value.clone());
     let request = bincode::serialize(&proposal, bincode::Infinite).unwrap();
-    handle_response(client.propose(&request).unwrap());
+    handle_response(&client.propose(&request).unwrap());
 }
 
 /// Atomically sets the register value if the current value equals the expected
@@ -202,11 +201,11 @@ fn cas(args: &Args) {
     let proposal = Proposal::Cas(args.arg_expected_value.clone(),
                                  args.arg_new_value.clone());
     let request = bincode::serialize(&proposal, bincode::Infinite).unwrap();
-    handle_response(client.propose(&request).unwrap());
+    handle_response(&client.propose(&request).unwrap());
 }
 
 /// A state machine that holds a single mutable string value.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RegisterStateMachine {
     value: String,
 }
@@ -227,7 +226,7 @@ impl state_machine::StateMachine for RegisterStateMachine {
 
     fn apply(&mut self, proposal: &[u8]) -> Vec<u8> {
 
-        let message = match bincode::deserialize::<Proposal>(&proposal) {
+        let message = match bincode::deserialize::<Proposal>(proposal) {
             Ok(proposal) => proposal,
             Err(err) => return format!("{}", err).into_bytes(),
         };
@@ -248,7 +247,7 @@ impl state_machine::StateMachine for RegisterStateMachine {
     }
 
     fn query(&self, query: &[u8]) -> Vec<u8> {
-        if let Err(err) = bincode::deserialize::<Query>(&query) {
+        if let Err(err) = bincode::deserialize::<Query>(query) {
             return format!("{}", err).into_bytes();
         }
 

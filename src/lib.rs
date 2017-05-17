@@ -2,6 +2,7 @@
 #![crate_type="lib"]
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Hoverbear/raft/master/raft.png")]
 #![doc(html_root_url = "https://hoverbear.github.io/raft/raft/")]
+#![cfg_attr(feature = "cargo-clippy", allow(doc_markdown))]
 
 //! This is the Raft Distributed Consensus Protocol implemented for Rust.
 //! [Raft](http://raftconsensus.github.io/) is described as:
