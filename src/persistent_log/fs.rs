@@ -1,8 +1,8 @@
 use std::{error, fmt, fs, path, result};
 use std::io::prelude::*;
-use std::io::SeekFrom;
+use std::io::{BufReader, BufWriter, SeekFrom};
 
-use byteorder::{ByteOrder, BigEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use persistent_log::Log;
 use LogIndex;
 use ServerId;
@@ -45,7 +45,8 @@ pub type Entry = (Term, Vec<u8>);
 
 #[derive(Debug)]
 pub struct FsLog {
-    file: fs::File,
+    reader: BufReader<fs::File>,
+    writer: BufWriter<fs::File>,
     current_term: Term,
     voted_for: Option<ServerId>,
     entries: Vec<(Term, Vec<u8>)>,
@@ -56,29 +57,32 @@ pub struct FsLog {
 /// As much as needed for the log.
 impl FsLog {
     pub fn new(filename: &path::Path) -> Result<FsLog> {
-        let mut f = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(filename)?;
 
-        assert_eq!(f.seek(SeekFrom::Current(0)).unwrap(), 0);
-        let filelen = f.metadata()?.len();
+        let mut w = BufWriter::new(
+            fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(&filename)?);
+
+        let filelen = w.get_ref().metadata()?.len();
+
         if filelen == 0 {
-            f.write_u64::<BigEndian>(0)?;
-            f.write_u64::<BigEndian>(<u64>::max_value())?;
-            f.seek(SeekFrom::Start(0))?;
-        }
+            w.write_u64::<BigEndian>(0)?;  // Term (0)
+            w.write_u64::<BigEndian>(<u64>::max_value())?;  // Voted for (None)
+            w.flush()?;
+        } 
+        
+        let mut r = BufReader::new(fs::File::open(&filename)?);
 
-        let current_term: Term = f.read_u64::<BigEndian>()?.into();
-
-        let voted_for: Option<ServerId> = match f.read_u64::<BigEndian>()? {
+        let current_term: Term = r.read_u64::<BigEndian>()?.into();
+        let voted_for: Option<ServerId> = match r.read_u64::<BigEndian>()? {
             x if x == <u64>::max_value() => None,
             x => Some(x.into())
         };
 
         let mut log = FsLog {
-            file: f,
+            reader: r,
+            writer: w,
             current_term: current_term,
             voted_for: voted_for,
             entries: Vec::new(),
@@ -90,68 +94,72 @@ impl FsLog {
             log.offsets.push(offset);
             let entry = log.read_entry(None)?;
             log.entries.push(entry);
-            offset = log.file.seek(SeekFrom::Current(0))?;
+            offset = log.reader.seek(SeekFrom::Current(0))?;
         }
         Ok(log)
     }
 
     fn write_term(&mut self) -> Result<()> {
-        self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_u64::<BigEndian>(self.current_term.into())?;
-        self.write_voted_for()?;
+        self.writer.seek(SeekFrom::Start(0))?;
+        self.writer.write_u64::<BigEndian>(self.current_term.into())?;
+        // Set voted_for to None
+        self.writer.write_u64::<BigEndian>(<u64>::max_value())?;
+        self.writer.flush()?;
         Ok(())
     }
     
     fn write_voted_for(&mut self) -> Result<()> {
-        self.file.seek(SeekFrom::Start(8))?;
-        self.file.write_u64::<BigEndian>(
+        self.writer.seek(SeekFrom::Start(8))?;
+        self.writer.write_u64::<BigEndian>(
             match self.voted_for {
                 None => <u64>::max_value(),
                 Some(ServerId(n)) => n,
             }
         )?;
+        self.writer.flush()?;
         Ok(())
     }
 
     fn read_entry(&mut self, index: Option<usize>) -> Result<Entry> {
         // Could be more efficient about not copying data here.
         if let Some(index) = index {
-            let offset = self.offsets.get(index).ok_or(Error)?;
-            self.file.seek(SeekFrom::Start(*offset))?;
+            let offset = self.offsets.get(index).ok_or(Error).expect("*");
+            self.reader.seek(SeekFrom::Start(*offset))?;
         }
-        let length = self.file.read_u64::<BigEndian>()? as usize;
-        let mut vecbuf = vec![0u8; length - 8];
-        self.file.read_exact(&mut vecbuf[0..(length - 8) as usize])?;
-        let term = BigEndian::read_u64(&vecbuf[..8]).into();
-        let command = (&vecbuf[8..]).to_owned();
+        let length = self.reader.read_u64::<BigEndian>()? as usize;
+        let term = self.reader.read_u64::<BigEndian>()?.into();
+        let mut command = vec![0u8; length - 16];
+        self.reader.read_exact(&mut command[..length - 16])?;
         Ok((term, command))
     }
 
     fn truncate_file(&mut self, index: usize) -> Result<()> {
         match self.offsets.get(index) {
             None => {},
-            Some(offset) => self.file.set_len(*offset)?,
+            Some(offset) => self.writer.get_mut().set_len(*offset)?,
         };
+        self.reader.seek(SeekFrom::End(0))?; // Clear the buffer
+        self.writer.seek(SeekFrom::End(0))?; // Clear the buffer
         Ok(())
     }
 
-    ///Add an entry to the log
+    ///Add an entry to the log at the current location
     fn write_entry(&mut self, index: usize, term: Term, command: &[u8]) -> Result<()> {
         if index > self.entries.len() {
             Err(Error)
         } else {
-            let new_offset = self.file.seek(SeekFrom::End(0))?;
+            let new_offset = self.reader.seek(SeekFrom::End(0))?;
             self.offsets.push(new_offset);
             let entry_len = (command.len() + 16) as u64;
-            self.file.write_u64::<BigEndian>(entry_len)?;
-            self.file.write_u64::<BigEndian>(term.into())?;
-            self.file.write_all(&command[..])?;
+            self.writer.write_u64::<BigEndian>(entry_len)?;
+            self.writer.write_u64::<BigEndian>(term.into())?;
+            self.writer.write_all(&command[..])?;
             Ok(())
         }
     }
 
     fn rewrite_entries(&mut self, from: LogIndex, entries: &[(Term, &[u8])]) -> Result<()> {
-        assert!(self.latest_log_index().unwrap() + 1 >= from);
+        assert!(self.latest_log_index()? + 1 >= from);
         let mut index = (from - 1).as_u64() as usize;
         self.truncate_file(index)?;
         self.entries.truncate(index);  
@@ -161,6 +169,7 @@ impl FsLog {
             self.write_entry(index, term, command)?;
             index += 1;
         }
+        self.writer.flush()?;
         Ok(())
     }
 }
@@ -220,7 +229,7 @@ impl Log for FsLog {
                       from: LogIndex,
                       entries: &[(Term, &[u8])])
                       -> Result<()> {
-        assert!(self.latest_log_index().unwrap() + 1 >= from);
+        assert!(self.latest_log_index()? + 1 >= from);
         let from_idx = (from - 1).as_u64() as usize;
         for idx in 0..entries.len() {
             match self.entries.get(from_idx + idx).map(|entry| entry.0) {
@@ -246,9 +255,10 @@ impl Log for FsLog {
 
 impl Clone for FsLog {
     fn clone(&self) -> FsLog {
-        // Wish I didn't have to unwrap the filehandle...
+        // Wish I didn't have to unwrap the filehandles...
         FsLog {
-            file: self.file.try_clone().unwrap(),
+            reader: BufReader::new(self.reader.get_ref().try_clone().expect("cloning self.reader")),
+            writer: BufWriter::new(self.writer.get_ref().try_clone().expect("cloning self.writer")),
             current_term: self.current_term,
             voted_for: self.voted_for,
             entries: self.entries.clone(),
@@ -377,7 +387,7 @@ mod test {
         }
 
         // New store with the same backing file starts with the same state.
-        let store = FsLog::new(&filename).unwrap();
+        let store = FsLog::new(&filename).expect("RECREATE FSLOG");
         assert_eq!(store.voted_for().unwrap(), Some(ServerId::from(4)));
         assert_eq!(store.current_term().unwrap(), Term(42));
         assert_entries_equal(&store, vec![(Term::from(0), &[1]),
