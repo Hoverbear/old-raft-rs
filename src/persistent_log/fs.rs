@@ -123,7 +123,7 @@ impl FsLog {
     fn read_entry(&mut self, index: Option<usize>) -> Result<Entry> {
         // Could be more efficient about not copying data here.
         if let Some(index) = index {
-            let offset = self.offsets.get(index).ok_or(Error).expect("*");
+            let offset = self.offsets.get(index).ok_or(Error)?;
             self.reader.seek(SeekFrom::Start(*offset))?;
         }
         let length = self.reader.read_u64::<BigEndian>()? as usize;
@@ -387,7 +387,7 @@ mod test {
         }
 
         // New store with the same backing file starts with the same state.
-        let store = FsLog::new(&filename).expect("RECREATE FSLOG");
+        let store = FsLog::new(&filename).unwrap();
         assert_eq!(store.voted_for().unwrap(), Some(ServerId::from(4)));
         assert_eq!(store.current_term().unwrap(), Term(42));
         assert_entries_equal(&store, vec![(Term::from(0), &[1]),
