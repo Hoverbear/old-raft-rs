@@ -64,6 +64,7 @@ pub struct FsLog {
     offsets: Vec<u64>,
 }
 
+
 impl FsLog {
     pub fn new(filename: &path::Path) -> Result<FsLog> {
 
@@ -80,8 +81,8 @@ impl FsLog {
             w.write_u64::<BigEndian>(0)?;  // Term (0)
             w.write_u64::<BigEndian>(<u64>::max_value())?;  // Voted for (None)
             w.flush()?;
-        } 
-        
+        }
+
         let mut r = BufReader::new(fs::File::open(&filename)?);
 
         let version = r.read_u64::<BigEndian>()?;
@@ -121,7 +122,7 @@ impl FsLog {
         self.writer.flush()?;
         Ok(())
     }
-    
+
     fn write_voted_for(&mut self) -> Result<()> {
         self.writer.seek(SeekFrom::Start(16))?;
         self.writer.write_u64::<BigEndian>(
@@ -176,8 +177,8 @@ impl FsLog {
         assert!(self.latest_log_index()? + 1 >= from);
         let mut index = (from - 1).as_u64() as usize;
         self.truncate_file(index)?;
-        self.entries.truncate(index);  
-        self.offsets.truncate(index);  
+        self.entries.truncate(index);
+        self.offsets.truncate(index);
         self.entries.extend(entries.iter().map(|&(term, command)| (term, command.to_vec())));
         for &(term, command) in entries {
             self.write_entry(index, term, command)?;
@@ -238,7 +239,7 @@ impl Log for FsLog {
         Ok((term, bytes))
     }
 
-    /// Append entries sent from the leader.  
+    /// Append entries sent from the leader.
     fn append_entries(&mut self,
                       from: LogIndex,
                       entries: &[(Term, &[u8])])
@@ -248,7 +249,7 @@ impl Log for FsLog {
         for idx in 0..entries.len() {
             match self.entries.get(from_idx + idx).map(|entry| entry.0) {
                 Some(term) => {
-                    let sent_term = entries[idx].0; 
+                    let sent_term = entries[idx].0;
                     if term == sent_term {
                         continue;
                     } else {
@@ -355,7 +356,7 @@ mod test {
                                           (Term::from(1), &*vec![4])]);
 
         // [0.1, 0.2, 0.3, 1.4]  All match, non-exhaustive
-        store.append_entries(LogIndex::from(2), 
+        store.append_entries(LogIndex::from(2),
                              &[(Term::from(0), &[2]),
                                (Term::from(0), &[3])])
              .unwrap();
@@ -365,7 +366,7 @@ mod test {
                                          (Term::from(1), &[4u8])]);
 
         // [0.1, 0.2, 2.5, 2.6]  One match, two new
-        store.append_entries(LogIndex::from(2), 
+        store.append_entries(LogIndex::from(2),
                              &[(Term::from(0), &[2]),
                                (Term::from(2), &[5]),
                                (Term::from(2), &[6])])
