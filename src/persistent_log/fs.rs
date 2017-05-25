@@ -43,6 +43,17 @@ impl ::std::convert::From<::std::io::Error> for Error {
 pub type Result<T> = result::Result<T, Error>;
 pub type Entry = (Term, Vec<u8>);
 
+/// Version of the log file format.  A logfile will always start with an eight
+/// byte version specifier.  If the format ever changes, this version will be
+/// updated, so FsLog will not read the log incorrectly.
+const VERSION: u64 = 1;
+
+/// Stores log on disk as 8 bytes for the version identifier, 8 bytes for
+/// current_term, 8 bytes for voted_for, and as much as needed for the log.
+/// Each log entry is stored as an 8 byte length specifier which is the total
+/// length of the entry in bytes, including the length specifier, followed by 8
+/// bytes specifying the term, plus a variable length entry, which is the
+/// serialized command sent to raft by the client.
 #[derive(Debug)]
 pub struct FsLog {
     reader: BufReader<fs::File>,
@@ -53,8 +64,6 @@ pub struct FsLog {
     offsets: Vec<u64>,
 }
 
-/// Stores log as 8 bytes for current_term, 8 bytes for voted_for, and 
-/// As much as needed for the log.
 impl FsLog {
     pub fn new(filename: &path::Path) -> Result<FsLog> {
 
@@ -67,6 +76,7 @@ impl FsLog {
         let filelen = w.get_ref().metadata()?.len();
 
         if filelen == 0 {
+            w.write_u64::<BigEndian>(VERSION)?;  // Term (0)
             w.write_u64::<BigEndian>(0)?;  // Term (0)
             w.write_u64::<BigEndian>(<u64>::max_value())?;  // Voted for (None)
             w.flush()?;
@@ -74,6 +84,10 @@ impl FsLog {
         
         let mut r = BufReader::new(fs::File::open(&filename)?);
 
+        let version = r.read_u64::<BigEndian>()?;
+        if version != VERSION {
+            return Err(Error);
+        } 
         let current_term: Term = r.read_u64::<BigEndian>()?.into();
         let voted_for: Option<ServerId> = match r.read_u64::<BigEndian>()? {
             x if x == <u64>::max_value() => None,
@@ -89,7 +103,7 @@ impl FsLog {
             offsets: Vec::new(),
         };
 
-        let mut offset = 16;
+        let mut offset = 24; // The size of the header.
         while offset < filelen {
             log.offsets.push(offset);
             let entry = log.read_entry(None)?;
@@ -100,7 +114,7 @@ impl FsLog {
     }
 
     fn write_term(&mut self) -> Result<()> {
-        self.writer.seek(SeekFrom::Start(0))?;
+        self.writer.seek(SeekFrom::Start(8))?;
         self.writer.write_u64::<BigEndian>(self.current_term.into())?;
         // Set voted_for to None
         self.writer.write_u64::<BigEndian>(<u64>::max_value())?;
@@ -109,7 +123,7 @@ impl FsLog {
     }
     
     fn write_voted_for(&mut self) -> Result<()> {
-        self.writer.seek(SeekFrom::Start(8))?;
+        self.writer.seek(SeekFrom::Start(16))?;
         self.writer.write_u64::<BigEndian>(
             match self.voted_for {
                 None => <u64>::max_value(),
@@ -394,7 +408,7 @@ mod test {
                                           (Term::from(0), &[2]),
                                           (Term::from(0), &[3]),
                                           (Term::from(1), &[4])]);
-        assert_eq!(store.offsets, [16, 33, 50, 67]);
+        assert_eq!(store.offsets, [24, 41, 58, 75]);
         remove_file(&filename).unwrap();
     }
 }
