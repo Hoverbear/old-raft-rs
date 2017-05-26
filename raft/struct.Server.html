@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `Server` struct in crate `raft`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, Server">
+
+    <title>raft::Server - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc struct">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        <a href='../raft/index.html'><img src='https://raw.githubusercontent.com/Hoverbear/raft/master/raft.png' alt='logo' width='100'></a>
+        <p class='location'>Struct Server</p><div class="block items"><ul><li><a href="#methods">Methods</a></li><li><a href="#implementations">Trait Implementations</a></li></ul></div><p class='location'><a href='index.html'>raft</a></p><script>window.sidebarCurrent = {name: 'Server', ty: 'struct', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content">
+<h1 class='fqn'><span class='in-band'>Struct <a href='index.html'>raft</a>::<wbr><a class="struct" href=''>Server</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../src/raft/server.rs.html#134-164' title='goto source code'>[src]</a></span></h1>
+<pre class='rust struct'>pub struct Server&lt;L, M&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;L: <a class="trait" href="../raft/persistent_log/trait.Log.html" title="trait raft::persistent_log::Log">Log</a>,<br>&nbsp;&nbsp;&nbsp;&nbsp;M: <a class="trait" href="../raft/state_machine/trait.StateMachine.html" title="trait raft::state_machine::StateMachine">StateMachine</a>,&nbsp;</span> { /* fields omitted */ }</pre><div class='docblock'><p>The <code>Server</code> is responsible for receiving events from peer <code>Server</code> instance or clients,
+as well as managing election and heartbeat timeouts. When an event is received, it is applied
+to the local <code>Consensus</code>. The <code>Consensus</code> may optionally return a set of events to be
+dispatched to either remote peers or clients.</p>
+
+<h2 id='logging' class='section-header'><a href='#logging'>Logging</a></h2>
+<p>Server instances log events according to frequency and importance. It is recommended to use at
+least info level logging when running in production. The warn level is used for unexpected,
+but recoverable events. The info level is used for infrequent events such as connection resets
+and election results. The debug level is used for frequent events such as client proposals and
+heartbeats. The trace level is used for very high frequency debugging output.</p>
+</div><h2 id='methods'>Methods</h2><h3 class='impl'><span class='in-band'><code>impl&lt;L, M&gt; <a class="struct" href="../raft/struct.Server.html" title="struct raft::Server">Server</a>&lt;L, M&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;L: <a class="trait" href="../raft/persistent_log/trait.Log.html" title="trait raft::persistent_log::Log">Log</a>,<br>&nbsp;&nbsp;&nbsp;&nbsp;M: <a class="trait" href="../raft/state_machine/trait.StateMachine.html" title="trait raft::state_machine::StateMachine">StateMachine</a>,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/raft/server.rs.html#167-507' title='goto source code'>[src]</a></span></h3>
+<div class='docblock'><p>The implementation of the Server.</p>
+</div><div class='impl-items'><h4 id='method.new' class="method"><span id='new.v' class='invisible'><code>fn <a href='#method.new' class='fnname'>new</a>(<br>&nbsp;&nbsp;&nbsp;&nbsp;id: <a class="struct" href="../raft/struct.ServerId.html" title="struct raft::ServerId">ServerId</a>, <br>&nbsp;&nbsp;&nbsp;&nbsp;addr: <a class="enum" href="https://doc.rust-lang.org/nightly/std/net/addr/enum.SocketAddr.html" title="enum std::net::addr::SocketAddr">SocketAddr</a>, <br>&nbsp;&nbsp;&nbsp;&nbsp;store: L, <br>&nbsp;&nbsp;&nbsp;&nbsp;state_machine: M<br>) -&gt; ServerBuilder&lt;L, M&gt;</code></span></h4>
+<h4 id='method.run' class="method"><span id='run.v' class='invisible'><code>fn <a href='#method.run' class='fnname'>run</a>(&amp;mut self) -&gt; <a class="type" href="../raft/type.Result.html" title="type raft::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">()</a>&gt;</code></span></h4>
+<div class='docblock'><p>Runs a new Raft server in the current thread.</p>
+
+<h1 id='arguments' class='section-header'><a href='#arguments'>Arguments</a></h1>
+<ul>
+<li><code>id</code> - The ID of the new node.</li>
+<li><code>addr</code> - The address of the new node.</li>
+<li><code>peers</code> - The ID and address of all peers in the Raft cluster.</li>
+<li><code>store</code> - The persistent log store.</li>
+<li><code>state_machine</code> - The client state machine to which client commands will be applied.</li>
+</ul>
+</div><h4 id='method.spawn' class="method"><span id='spawn.v' class='invisible'><code>fn <a href='#method.spawn' class='fnname'>spawn</a>(<br>&nbsp;&nbsp;&nbsp;&nbsp;id: <a class="struct" href="../raft/struct.ServerId.html" title="struct raft::ServerId">ServerId</a>, <br>&nbsp;&nbsp;&nbsp;&nbsp;addr: <a class="enum" href="https://doc.rust-lang.org/nightly/std/net/addr/enum.SocketAddr.html" title="enum std::net::addr::SocketAddr">SocketAddr</a>, <br>&nbsp;&nbsp;&nbsp;&nbsp;peers: <a class="struct" href="https://doc.rust-lang.org/nightly/std/collections/hash/map/struct.HashMap.html" title="struct std::collections::hash::map::HashMap">HashMap</a>&lt;<a class="struct" href="../raft/struct.ServerId.html" title="struct raft::ServerId">ServerId</a>, <a class="enum" href="https://doc.rust-lang.org/nightly/std/net/addr/enum.SocketAddr.html" title="enum std::net::addr::SocketAddr">SocketAddr</a>&gt;, <br>&nbsp;&nbsp;&nbsp;&nbsp;store: L, <br>&nbsp;&nbsp;&nbsp;&nbsp;state_machine: M<br>) -&gt; <a class="type" href="../raft/type.Result.html" title="type raft::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/std/thread/struct.JoinHandle.html" title="struct std::thread::JoinHandle">JoinHandle</a>&lt;<a class="type" href="../raft/type.Result.html" title="type raft::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">()</a>&gt;&gt;&gt;</code></span></h4>
+<div class='docblock'><p>Spawns a new Raft server in a background thread.</p>
+
+<h1 id='arguments-1' class='section-header'><a href='#arguments-1'>Arguments</a></h1>
+<ul>
+<li><code>id</code> - The ID of the new node.</li>
+<li><code>addr</code> - The address of the new node.</li>
+<li><code>peers</code> - The ID and address of all peers in the Raft cluster.</li>
+<li><code>store</code> - The persistent log store.</li>
+<li><code>state_machine</code> - The client state machine to which client commands will be applied.</li>
+</ul>
+</div></div><h2 id='implementations'>Trait Implementations</h2><h3 class='impl'><span class='in-band'><code>impl&lt;L, M&gt; <a class="trait" href="../mio/handler/trait.Handler.html" title="trait mio::handler::Handler">Handler</a> for <a class="struct" href="../raft/struct.Server.html" title="struct raft::Server">Server</a>&lt;L, M&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;L: <a class="trait" href="../raft/persistent_log/trait.Log.html" title="trait raft::persistent_log::Log">Log</a>,<br>&nbsp;&nbsp;&nbsp;&nbsp;M: <a class="trait" href="../raft/state_machine/trait.StateMachine.html" title="trait raft::state_machine::StateMachine">StateMachine</a>,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/raft/server.rs.html#509-608' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='associatedtype.Message' class="type"><span id='Message.t' class='invisible'><code>type <a href='../mio/handler/trait.Handler.html#associatedtype.Message' class="type">Message</a> = <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">()</a></code></span></h4>
+<h4 id='associatedtype.Timeout' class="type"><span id='Timeout.t' class='invisible'><code>type <a href='../mio/handler/trait.Handler.html#associatedtype.Timeout' class="type">Timeout</a> = ServerTimeout</code></span></h4>
+<h4 id='method.ready' class="method"><span id='ready.v' class='invisible'><code>fn <a href='../mio/handler/trait.Handler.html#method.ready' class='fnname'>ready</a>(<br>&nbsp;&nbsp;&nbsp;&nbsp;&amp;mut self, <br>&nbsp;&nbsp;&nbsp;&nbsp;event_loop: &amp;mut <a class="struct" href="../mio/event_loop/struct.EventLoop.html" title="struct mio::event_loop::EventLoop">EventLoop</a>&lt;<a class="struct" href="../raft/struct.Server.html" title="struct raft::Server">Server</a>&lt;L, M&gt;&gt;, <br>&nbsp;&nbsp;&nbsp;&nbsp;token: <a class="struct" href="../mio/token/struct.Token.html" title="struct mio::token::Token">Token</a>, <br>&nbsp;&nbsp;&nbsp;&nbsp;events: <a class="struct" href="../mio/event/struct.EventSet.html" title="struct mio::event::EventSet">EventSet</a><br>)</code></span></h4>
+<div class='docblock'><p>Invoked when the socket represented by <code>token</code> is ready to be operated on. <code>events</code> indicates the specific operations that are ready to be performed. <a href="../mio/handler/trait.Handler.html#method.ready">Read more</a></p>
+</div><h4 id='method.timeout' class="method"><span id='timeout.v' class='invisible'><code>fn <a href='../mio/handler/trait.Handler.html#method.timeout' class='fnname'>timeout</a>(<br>&nbsp;&nbsp;&nbsp;&nbsp;&amp;mut self, <br>&nbsp;&nbsp;&nbsp;&nbsp;event_loop: &amp;mut <a class="struct" href="../mio/event_loop/struct.EventLoop.html" title="struct mio::event_loop::EventLoop">EventLoop</a>&lt;<a class="struct" href="../raft/struct.Server.html" title="struct raft::Server">Server</a>&lt;L, M&gt;&gt;, <br>&nbsp;&nbsp;&nbsp;&nbsp;timeout: ServerTimeout<br>)</code></span></h4>
+<div class='docblock'><p>Invoked when a timeout has completed.</p>
+</div><h4 id='method.notify' class="method"><span id='notify.v' class='invisible'><code>fn <a href='../mio/handler/trait.Handler.html#method.notify' class='fnname'>notify</a>(&amp;mut self, event_loop: &amp;mut <a class="struct" href="../mio/event_loop/struct.EventLoop.html" title="struct mio::event_loop::EventLoop">EventLoop</a>&lt;Self&gt;, msg: Self::<a class="trait" href="../mio/handler/trait.Handler.html" title="trait mio::handler::Handler">Message</a>)</code></span></h4>
+<div class='docblock'><p>Invoked when a message has been received via the event loop&#39;s channel.</p>
+</div><h4 id='method.interrupted' class="method"><span id='interrupted.v' class='invisible'><code>fn <a href='../mio/handler/trait.Handler.html#method.interrupted' class='fnname'>interrupted</a>(&amp;mut self, event_loop: &amp;mut <a class="struct" href="../mio/event_loop/struct.EventLoop.html" title="struct mio::event_loop::EventLoop">EventLoop</a>&lt;Self&gt;)</code></span></h4>
+<div class='docblock'><p>Invoked when <code>EventLoop</code> has been interrupted by a signal interrupt.</p>
+</div><h4 id='method.tick' class="method"><span id='tick.v' class='invisible'><code>fn <a href='../mio/handler/trait.Handler.html#method.tick' class='fnname'>tick</a>(&amp;mut self, event_loop: &amp;mut <a class="struct" href="../mio/event_loop/struct.EventLoop.html" title="struct mio::event_loop::EventLoop">EventLoop</a>&lt;Self&gt;)</code></span></h4>
+<div class='docblock'><p>Invoked at the end of an event loop tick.</p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl&lt;L, M&gt; <a class="trait" href="https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html" title="trait core::fmt::Debug">Debug</a> for <a class="struct" href="../raft/struct.Server.html" title="struct raft::Server">Server</a>&lt;L, M&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;L: <a class="trait" href="../raft/persistent_log/trait.Log.html" title="trait raft::persistent_log::Log">Log</a>,<br>&nbsp;&nbsp;&nbsp;&nbsp;M: <a class="trait" href="../raft/state_machine/trait.StateMachine.html" title="trait raft::state_machine::StateMachine">StateMachine</a>,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/raft/server.rs.html#610-617' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.fmt' class="method"><span id='fmt.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html#tymethod.fmt' class='fnname'>fmt</a>(&amp;self, fmt: &amp;mut <a class="struct" href="https://doc.rust-lang.org/nightly/core/fmt/struct.Formatter.html" title="struct core::fmt::Formatter">Formatter</a>) -&gt; <a class="type" href="https://doc.rust-lang.org/nightly/core/fmt/type.Result.html" title="type core::fmt::Result">Result</a></code></span></h4>
+<div class='docblock'><p>Formats the value using the given formatter.</p>
+</div></div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../";
+        window.currentCrate = "raft";
+    </script>
+    <script src="../main.js"></script>
+    <script defer src="../search-index.js"></script>
+</body>
+</html>

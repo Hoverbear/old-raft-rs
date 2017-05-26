@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `Reader` struct in crate `capnp`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, Reader">
+
+    <title>capnp::list_list::Reader - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc struct">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        <p class='location'>Struct Reader</p><div class="block items"><ul><li><a href="#methods">Methods</a></li><li><a href="#implementations">Trait Implementations</a></li></ul></div><p class='location'><a href='../index.html'>capnp</a>::<wbr><a href='index.html'>list_list</a></p><script>window.sidebarCurrent = {name: 'Reader', ty: 'struct', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content">
+<h1 class='fqn'><span class='in-band'>Struct <a href='../index.html'>capnp</a>::<wbr><a href='index.html'>list_list</a>::<wbr><a class="struct" href=''>Reader</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../../src/capnp/list_list.rs.html#38-41' title='goto source code'>[src]</a></span></h1>
+<pre class='rust struct'>pub struct Reader&lt;'a, T&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: for&lt;'b&gt; <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'b&gt;,&nbsp;</span> { /* fields omitted */ }</pre><h2 id='methods'>Methods</h2><h3 class='impl'><span class='in-band'><code>impl&lt;'a, T&gt; <a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: for&lt;'b&gt; <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'b&gt;,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/list_list.rs.html#43-52' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.new' class="method"><span id='new.v' class='invisible'><code>fn <a href='#method.new' class='fnname'>new</a>&lt;'b&gt;(reader: <a class="struct" href="../../capnp/private/layout/struct.ListReader.html" title="struct capnp::private::layout::ListReader">ListReader</a>&lt;'b&gt;) -&gt; <a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'b, T&gt;</code></span></h4>
+<h4 id='method.len' class="method"><span id='len.v' class='invisible'><code>fn <a href='#method.len' class='fnname'>len</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u32.html">u32</a></code></span></h4>
+<h4 id='method.iter' class="method"><span id='iter.v' class='invisible'><code>fn <a href='#method.iter' class='fnname'>iter</a>(self) -&gt; <a class="struct" href="../../capnp/traits/struct.ListIter.html" title="struct capnp::traits::ListIter">ListIter</a>&lt;<a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt;, <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;&lt;T as <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'a&gt;&gt;::<a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Reader</a>&gt;&gt;</code></span></h4>
+</div><h3 class='impl'><span class='in-band'><code>impl&lt;'a, T&gt; <a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: for&lt;'b&gt; <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'b&gt;,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/list_list.rs.html#76-81' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.get' class="method"><span id='get.v' class='invisible'><code>fn <a href='#method.get' class='fnname'>get</a>(self, index: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u32.html">u32</a>) -&gt; <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;&lt;T as <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'a&gt;&gt;::<a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Reader</a>&gt;</code></span></h4>
+</div><h2 id='implementations'>Trait Implementations</h2><h3 class='impl'><span class='in-band'><code>impl&lt;'a, T&gt; <a class="trait" href="https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html" title="trait core::clone::Clone">Clone</a> for <a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: for&lt;'b&gt; <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'b&gt;,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/list_list.rs.html#54-58' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.clone' class="method"><span id='clone.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#tymethod.clone' class='fnname'>clone</a>(&amp;self) -&gt; <a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt;</code></span></h4>
+<div class='docblock'><p>Returns a copy of the value. <a href="https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#tymethod.clone">Read more</a></p>
+</div><h4 id='method.clone_from' class="method"><span id='clone_from.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#method.clone_from' class='fnname'>clone_from</a>(&amp;mut self, source: &amp;Self)</code><div class='since' title='Stable since Rust version 1.0.0'>1.0.0</div></span></h4>
+<div class='docblock'><p>Performs copy-assignment from <code>source</code>. <a href="https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#method.clone_from">Read more</a></p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl&lt;'a, T&gt; <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Copy.html" title="trait core::marker::Copy">Copy</a> for <a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: for&lt;'b&gt; <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'b&gt;,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/list_list.rs.html#60' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'></div><h3 class='impl'><span class='in-band'><code>impl&lt;'a, T&gt; <a class="trait" href="../../capnp/traits/trait.IndexMove.html" title="trait capnp::traits::IndexMove">IndexMove</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u32.html">u32</a>, <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;&lt;T as <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'a&gt;&gt;::<a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Reader</a>&gt;&gt; for <a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: for&lt;'b&gt; <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'b&gt;,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/list_list.rs.html#62-67' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.index_move' class="method"><span id='index_move.v' class='invisible'><code>fn <a href='../../capnp/traits/trait.IndexMove.html#tymethod.index_move' class='fnname'>index_move</a>(&amp;self, index: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u32.html">u32</a>) -&gt; <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;&lt;T as <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'a&gt;&gt;::<a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Reader</a>&gt;</code></span></h4>
+</div><h3 class='impl'><span class='in-band'><code>impl&lt;'a, T&gt; <a class="trait" href="../../capnp/traits/trait.FromPointerReader.html" title="trait capnp::traits::FromPointerReader">FromPointerReader</a>&lt;'a&gt; for <a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: for&lt;'b&gt; <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'b&gt;,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/list_list.rs.html#69-74' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.get_from_pointer' class="method"><span id='get_from_pointer.v' class='invisible'><code>fn <a href='../../capnp/traits/trait.FromPointerReader.html#tymethod.get_from_pointer' class='fnname'>get_from_pointer</a>(reader: &amp;<a class="struct" href="../../capnp/private/layout/struct.PointerReader.html" title="struct capnp::private::layout::PointerReader">PointerReader</a>&lt;'a&gt;) -&gt; <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;<a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt;&gt;</code></span></h4>
+</div><h3 class='impl'><span class='in-band'><code>impl&lt;'a, T&gt; <a class="trait" href="../../capnp/traits/trait.SetPointerBuilder.html" title="trait capnp::traits::SetPointerBuilder">SetPointerBuilder</a>&lt;<a class="struct" href="../../capnp/list_list/struct.Builder.html" title="struct capnp::list_list::Builder">Builder</a>&lt;'a, T&gt;&gt; for <a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: for&lt;'b&gt; <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'b&gt;,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/list_list.rs.html#130-137' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.set_pointer_builder' class="method"><span id='set_pointer_builder.v' class='invisible'><code>fn <a href='../../capnp/traits/trait.SetPointerBuilder.html#tymethod.set_pointer_builder' class='fnname'>set_pointer_builder</a>&lt;'b&gt;(<br>&nbsp;&nbsp;&nbsp;&nbsp;pointer: <a class="struct" href="../../capnp/private/layout/struct.PointerBuilder.html" title="struct capnp::private::layout::PointerBuilder">PointerBuilder</a>&lt;'b&gt;, <br>&nbsp;&nbsp;&nbsp;&nbsp;value: <a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt;<br>) -&gt; <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">()</a>&gt;</code></span></h4>
+</div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../../";
+        window.currentCrate = "capnp";
+    </script>
+    <script src="../../main.js"></script>
+    <script defer src="../../search-index.js"></script>
+</body>
+</html>

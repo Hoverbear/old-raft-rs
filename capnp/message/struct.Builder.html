@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `Builder` struct in crate `capnp`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, Builder">
+
+    <title>capnp::message::Builder - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc struct">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        <p class='location'>Struct Builder</p><div class="block items"><ul><li><a href="#methods">Methods</a></li><li><a href="#implementations">Trait Implementations</a></li></ul></div><p class='location'><a href='../index.html'>capnp</a>::<wbr><a href='index.html'>message</a></p><script>window.sidebarCurrent = {name: 'Builder', ty: 'struct', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content">
+<h1 class='fqn'><span class='in-band'>Struct <a href='../index.html'>capnp</a>::<wbr><a href='index.html'>message</a>::<wbr><a class="struct" href=''>Builder</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../../src/capnp/message.rs.html#173-177' title='goto source code'>[src]</a></span></h1>
+<pre class='rust struct'>pub struct Builder&lt;A&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;A: <a class="trait" href="../../capnp/message/trait.Allocator.html" title="trait capnp::message::Allocator">Allocator</a>,&nbsp;</span> { /* fields omitted */ }</pre><div class='docblock'><p>A container used to build a message.</p>
+
+<p>The underlying implemention uses the <code>Allocator</code> as a trait object. However, we
+need to include <code>A</code> as concrete type parameter so that the typechecker can
+correctly deduce appropriate bounds like <code>Send</code>.</p>
+</div><h2 id='methods'>Methods</h2><h3 class='impl'><span class='in-band'><code>impl&lt;A&gt; <a class="struct" href="../../capnp/message/struct.Builder.html" title="struct capnp::message::Builder">Builder</a>&lt;A&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;A: <a class="trait" href="../../capnp/message/trait.Allocator.html" title="trait capnp::message::Allocator">Allocator</a>,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/message.rs.html#181-259' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.new' class="method"><span id='new.v' class='invisible'><code>fn <a href='#method.new' class='fnname'>new</a>(allocator: A) -&gt; <a class="struct" href="../../capnp/message/struct.Builder.html" title="struct capnp::message::Builder">Builder</a>&lt;A&gt;</code></span></h4>
+<h4 id='method.init_root' class="method"><span id='init_root.v' class='invisible'><code>fn <a href='#method.init_root' class='fnname'>init_root</a>&lt;'a, T:&nbsp;<a class="trait" href="../../capnp/traits/trait.FromPointerBuilder.html" title="trait capnp::traits::FromPointerBuilder">FromPointerBuilder</a>&lt;'a&gt;&gt;(&amp;'a mut self) -&gt; T</code></span></h4>
+<div class='docblock'><p>Initializes the root as a value of the given type.</p>
+</div><h4 id='method.get_root' class="method"><span id='get_root.v' class='invisible'><code>fn <a href='#method.get_root' class='fnname'>get_root</a>&lt;'a, T:&nbsp;<a class="trait" href="../../capnp/traits/trait.FromPointerBuilder.html" title="trait capnp::traits::FromPointerBuilder">FromPointerBuilder</a>&lt;'a&gt;&gt;(&amp;'a mut self) -&gt; <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;T&gt;</code></span></h4>
+<div class='docblock'><p>Gets the root, interpreting it as the given type.</p>
+</div><h4 id='method.get_root_as_reader' class="method"><span id='get_root_as_reader.v' class='invisible'><code>fn <a href='#method.get_root_as_reader' class='fnname'>get_root_as_reader</a>&lt;'a, T:&nbsp;<a class="trait" href="../../capnp/traits/trait.FromPointerReader.html" title="trait capnp::traits::FromPointerReader">FromPointerReader</a>&lt;'a&gt;&gt;(&amp;'a self) -&gt; <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;T&gt;</code></span></h4>
+<h4 id='method.set_root' class="method"><span id='set_root.v' class='invisible'><code>fn <a href='#method.set_root' class='fnname'>set_root</a>&lt;To, From:&nbsp;<a class="trait" href="../../capnp/traits/trait.SetPointerBuilder.html" title="trait capnp::traits::SetPointerBuilder">SetPointerBuilder</a>&lt;To&gt;&gt;(<br>&nbsp;&nbsp;&nbsp;&nbsp;&amp;mut self, <br>&nbsp;&nbsp;&nbsp;&nbsp;value: From<br>) -&gt; <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">()</a>&gt;</code></span></h4>
+<div class='docblock'><p>Sets the root to a deep copy of the given value.</p>
+</div><h4 id='method.get_segments_for_output' class="method"><span id='get_segments_for_output.v' class='invisible'><code>fn <a href='#method.get_segments_for_output' class='fnname'>get_segments_for_output</a>&lt;'a&gt;(&amp;'a self) -&gt; <a class="enum" href="../../capnp/enum.OutputSegments.html" title="enum capnp::OutputSegments">OutputSegments</a>&lt;'a&gt;</code></span></h4>
+</div><h3 class='impl'><span class='in-band'><code>impl <a class="struct" href="../../capnp/message/struct.Builder.html" title="struct capnp::message::Builder">Builder</a>&lt;<a class="struct" href="../../capnp/message/struct.HeapAllocator.html" title="struct capnp::message::HeapAllocator">HeapAllocator</a>&gt;</code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/message.rs.html#315-319' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.new_default' class="method"><span id='new_default.v' class='invisible'><code>fn <a href='#method.new_default' class='fnname'>new_default</a>() -&gt; <a class="struct" href="../../capnp/message/struct.Builder.html" title="struct capnp::message::Builder">Builder</a>&lt;<a class="struct" href="../../capnp/message/struct.HeapAllocator.html" title="struct capnp::message::HeapAllocator">HeapAllocator</a>&gt;</code></span></h4>
+</div><h2 id='implementations'>Trait Implementations</h2><h3 class='impl'><span class='in-band'><code>impl&lt;A&gt; <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> for <a class="struct" href="../../capnp/message/struct.Builder.html" title="struct capnp::message::Builder">Builder</a>&lt;A&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;A: <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + <a class="trait" href="../../capnp/message/trait.Allocator.html" title="trait capnp::message::Allocator">Allocator</a>,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/message.rs.html#179' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'></div><h3 class='impl'><span class='in-band'><code>impl&lt;A&gt; <a class="trait" href="https://doc.rust-lang.org/nightly/core/ops/trait.Drop.html" title="trait core::ops::Drop">Drop</a> for <a class="struct" href="../../capnp/message/struct.Builder.html" title="struct capnp::message::Builder">Builder</a>&lt;A&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;A: <a class="trait" href="../../capnp/message/trait.Allocator.html" title="trait capnp::message::Allocator">Allocator</a>,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/capnp/message.rs.html#261-265' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.drop' class="method"><span id='drop.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/ops/trait.Drop.html#tymethod.drop' class='fnname'>drop</a>(&amp;mut self)</code></span></h4>
+<div class='docblock'><p>A method called when the value goes out of scope. <a href="https://doc.rust-lang.org/nightly/core/ops/trait.Drop.html#tymethod.drop">Read more</a></p>
+</div></div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../../";
+        window.currentCrate = "capnp";
+    </script>
+    <script src="../../main.js"></script>
+    <script defer src="../../search-index.js"></script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `FromPointerReader` trait in crate `capnp`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, FromPointerReader">
+
+    <title>capnp::traits::FromPointerReader - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc trait">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        <p class='location'>Trait FromPointerReader</p><div class="block items"><ul><li><a href="#required-methods">Required Methods</a></li><li><a href="#implementors">Implementors</a></li></ul></div><p class='location'><a href='../index.html'>capnp</a>::<wbr><a href='index.html'>traits</a></p><script>window.sidebarCurrent = {name: 'FromPointerReader', ty: 'trait', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content">
+<h1 class='fqn'><span class='in-band'>Trait <a href='../index.html'>capnp</a>::<wbr><a href='index.html'>traits</a>::<wbr><a class="trait" href=''>FromPointerReader</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../../src/capnp/traits.rs.html#37-39' title='goto source code'>[src]</a></span></h1>
+<pre class='rust trait'>pub trait FromPointerReader&lt;'a&gt;: <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Sized.html" title="trait core::marker::Sized">Sized</a> {
+    fn <a href='#tymethod.get_from_pointer' class='fnname'>get_from_pointer</a>(reader: &amp;<a class="struct" href="../../capnp/private/layout/struct.PointerReader.html" title="struct capnp::private::layout::PointerReader">PointerReader</a>&lt;'a&gt;) -&gt; <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;Self&gt;;
+}</pre>
+            <h2 id='required-methods'>Required Methods</h2>
+            <div class='methods'>
+        <h3 id='tymethod.get_from_pointer' class='method'><span id='get_from_pointer.v' class='invisible'><code>fn <a href='#tymethod.get_from_pointer' class='fnname'>get_from_pointer</a>(reader: &amp;<a class="struct" href="../../capnp/private/layout/struct.PointerReader.html" title="struct capnp::private::layout::PointerReader">PointerReader</a>&lt;'a&gt;) -&gt; <a class="type" href="../../capnp/type.Result.html" title="type capnp::Result">Result</a>&lt;Self&gt;</code></span></h3></div>
+        <h2 id='implementors'>Implementors</h2>
+        <ul class='item-list' id='implementors-list'>
+    <li><code>impl&lt;'a&gt; FromPointerReader&lt;'a&gt; for capnp::any_pointer::<a class="struct" href="../../capnp/any_pointer/struct.Reader.html" title="struct capnp::any_pointer::Reader">Reader</a>&lt;'a&gt;</code></li>
+<li><code>impl&lt;'a&gt; FromPointerReader&lt;'a&gt; for capnp::data::<a class="type" href="../../capnp/data/type.Reader.html" title="type capnp::data::Reader">Reader</a>&lt;'a&gt;</code></li>
+<li><code>impl&lt;'a&gt; FromPointerReader&lt;'a&gt; for capnp::data_list::<a class="struct" href="../../capnp/data_list/struct.Reader.html" title="struct capnp::data_list::Reader">Reader</a>&lt;'a&gt;</code></li>
+<li><code>impl&lt;'a, T:&nbsp;<a class="trait" href="../../capnp/traits/trait.FromU16.html" title="trait capnp::traits::FromU16">FromU16</a>&gt; FromPointerReader&lt;'a&gt; for capnp::enum_list::<a class="struct" href="../../capnp/enum_list/struct.Reader.html" title="struct capnp::enum_list::Reader">Reader</a>&lt;'a, T&gt;</code></li>
+<li><code>impl&lt;'a, T&gt; FromPointerReader&lt;'a&gt; for capnp::list_list::<a class="struct" href="../../capnp/list_list/struct.Reader.html" title="struct capnp::list_list::Reader">Reader</a>&lt;'a, T&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: for&lt;'b&gt; <a class="trait" href="../../capnp/traits/trait.Owned.html" title="trait capnp::traits::Owned">Owned</a>&lt;'b&gt;,&nbsp;</span></code></li>
+<li><code>impl&lt;'a, T:&nbsp;<a class="trait" href="../../capnp/private/layout/trait.PrimitiveElement.html" title="trait capnp::private::layout::PrimitiveElement">PrimitiveElement</a>&gt; FromPointerReader&lt;'a&gt; for capnp::primitive_list::<a class="struct" href="../../capnp/primitive_list/struct.Reader.html" title="struct capnp::primitive_list::Reader">Reader</a>&lt;'a, T&gt;</code></li>
+<li><code>impl&lt;'a, T&gt; FromPointerReader&lt;'a&gt; for capnp::struct_list::<a class="struct" href="../../capnp/struct_list/struct.Reader.html" title="struct capnp::struct_list::Reader">Reader</a>&lt;'a, T&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: for&lt;'b&gt; <a class="trait" href="../../capnp/traits/trait.OwnedStruct.html" title="trait capnp::traits::OwnedStruct">OwnedStruct</a>&lt;'b&gt;,&nbsp;</span></code></li>
+<li><code>impl&lt;'a&gt; FromPointerReader&lt;'a&gt; for capnp::text::<a class="type" href="../../capnp/text/type.Reader.html" title="type capnp::text::Reader">Reader</a>&lt;'a&gt;</code></li>
+<li><code>impl&lt;'a&gt; FromPointerReader&lt;'a&gt; for capnp::text_list::<a class="struct" href="../../capnp/text_list/struct.Reader.html" title="struct capnp::text_list::Reader">Reader</a>&lt;'a&gt;</code></li>
+</ul><script type="text/javascript" async
+                         src="../../implementors/capnp/traits/trait.FromPointerReader.js">
+                 </script></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../../";
+        window.currentCrate = "capnp";
+    </script>
+    <script src="../../main.js"></script>
+    <script defer src="../../search-index.js"></script>
+</body>
+</html>

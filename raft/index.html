@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `raft` crate.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, raft">
+
+    <title>raft - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc mod">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        <a href='../raft/index.html'><img src='https://raw.githubusercontent.com/Hoverbear/raft/master/raft.png' alt='logo' width='100'></a>
+        <p class='location'>Crate raft</p><div class="block items"><ul><li><a href="#reexports">Reexports</a></li><li><a href="#modules">Modules</a></li><li><a href="#structs">Structs</a></li><li><a href="#enums">Enums</a></li><li><a href="#types">Type Definitions</a></li></ul></div><p class='location'></p><script>window.sidebarCurrent = {name: 'raft', ty: 'mod', relpath: '../'};</script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content">
+<h1 class='fqn'><span class='in-band'>Crate <a class="mod" href=''>raft</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../src/raft/lib.rs.html#1-323' title='goto source code'>[src]</a></span></h1>
+<div class='docblock'><p>This is the Raft Distributed Consensus Protocol implemented for Rust.
+<a href="http://raftconsensus.github.io/">Raft</a> is described as:</p>
+
+<blockquote>
+<p>Raft is a consensus algorithm that is designed to be easy to understand. It&#39;s equivalent to
+Paxos in fault-tolerance and performance. The difference is that it&#39;s decomposed into
+relatively independent subproblems, and it cleanly addresses all major pieces needed for
+practical systems.</p>
+</blockquote>
+
+<p>This implementation utilizes <a href="https://kentonv.github.io/capnproto/">Cap&#39;n Proto</a> for its RPC,
+<a href="https://github.com/carllerche/mio"><code>mio</code></a> for it&#39;s async event loop.</p>
+
+<p>If this package fails to build for you it is possibly because you do not have the
+<a href="https://capnproto.org/capnp-tool.html"><code>capnp</code></a> utility installed. You should be able to find
+appropriate packages for most popular distributions.</p>
+
+<h1 id='consuming-this-library' class='section-header'><a href='#consuming-this-library'>Consuming this library</a></h1>
+<p>Consuming this library works in a few parts:</p>
+
+<ol>
+<li>Implement or consume a Persistent Log and a State Machine such that they will hook into
+your application desirably.</li>
+<li>Create a <code>Server</code> with those implementations. It will independently fire up and join the
+cluster.</li>
+<li>Interact with the cluster by issuing <code>.propose()</code> and <code>.query()</code> calls via the <code>Client</code></li>
+<li>React to calls to <code>.propose()</code> and <code>.query()</code> from the implemented <code>StateMachine</code></li>
+</ol>
+
+<h2 id='persistent-log' class='section-header'><a href='#persistent-log'>Persistent Log</a></h2>
+<p>A <code>Log</code> represents the <strong>replicated, persistent log</strong> of your application. It has a
+strong ordering such that <code>A → B → C</code> and should <strong>only</strong> act to store information. Entries
+placed into the log should not be acted on in any way by the consuming application as they
+have not been committed to the cluster.</p>
+
+<p>Some ideas for a Persistent Log implementation:</p>
+
+<ul>
+<li>A PostgreSQL / SQLite instance.</li>
+<li>A plain old file.</li>
+<li>A vector in memory <em>(Note: Log compaction is still pending, so be aware of running out!)</em></li>
+</ul>
+
+<blockquote>
+<p>It is our belief that in many cases the implementation of <code>Log</code> will be generic to
+application purposes. You are encouraged to submit your own implementations to us!</p>
+</blockquote>
+
+<h2 id='state-machine' class='section-header'><a href='#state-machine'>State Machine</a></h2>
+<p>The <code>StateMachine</code> represents the <strong>stateful representation</strong> of your application. Events
+are applied to the <code>StateMachine</code> in the correct ordering at the time of commit. This is where
+your application <strong>should</strong> act on information.</p>
+
+<p>In the <code>StateMachine</code> there are both mutable (<code>.apply()</code>) and immutable (<code>.query()</code>) calls.
+There is a considerable performance difference, as <code>.query()</code> calls do not pass through the
+durable <code>Log</code> while <code>.apply()</code> events do.</p>
+
+<p>Some ideas for a State Machine implementation:</p>
+
+<ul>
+<li>A Hashmap or key-value store (Example provided)</li>
+<li>A single register (Example provided)</li>
+<li>Basically anything from <code>std::collections</code></li>
+</ul>
+
+<h2 id='client-requests' class='section-header'><a href='#client-requests'>Client Requests</a></h2>
+<p>Client requests are the <strong>only</strong> way to interact with the Raft cluster. Calls to <code>.propose()</code>
+and <code>.query()</code> are automatically routed to the relevant <code>Leader</code> node and behave as blocking
+calls.</p>
+
+<p>This means <code>.propose()</code> won&#39;t return until the entry is durably replicated into the log of at
+least the majority of the cluster and has been commited. <code>.query()</code> will perform better if
+you wish to only read data and not have it pass through the persisted log.</p>
+</div><h2 id='reexports' class='section-header'><a href="#reexports">Reexports</a></h2>
+<table><tr><td><code>pub use state_machine::<a class="trait" href="../raft/state_machine/trait.StateMachine.html" title="trait raft::state_machine::StateMachine">StateMachine</a>;</code></td></tr><tr><td><code>pub use persistent_log::<a class="trait" href="../raft/persistent_log/trait.Log.html" title="trait raft::persistent_log::Log">Log</a>;</code></td></tr></table><h2 id='modules' class='section-header'><a href="#modules">Modules</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="mod" href="messages_capnp/index.html"
+                                  title='mod raft::messages_capnp'>messages_capnp</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="mod" href="persistent_log/index.html"
+                                  title='mod raft::persistent_log'>persistent_log</a></td>
+                           <td class='docblock-short'>
+                                <p>The persistent storage of Raft state.</p>
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="mod" href="state_machine/index.html"
+                                  title='mod raft::state_machine'>state_machine</a></td>
+                           <td class='docblock-short'>
+                                <p>A <code>StateMachine</code> is a single instance of a distributed application. It is the <code>raft</code> libraries
+responsibility to take commands from the <code>Client</code> and apply them to each <code>StateMachine</code>
+instance in a globally consistent order.</p>
+                           </td>
+                       </tr></table><h2 id='structs' class='section-header'><a href="#structs">Structs</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="struct" href="struct.Client.html"
+                                  title='struct raft::Client'>Client</a></td>
+                           <td class='docblock-short'>
+                                <p>The representation of a Client connection to the cluster.</p>
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="struct" href="struct.ClientId.html"
+                                  title='struct raft::ClientId'>ClientId</a></td>
+                           <td class='docblock-short'>
+                                <p>The ID of a Raft client.</p>
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="struct" href="struct.LogIndex.html"
+                                  title='struct raft::LogIndex'>LogIndex</a></td>
+                           <td class='docblock-short'>
+                                <p>The index of a log entry.</p>
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="struct" href="struct.Server.html"
+                                  title='struct raft::Server'>Server</a></td>
+                           <td class='docblock-short'>
+                                <p>The <code>Server</code> is responsible for receiving events from peer <code>Server</code> instance or clients,
+as well as managing election and heartbeat timeouts. When an event is received, it is applied
+to the local <code>Consensus</code>. The <code>Consensus</code> may optionally return a set of events to be
+dispatched to either remote peers or clients.</p>
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="struct" href="struct.ServerId.html"
+                                  title='struct raft::ServerId'>ServerId</a></td>
+                           <td class='docblock-short'>
+                                <p>The ID of a Raft server. Must be unique among the participants in a
+consensus group.</p>
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="struct" href="struct.Term.html"
+                                  title='struct raft::Term'>Term</a></td>
+                           <td class='docblock-short'>
+                                <p>The term of a log entry.</p>
+                           </td>
+                       </tr></table><h2 id='enums' class='section-header'><a href="#enums">Enums</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="enum" href="enum.Error.html"
+                                  title='enum raft::Error'>Error</a></td>
+                           <td class='docblock-short'>
+                                <p>The generic <code>raft::Error</code> is composed of one of the errors that can originate from the
+various libraries consumed by the library.
+With the exception of the <code>Raft</code> variant these are generated from <code>try!()</code> macros invoking
+on <code>io::Error</code> or <code>capnp::Error</code> by using
+<a href="https://doc.rust-lang.org/std/error/#the-fromerror-trait"><code>FromError</code></a>.</p>
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="enum" href="enum.RaftError.html"
+                                  title='enum raft::RaftError'>RaftError</a></td>
+                           <td class='docblock-short'>
+                                <p>A Raft Error represents a Raft specific error that consuming code is expected to handle
+gracefully.</p>
+                           </td>
+                       </tr></table><h2 id='types' class='section-header'><a href="#types">Type Definitions</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="type" href="type.Result.html"
+                                  title='type raft::Result'>Result</a></td>
+                           <td class='docblock-short'>
+                                <p>A simple convienence type.</p>
+                           </td>
+                       </tr></table></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../";
+        window.currentCrate = "raft";
+    </script>
+    <script src="../main.js"></script>
+    <script defer src="../search-index.js"></script>
+</body>
+</html>

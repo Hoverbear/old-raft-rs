@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `MemLog` struct in crate `raft`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, MemLog">
+
+    <title>raft::persistent_log::MemLog - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc struct">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        <a href='../../raft/index.html'><img src='https://raw.githubusercontent.com/Hoverbear/raft/master/raft.png' alt='logo' width='100'></a>
+        <p class='location'>Struct MemLog</p><div class="block items"><ul><li><a href="#methods">Methods</a></li><li><a href="#implementations">Trait Implementations</a></li></ul></div><p class='location'><a href='../index.html'>raft</a>::<wbr><a href='index.html'>persistent_log</a></p><script>window.sidebarCurrent = {name: 'MemLog', ty: 'struct', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content">
+<h1 class='fqn'><span class='in-band'>Struct <a href='../index.html'>raft</a>::<wbr><a href='index.html'>persistent_log</a>::<wbr><a class="struct" href=''>MemLog</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../../src/raft/persistent_log/mem.rs.html#16-20' title='goto source code'>[src]</a></span></h1>
+<pre class='rust struct'>pub struct MemLog { /* fields omitted */ }</pre><div class='docblock'><p>This is a <code>Log</code> implementation that stores entries in a simple in-memory vector. Other data
+is stored in a struct. It is chiefly intended for testing.</p>
+
+<h1 id='panic' class='section-header'><a href='#panic'>Panic</a></h1>
+<p>No bounds checking is performed and attempted access to non-existing log
+indexes will panic.</p>
+</div><h2 id='methods'>Methods</h2><h3 class='impl'><span class='in-band'><code>impl <a class="struct" href="../../raft/persistent_log/struct.MemLog.html" title="struct raft::persistent_log::MemLog">MemLog</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/raft/persistent_log/mem.rs.html#43-51' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.new' class="method"><span id='new.v' class='invisible'><code>fn <a href='#method.new' class='fnname'>new</a>() -&gt; <a class="struct" href="../../raft/persistent_log/struct.MemLog.html" title="struct raft::persistent_log::MemLog">MemLog</a></code></span></h4>
+</div><h2 id='implementations'>Trait Implementations</h2><h3 class='impl'><span class='in-band'><code>impl <a class="trait" href="https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html" title="trait core::clone::Clone">Clone</a> for <a class="struct" href="../../raft/persistent_log/struct.MemLog.html" title="struct raft::persistent_log::MemLog">MemLog</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/raft/persistent_log/mem.rs.html#15' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.clone' class="method"><span id='clone.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#tymethod.clone' class='fnname'>clone</a>(&amp;self) -&gt; <a class="struct" href="../../raft/persistent_log/struct.MemLog.html" title="struct raft::persistent_log::MemLog">MemLog</a></code></span></h4>
+<div class='docblock'><p>Returns a copy of the value. <a href="https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#tymethod.clone">Read more</a></p>
+</div><h4 id='method.clone_from' class="method"><span id='clone_from.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#method.clone_from' class='fnname'>clone_from</a>(&amp;mut self, source: &amp;Self)</code><div class='since' title='Stable since Rust version 1.0.0'>1.0.0</div></span></h4>
+<div class='docblock'><p>Performs copy-assignment from <code>source</code>. <a href="https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#method.clone_from">Read more</a></p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl <a class="trait" href="https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html" title="trait core::fmt::Debug">Debug</a> for <a class="struct" href="../../raft/persistent_log/struct.MemLog.html" title="struct raft::persistent_log::MemLog">MemLog</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/raft/persistent_log/mem.rs.html#15' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.fmt' class="method"><span id='fmt.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html#tymethod.fmt' class='fnname'>fmt</a>(&amp;self, __arg_0: &amp;mut <a class="struct" href="https://doc.rust-lang.org/nightly/core/fmt/struct.Formatter.html" title="struct core::fmt::Formatter">Formatter</a>) -&gt; <a class="type" href="https://doc.rust-lang.org/nightly/core/fmt/type.Result.html" title="type core::fmt::Result">Result</a></code></span></h4>
+<div class='docblock'><p>Formats the value using the given formatter.</p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl <a class="trait" href="../../raft/persistent_log/trait.Log.html" title="trait raft::persistent_log::Log">Log</a> for <a class="struct" href="../../raft/persistent_log/struct.MemLog.html" title="struct raft::persistent_log::MemLog">MemLog</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/raft/persistent_log/mem.rs.html#53-105' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='associatedtype.Error' class="type"><span id='Error.t' class='invisible'><code>type <a href='../../raft/persistent_log/trait.Log.html#associatedtype.Error' class="type">Error</a> = <a class="enum" href="../../raft/persistent_log/enum.Error.html" title="enum raft::persistent_log::Error">Error</a></code></span></h4>
+<h4 id='method.current_term' class="method"><span id='current_term.v' class='invisible'><code>fn <a href='../../raft/persistent_log/trait.Log.html#tymethod.current_term' class='fnname'>current_term</a>(&amp;self) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="../../raft/struct.Term.html" title="struct raft::Term">Term</a>, <a class="enum" href="../../raft/persistent_log/enum.Error.html" title="enum raft::persistent_log::Error">Error</a>&gt;</code></span></h4>
+<div class='docblock'><p>Returns the latest known term.</p>
+</div><h4 id='method.set_current_term' class="method"><span id='set_current_term.v' class='invisible'><code>fn <a href='../../raft/persistent_log/trait.Log.html#tymethod.set_current_term' class='fnname'>set_current_term</a>(&amp;mut self, term: <a class="struct" href="../../raft/struct.Term.html" title="struct raft::Term">Term</a>) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">()</a>, <a class="enum" href="../../raft/persistent_log/enum.Error.html" title="enum raft::persistent_log::Error">Error</a>&gt;</code></span></h4>
+<div class='docblock'><p>Sets the current term to the provided value. The provided term must be greater than the current term. The <code>voted_for</code> value will be reset`. <a href="../../raft/persistent_log/trait.Log.html#tymethod.set_current_term">Read more</a></p>
+</div><h4 id='method.inc_current_term' class="method"><span id='inc_current_term.v' class='invisible'><code>fn <a href='../../raft/persistent_log/trait.Log.html#tymethod.inc_current_term' class='fnname'>inc_current_term</a>(&amp;mut self) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="../../raft/struct.Term.html" title="struct raft::Term">Term</a>, <a class="enum" href="../../raft/persistent_log/enum.Error.html" title="enum raft::persistent_log::Error">Error</a>&gt;</code></span></h4>
+<div class='docblock'><p>Increment the current term. The <code>voted_for</code> value will be reset.</p>
+</div><h4 id='method.voted_for' class="method"><span id='voted_for.v' class='invisible'><code>fn <a href='../../raft/persistent_log/trait.Log.html#tymethod.voted_for' class='fnname'>voted_for</a>(&amp;self) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../../raft/struct.ServerId.html" title="struct raft::ServerId">ServerId</a>&gt;, <a class="enum" href="../../raft/persistent_log/enum.Error.html" title="enum raft::persistent_log::Error">Error</a>&gt;</code></span></h4>
+<div class='docblock'><p>Returns the candidate id of the candidate voted for in the current term (or none).</p>
+</div><h4 id='method.set_voted_for' class="method"><span id='set_voted_for.v' class='invisible'><code>fn <a href='../../raft/persistent_log/trait.Log.html#tymethod.set_voted_for' class='fnname'>set_voted_for</a>(&amp;mut self, address: <a class="struct" href="../../raft/struct.ServerId.html" title="struct raft::ServerId">ServerId</a>) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">()</a>, <a class="enum" href="../../raft/persistent_log/enum.Error.html" title="enum raft::persistent_log::Error">Error</a>&gt;</code></span></h4>
+<div class='docblock'><p>Sets the candidate id voted for in the current term.</p>
+</div><h4 id='method.latest_log_index' class="method"><span id='latest_log_index.v' class='invisible'><code>fn <a href='../../raft/persistent_log/trait.Log.html#tymethod.latest_log_index' class='fnname'>latest_log_index</a>(&amp;self) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="../../raft/struct.LogIndex.html" title="struct raft::LogIndex">LogIndex</a>, <a class="enum" href="../../raft/persistent_log/enum.Error.html" title="enum raft::persistent_log::Error">Error</a>&gt;</code></span></h4>
+<div class='docblock'><p>Returns the index of the latest persisted log entry (0 if the log is empty).</p>
+</div><h4 id='method.latest_log_term' class="method"><span id='latest_log_term.v' class='invisible'><code>fn <a href='../../raft/persistent_log/trait.Log.html#tymethod.latest_log_term' class='fnname'>latest_log_term</a>(&amp;self) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="../../raft/struct.Term.html" title="struct raft::Term">Term</a>, <a class="enum" href="../../raft/persistent_log/enum.Error.html" title="enum raft::persistent_log::Error">Error</a>&gt;</code></span></h4>
+<div class='docblock'><p>Returns the term of the latest persisted log entry (0 if the log is empty).</p>
+</div><h4 id='method.entry' class="method"><span id='entry.v' class='invisible'><code>fn <a href='../../raft/persistent_log/trait.Log.html#tymethod.entry' class='fnname'>entry</a>(&amp;self, index: <a class="struct" href="../../raft/struct.LogIndex.html" title="struct raft::LogIndex">LogIndex</a>) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">(</a><a class="struct" href="../../raft/struct.Term.html" title="struct raft::Term">Term</a>, <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.slice.html">&amp;[</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u8.html">u8</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.slice.html">]</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">)</a>, <a class="enum" href="../../raft/persistent_log/enum.Error.html" title="enum raft::persistent_log::Error">Error</a>&gt;</code></span></h4>
+<div class='docblock'><p>Returns the entry at the provided log index.</p>
+</div><h4 id='method.append_entries' class="method"><span id='append_entries.v' class='invisible'><code>fn <a href='../../raft/persistent_log/trait.Log.html#tymethod.append_entries' class='fnname'>append_entries</a>(<br>&nbsp;&nbsp;&nbsp;&nbsp;&amp;mut self, <br>&nbsp;&nbsp;&nbsp;&nbsp;from: <a class="struct" href="../../raft/struct.LogIndex.html" title="struct raft::LogIndex">LogIndex</a>, <br>&nbsp;&nbsp;&nbsp;&nbsp;entries: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.slice.html">&amp;[</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">(</a><a class="struct" href="../../raft/struct.Term.html" title="struct raft::Term">Term</a>, <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.slice.html">&amp;[</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u8.html">u8</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.slice.html">]</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">)</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.slice.html">]</a><br>) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">()</a>, <a class="enum" href="../../raft/persistent_log/enum.Error.html" title="enum raft::persistent_log::Error">Error</a>&gt;</code></span></h4>
+<div class='docblock'><p>Appends the provided entries to the log beginning at the given index.</p>
+</div><h4 id='method.entries' class="method"><span id='entries.v' class='invisible'><code>fn <a href='../../raft/persistent_log/trait.Log.html#method.entries' class='fnname'>entries</a>(<br>&nbsp;&nbsp;&nbsp;&nbsp;&amp;self, <br>&nbsp;&nbsp;&nbsp;&nbsp;lo: <a class="struct" href="../../raft/struct.LogIndex.html" title="struct raft::LogIndex">LogIndex</a>, <br>&nbsp;&nbsp;&nbsp;&nbsp;hi: <a class="struct" href="../../raft/struct.LogIndex.html" title="struct raft::LogIndex">LogIndex</a><br>) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/collections/vec/struct.Vec.html" title="struct collections::vec::Vec">Vec</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">(</a><a class="struct" href="../../raft/struct.Term.html" title="struct raft::Term">Term</a>, <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.slice.html">&amp;[</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u8.html">u8</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.slice.html">]</a><a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.tuple.html">)</a>&gt;, Self::<a class="trait" href="../../raft/persistent_log/trait.Log.html" title="trait raft::persistent_log::Log">Error</a>&gt;</code></span></h4>
+<div class='docblock'><p>Returns the given range of entries (excluding the right endpoint).</p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl <a class="trait" href="https://doc.rust-lang.org/nightly/core/default/trait.Default.html" title="trait core::default::Default">Default</a> for <a class="struct" href="../../raft/persistent_log/struct.MemLog.html" title="struct raft::persistent_log::MemLog">MemLog</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/raft/persistent_log/mem.rs.html#188-192' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.default' class="method"><span id='default.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/default/trait.Default.html#tymethod.default' class='fnname'>default</a>() -&gt; Self</code></span></h4>
+<div class='docblock'><p>Returns the &quot;default value&quot; for a type. <a href="https://doc.rust-lang.org/nightly/core/default/trait.Default.html#tymethod.default">Read more</a></p>
+</div></div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../../";
+        window.currentCrate = "raft";
+    </script>
+    <script src="../../main.js"></script>
+    <script defer src="../../search-index.js"></script>
+</body>
+</html>

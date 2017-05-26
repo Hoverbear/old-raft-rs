@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `scoped_log` crate.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, scoped_log">
+
+    <title>scoped_log - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc mod">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        <p class='location'>Crate scoped_log</p><div class="block items"><ul><li><a href="#macros">Macros</a></li><li><a href="#structs">Structs</a></li><li><a href="#statics">Statics</a></li></ul></div><p class='location'></p><script>window.sidebarCurrent = {name: 'scoped_log', ty: 'mod', relpath: '../'};</script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content">
+<h1 class='fqn'><span class='in-band'>Crate <a class="mod" href=''>scoped_log</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../src/scoped_log/lib.rs.html#1-173' title='goto source code'>[src]</a></span></h1>
+<div class='docblock'><p>Simple wrapper for the log crate that enables adding arbitrary information at runtime for
+future calls to the debugging macros.</p>
+
+<p>That magic behind this is a thread_local RefCell<Vec<String>&gt; which when populated will
+include the included identifiers, seperated with &quot;: &quot;.</p>
+
+<pre class="rust rust-example-rendered">
+<span class="attribute">#[<span class="ident">macro_use</span>]</span> <span class="kw">extern</span> <span class="kw">crate</span> <span class="ident">log</span>;
+<span class="attribute">#[<span class="ident">macro_use</span>]</span> <span class="kw">extern</span> <span class="kw">crate</span> <span class="ident">scoped_log</span>;
+<span class="kw">extern</span> <span class="kw">crate</span> <span class="ident">env_logger</span>;
+
+<span class="kw">fn</span> <span class="ident">main</span> () {
+    <span class="kw">let</span> _ <span class="op">=</span> <span class="ident">env_logger</span>::<span class="ident">init</span>();
+ 
+    <span class="macro">scoped_info</span><span class="macro">!</span>(<span class="string">&quot;1&quot;</span>);
+    {
+        <span class="macro">push_log_scope</span><span class="macro">!</span>(<span class="string">&quot;outer-scope&quot;</span>);
+        <span class="macro">scoped_info</span><span class="macro">!</span>(<span class="string">&quot;2: {}&quot;</span>, <span class="string">&quot;some args&quot;</span>);
+        <span class="kw">if</span> <span class="bool-val">false</span> { <span class="comment">// Enable to test assert</span>
+            <span class="macro">scoped_assert</span><span class="macro">!</span>(<span class="bool-val">false</span>);
+            <span class="macro">scoped_assert</span><span class="macro">!</span>(<span class="bool-val">false</span>, <span class="string">&quot;I failed!&quot;</span>);
+        }
+        <span class="macro">push_log_scope</span><span class="macro">!</span>(<span class="string">&quot;inner-scope&quot;</span>);
+        <span class="macro">scoped_info</span><span class="macro">!</span>(<span class="ident">target</span>: <span class="string">&quot;some-target&quot;</span>, <span class="string">&quot;2: {}&quot;</span>, <span class="string">&quot;some args&quot;</span>);
+        <span class="ident">Foo</span>.<span class="ident">foo</span>();
+    }
+    <span class="macro">scoped_info</span><span class="macro">!</span>(<span class="string">&quot;4&quot;</span>);
+}
+
+<span class="attribute">#[<span class="ident">derive</span>(<span class="ident">Debug</span>)]</span>
+<span class="kw">struct</span> <span class="ident">Foo</span>;
+
+<span class="kw">impl</span> <span class="ident">Foo</span> {
+    <span class="kw">fn</span> <span class="ident">foo</span>(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+        <span class="macro">push_log_scope</span><span class="macro">!</span>(<span class="string">&quot;{:?}-scope&quot;</span>, <span class="self">self</span>);
+        <span class="macro">scoped_info</span><span class="macro">!</span>(<span class="string">&quot;3&quot;</span>);
+    }
+}</pre>
+</div><h2 id='macros' class='section-header'><a href="#macros">Macros</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="macro" href="macro.push_log_scope.html"
+                                  title='macro scoped_log::push_log_scope'>push_log_scope</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="macro" href="macro.scoped_assert.html"
+                                  title='macro scoped_log::scoped_assert'>scoped_assert</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="macro" href="macro.scoped_debug.html"
+                                  title='macro scoped_log::scoped_debug'>scoped_debug</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="macro" href="macro.scoped_error.html"
+                                  title='macro scoped_log::scoped_error'>scoped_error</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="macro" href="macro.scoped_info.html"
+                                  title='macro scoped_log::scoped_info'>scoped_info</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="macro" href="macro.scoped_log.html"
+                                  title='macro scoped_log::scoped_log'>scoped_log</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="macro" href="macro.scoped_trace.html"
+                                  title='macro scoped_log::scoped_trace'>scoped_trace</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="macro" href="macro.scoped_warn.html"
+                                  title='macro scoped_log::scoped_warn'>scoped_warn</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr></table><h2 id='structs' class='section-header'><a href="#structs">Structs</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="struct" href="struct.Scope.html"
+                                  title='struct scoped_log::Scope'>Scope</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr></table><h2 id='statics' class='section-header'><a href="#statics">Statics</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="static" href="static.__LOG_SCOPES.html"
+                                  title='static scoped_log::__LOG_SCOPES'>__LOG_SCOPES</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr></table></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../";
+        window.currentCrate = "scoped_log";
+    </script>
+    <script src="../main.js"></script>
+    <script defer src="../search-index.js"></script>
+</body>
+</html>
