@@ -8,6 +8,7 @@ extern crate serde;
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::Path;
 use std::process;
 
 use docopt::Docopt;
@@ -148,7 +149,6 @@ fn server(args: &Args) {
     // Creating a raft server requires several things:
 
     // A log implementation, which manages the persistent, replicated log.
-    let log = persistent_log::MemLog::new();
 
     // A state machine implementation. The state machine type must be the same
     // on all nodes.
@@ -156,6 +156,8 @@ fn server(args: &Args) {
 
     // A unique server id.
     let id = ServerId::from(args.arg_id.unwrap());
+
+    let log = persistent_log::FsLog::new(Path::new(&format!("/tmp/register-raftlog.{}", id.as_u64()))).unwrap();
 
     // A list of peers.
     let mut peers = args.arg_node_id
@@ -169,9 +171,9 @@ fn server(args: &Args) {
 
     // Run the raft server.
     Server::new(id, addr, log, state_machine)
-        .with_election_min_millis(1500)
-        .with_election_max_millis(3000)
-        .with_heartbeat_millis(1000)
+        .with_election_min_millis(150)
+        .with_election_max_millis(300)
+        .with_heartbeat_millis(60)
         .with_peers(peers)
         .run()
         .unwrap();
