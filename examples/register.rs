@@ -4,7 +4,8 @@ extern crate env_logger;
 extern crate raft;
 extern crate rustc_serialize;
 extern crate serde;
-#[macro_use] extern crate serde_derive;
+#[macro_use]
+extern crate serde_derive;
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -13,13 +14,7 @@ use std::process;
 
 use docopt::Docopt;
 
-use raft::{
-    state_machine,
-    persistent_log,
-    ServerId,
-    Server,
-    Client,
-};
+use raft::{Client, Server, ServerId, persistent_log, state_machine};
 
 /// Proposal operations supported by the distributed register. Proposals may
 /// mutate the register, and will be durably replicated to a quorum of peers
@@ -46,40 +41,54 @@ enum Response {
     Err(String),
 }
 
-static USAGE: &'static str = "
+static USAGE: &'static str =
+    "
 A replicated mutable value. Operations on the register have serializable
-consistency, but no durability (once all register servers are terminated the
+consistency, but \
+     no durability (once all register servers are terminated the
 value is lost).
 
-Each register server holds a replica of the register, and coordinates with its
-peers to update the register's value according to client commands. The register
-is available for reading and writing only if a majority of register servers are
+Each register \
+     server holds a replica of the register, and coordinates with its
+peers to update the \
+     register's value according to client commands. The register
+is available for reading and \
+     writing only if a majority of register servers are
 available.
 
 Commands:
 
-  get     Returns the current value of the register.
+  get     Returns \
+     the current value of the register.
 
-  put     Sets the current value of the register, and returns the previous
+  put     Sets the current value of the register, and \
+     returns the previous
           value.
 
-  cas     (compare and set) Conditionally sets the value of the register if the
-          current value matches an expected value, and returns the previous
+  cas     (compare and set) Conditionally sets the \
+     value of the register if the
+          current value matches an expected value, and returns \
+     the previous
           value.
 
-  server  Starts a register server. Servers must be provided a unique ID and
+  server  Starts a register server. Servers must be provided \
+     a unique ID and
           address (ip:port) at startup, along with the ID and address of all
-          peer servers.
+          \
+     peer servers.
 
 Usage:
   register get (<node-address>)...
-  register put <new-value> (<node-address>)...
+  register put <new-value> \
+     (<node-address>)...
   register cas <expected-value> <new-value> (<node-address>)...
-  register server <id> [(<node-id> <node-address>)]...
+  \
+     register server <id> [(<node-id> <node-address>)]...
   register (-h | --help)
 
 Options:
-  -h --help   Show a help message.
+  -h \
+     --help   Show a help message.
 ";
 
 #[derive(Debug, RustcDecodable)]
@@ -100,9 +109,9 @@ struct Args {
 
 fn main() {
     let _ = env_logger::init();
-    let args: Args = Docopt::new(USAGE)
-                            .and_then(|d| d.decode())
-                            .unwrap_or_else(|e| e.exit());
+    let args: Args = Docopt::new(USAGE).and_then(|d| d.decode()).unwrap_or_else(
+        |e| e.exit(),
+    );
     if args.cmd_server {
         server(&args);
     } else if args.cmd_get {
@@ -125,7 +134,8 @@ fn parse_addr(addr: &str) -> SocketAddr {
 /// Creates a new client connection to the raft servers specified in the arguments.
 fn create_client(args: &Args) -> Client {
     // Parse raft server addresses from arguments.
-    let cluster = args.arg_node_address.iter()
+    let cluster = args.arg_node_address
+        .iter()
         .map(|v| parse_addr(v))
         .collect();
 
@@ -140,7 +150,7 @@ fn handle_response(response: &[u8]) {
         Response::Err(err) => {
             println!("{}", err);
             process::exit(1);
-        }
+        },
     }
 }
 
@@ -157,14 +167,16 @@ fn server(args: &Args) {
     // A unique server id.
     let id = ServerId::from(args.arg_id.unwrap());
 
-    let log = persistent_log::FsLog::new(Path::new(&format!("/tmp/register-raftlog.{}", id.as_u64()))).unwrap();
+    let log = persistent_log::FsLog::new(
+        Path::new(&format!("/tmp/register-raftlog.{}", id.as_u64())),
+    ).unwrap();
 
     // A list of peers.
     let mut peers = args.arg_node_id
-                    .iter()
-                    .zip(args.arg_node_address.iter())
-                    .map(|(&id, addr)| (ServerId::from(id), parse_addr(addr)))
-                    .collect::<HashMap<_,_>>();
+        .iter()
+        .zip(args.arg_node_address.iter())
+        .map(|(&id, addr)| (ServerId::from(id), parse_addr(addr)))
+        .collect::<HashMap<_, _>>();
 
     // The peer set must not include the local server's ID.
     let addr = peers.remove(&id).unwrap();
@@ -200,8 +212,7 @@ fn put(args: &Args) {
 /// value.
 fn cas(args: &Args) {
     let mut client = create_client(args);
-    let proposal = Proposal::Cas(args.arg_expected_value.clone(),
-                                 args.arg_new_value.clone());
+    let proposal = Proposal::Cas(args.arg_expected_value.clone(), args.arg_new_value.clone());
     let request = bincode::serialize(&proposal, bincode::Infinite).unwrap();
     handle_response(&client.propose(&request).unwrap());
 }
@@ -213,7 +224,6 @@ pub struct RegisterStateMachine {
 }
 
 impl RegisterStateMachine {
-
     /// Creates a new register state machine with empty state.
     pub fn new() -> RegisterStateMachine {
         RegisterStateMachine { value: String::new() }
@@ -225,7 +235,6 @@ impl RegisterStateMachine {
 /// The register is mutated by calls to `apply`, and queried by calls to
 /// `query`.
 impl state_machine::StateMachine for RegisterStateMachine {
-
     fn apply(&mut self, proposal: &[u8]) -> Vec<u8> {
 
         let message = match bincode::deserialize::<Proposal>(proposal) {
@@ -234,8 +243,8 @@ impl state_machine::StateMachine for RegisterStateMachine {
         };
 
         // Encoding the current value should never fail.
-        let response = bincode::serialize(&Response::Ok(self.value.clone()),
-                                                 bincode::Infinite).unwrap();
+        let response = bincode::serialize(&Response::Ok(self.value.clone()), bincode::Infinite)
+            .unwrap();
         match message {
             Proposal::Put(val) => self.value = val,
             Proposal::Cas(test, new) => {
@@ -254,8 +263,7 @@ impl state_machine::StateMachine for RegisterStateMachine {
         }
 
         // Encoding the current value should never fail.
-        bincode::serialize(&Response::Ok(self.value.clone()),
-                                  bincode::Infinite).unwrap()
+        bincode::serialize(&Response::Ok(self.value.clone()), bincode::Infinite).unwrap()
     }
 
     fn snapshot(&self) -> Vec<u8> {

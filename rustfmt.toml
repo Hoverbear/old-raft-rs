@@ -1,0 +1,33 @@
+# Format string literals where necessary
+format_strings = true
+
+# Put a trailing comma after a block based match arm (non-block arms are not affected)
+match_block_trailing_comma = true
+
+# Convert /* */ comments to // comments where possible
+normalize_comments = false
+
+# Reorder import statements alphabetically
+reorder_imports = true
+
+# Reorder lists of names in import statements alphabetically
+reorder_imported_names = true
+
+# Reorder import statements in group
+reorder_imports_in_group = true
+
+# Replace uses of the try! macro by the ? shorthand
+use_try_shorthand = true
+
+# Density of a where clause
+where_density = "Vertical"
+
+# Break comments to fit on the line
+# wrap_comments = true
+
+# Don't break if a line is too long
+error_on_line_overflow = false
+
+# Don't create backup files
+write_mode = "overwrite"
+

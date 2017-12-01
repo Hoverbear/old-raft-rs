@@ -119,12 +119,12 @@ mod consensus;
 mod server;
 mod state;
 
+pub use client::Client;
+pub use persistent_log::Log;
 pub use server::Server;
 pub use state_machine::StateMachine;
-pub use persistent_log::Log;
-pub use client::Client;
 
-use std::{io, net, ops, fmt};
+use std::{fmt, io, net, ops};
 
 use uuid::Uuid;
 
@@ -205,13 +205,17 @@ impl Into<u64> for Term {
 impl ops::Add<u64> for Term {
     type Output = Term;
     fn add(self, rhs: u64) -> Term {
-        Term(self.0.checked_add(rhs).expect("overflow while incrementing Term"))
+        Term(self.0.checked_add(rhs).expect(
+            "overflow while incrementing Term",
+        ))
     }
 }
 impl ops::Sub<u64> for Term {
     type Output = Term;
     fn sub(self, rhs: u64) -> Term {
-        Term(self.0.checked_sub(rhs).expect("underflow while decrementing Term"))
+        Term(self.0.checked_sub(rhs).expect(
+            "underflow while decrementing Term",
+        ))
     }
 }
 impl fmt::Display for Term {
@@ -241,20 +245,29 @@ impl Into<u64> for LogIndex {
 impl ops::Add<u64> for LogIndex {
     type Output = LogIndex;
     fn add(self, rhs: u64) -> LogIndex {
-        LogIndex(self.0.checked_add(rhs).expect("overflow while incrementing LogIndex"))
+        LogIndex(self.0.checked_add(rhs).expect(
+            "overflow while incrementing \
+             LogIndex",
+        ))
     }
 }
 impl ops::Sub<u64> for LogIndex {
     type Output = LogIndex;
     fn sub(self, rhs: u64) -> LogIndex {
-        LogIndex(self.0.checked_sub(rhs).expect("underflow while decrementing LogIndex"))
+        LogIndex(self.0.checked_sub(rhs).expect(
+            "underflow while decrementing \
+             LogIndex",
+        ))
     }
 }
 /// Find the offset between two log indices.
 impl ops::Sub for LogIndex {
     type Output = u64;
     fn sub(self, rhs: LogIndex) -> u64 {
-        self.0.checked_sub(rhs.0).expect("underflow while subtracting LogIndex")
+        self.0.checked_sub(rhs.0).expect(
+            "underflow while subtracting \
+             LogIndex",
+        )
     }
 }
 impl fmt::Display for LogIndex {

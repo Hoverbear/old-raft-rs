@@ -11,67 +11,80 @@
 
 extern crate raft; // <--- Kind of a big deal for this!
 extern crate env_logger;
-#[macro_use] extern crate log;
-#[macro_use] extern crate scoped_log;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate scoped_log;
 extern crate docopt;
 extern crate serde;
 extern crate serde_json;
-#[macro_use] extern crate serde_derive;
+#[macro_use]
+extern crate serde_derive;
 extern crate rustc_serialize;
 
-use std::net::{SocketAddr, ToSocketAddrs};
 use std::collections::HashMap;
+use std::net::{SocketAddr, ToSocketAddrs};
 
-use serde_json::Value;
 use docopt::Docopt;
+use serde_json::Value;
 
 // Raft's major components. See comments in code on usage and things.
-use raft::{
-    Server,
-    Client,
-    state_machine,
-    persistent_log,
-    ServerId,
-};
+
+use raft::{Client, Server, ServerId, persistent_log, state_machine};
 // A payload datatype. We're just using a simple enum. You can use whatever.
+
 use Message::*;
 
 // Using docopt we define the overall usage of the application.
-static USAGE: &'static str = "
+static USAGE: &'static str =
+    "
 A replicated mutable hashmap. Operations on the register have serializable
-consistency, but no durability (once all register servers are terminated the
+consistency, but \
+     no durability (once all register servers are terminated the
 map is lost).
 
-Each register server holds a replica of the map, and coordinates with its
-peers to update the maps values according to client commands. The register
-is available for reading and writing only if a majority of register servers are
+Each register \
+     server holds a replica of the map, and coordinates with its
+peers to update the maps values \
+     according to client commands. The register
+is available for reading and writing only if a \
+     majority of register servers are
 available.
 
 
 Commands:
 
-  get     Returns the current value of the key.
+  get     Returns the current value \
+     of the key.
 
   put     Sets the current value of the key, and returns the previous
-          value.
+          \
+     value.
 
   cas     (compare and set) Conditionally sets the value of the key if the
-          current value matches an expected value, returning true if the
+          \
+     current value matches an expected value, returning true if the
           key was set.
 
-  server  Starts a key server. Servers must be provided a unique ID and
-          address (ip:port) at startup, along with the ID and address of all
+  \
+     server  Starts a key server. Servers must be provided a unique ID and
+          address \
+     (ip:port) at startup, along with the ID and address of all
           peer servers.
 
 Usage:
-  hashmap get <key> (<node-address>)...
+  \
+     hashmap get <key> (<node-address>)...
   hashmap put <key> <new-value> (<node-address>)...
-  hashmap cas <key> <expected-value> <new-value> (<node-address>)...
-  hashmap server <id> [(<node-id> <node-address>)]...
+  \
+     hashmap cas <key> <expected-value> <new-value> (<node-address>)...
+  hashmap server <id> \
+     [(<node-id> <node-address>)]...
   hashmap (-h | --help)
 
 Options:
-  -h --help   Show a help message.
+  -h --help   Show a help \
+     message.
 ";
 
 #[derive(Debug, RustcDecodable)]
@@ -108,9 +121,9 @@ pub enum Message {
 /// Just a plain old boring "parse args and dispatch" call.
 fn main() {
     let _ = env_logger::init();
-    let args: Args = Docopt::new(USAGE)
-                            .and_then(|d| d.decode())
-                            .unwrap_or_else(|e| e.exit());
+    let args: Args = Docopt::new(USAGE).and_then(|d| d.decode()).unwrap_or_else(
+        |e| e.exit(),
+    );
     if args.cmd_server {
         server(&args);
     } else if args.cmd_get {
@@ -148,7 +161,7 @@ fn server(args: &Args) {
         .iter()
         .zip(args.arg_node_address.iter())
         .map(|(&id, addr)| (ServerId::from(id), parse_addr(addr)))
-        .collect::<HashMap<_,_>>();
+        .collect::<HashMap<_, _>>();
 
     // The Raft Server will return an error if its ID is inside of its peer set. Don't do that.
     // Instead, take it out and use it!
@@ -171,7 +184,8 @@ fn get(args: &Args) {
     // Clients necessarily need to now the valid set of nodes which they can talk to.
     // This is both so they can try to talk to all the nodes if some are failing, and so that it
     // can verify that it's not being lead astray somehow in redirections on leadership changes.
-    let cluster = args.arg_node_address.iter()
+    let cluster = args.arg_node_address
+        .iter()
         .map(|v| parse_addr(v))
         .collect();
 
@@ -197,7 +211,8 @@ fn get(args: &Args) {
 /// Sets a value for a given key in the provided Raft cluster.
 fn put(args: &Args) {
     // Same as above.
-    let cluster = args.arg_node_address.iter()
+    let cluster = args.arg_node_address
+        .iter()
         .map(|v| parse_addr(v))
         .collect();
 
@@ -219,7 +234,8 @@ fn put(args: &Args) {
 /// expected.
 fn cas(args: &Args) {
     // Same as above.
-    let cluster = args.arg_node_address.iter()
+    let cluster = args.arg_node_address
+        .iter()
         .map(|v| parse_addr(v))
         .collect();
 
@@ -227,7 +243,11 @@ fn cas(args: &Args) {
 
     let new_value = serde_json::to_value(&args.arg_new_value).unwrap();
     let expected_value = serde_json::to_value(&args.arg_expected_value).unwrap();
-    let payload = serde_json::to_string(&Message::Cas(args.arg_key.clone(), expected_value, new_value)).unwrap();
+    let payload = serde_json::to_string(&Message::Cas(
+        args.arg_key.clone(),
+        expected_value,
+        new_value,
+    )).unwrap();
 
     let response = client.propose(payload.as_bytes()).unwrap();
 
@@ -243,16 +263,13 @@ pub struct HashmapStateMachine {
 /// Implement anything you want... A `new()` is generally a great idea.
 impl HashmapStateMachine {
     pub fn new() -> HashmapStateMachine {
-        HashmapStateMachine {
-            map: HashMap::new(),
-        }
+        HashmapStateMachine { map: HashMap::new() }
     }
 }
 
 /// Implementing `state_machine::StateMachine` allows your application specific state machine to be
 /// used in Raft. Feel encouraged to base yours of one of ours in these examples.
 impl state_machine::StateMachine for HashmapStateMachine {
-
     /// `apply()` is called on when a client's `.propose()` is commited and reaches the state
     /// machine. At this point it is durable and is going to be applied on at least half the nodes
     /// within the next couple round trips.
@@ -309,9 +326,7 @@ impl state_machine::StateMachine for HashmapStateMachine {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        serde_json::to_string(&self.map)
-            .unwrap()
-            .into_bytes()
+        serde_json::to_string(&self.map).unwrap().into_bytes()
     }
 
     fn restore_snapshot(&mut self, snapshot_value: Vec<u8>) {
