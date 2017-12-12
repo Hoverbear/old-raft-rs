@@ -4,20 +4,20 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::io::Write;
-use std::time::Duration;
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::str::FromStr;
+use std::time::Duration;
 
 use bufstream::BufStream;
-use capnp::serialize;
 use capnp::message::{Allocator, Builder, ReaderOptions};
+use capnp::serialize;
 
-use messages_capnp::{client_response, command_response};
-use messages;
 use ClientId;
-use Result;
 use RaftError;
+use Result;
+use messages;
+use messages_capnp::{client_response, command_response};
 
 const CLIENT_TIMEOUT: u64 = 1500;
 
@@ -61,7 +61,8 @@ impl Client {
     }
 
     fn send_message<A>(&mut self, message: &mut Builder<A>) -> Result<Vec<u8>>
-        where A: Allocator
+    where
+        A: Allocator,
     {
         let mut members = self.cluster.iter().cloned();
 
@@ -73,9 +74,9 @@ impl Client {
                 Some(cxn) => {
                     scoped_debug!("had existing connection {:?}", cxn.get_ref().peer_addr());
                     cxn
-                }
+                },
                 None => {
-                    let leader = try!(members.next().ok_or(RaftError::LeaderSearchExhausted));
+                    let leader = members.next().ok_or(RaftError::LeaderSearchExhausted)?;
                     scoped_debug!("connecting to potential leader {}", leader);
                     // Send the preamble.
                     let preamble = messages::client_connection_preamble(self.id);
@@ -86,7 +87,7 @@ impl Client {
                                 continue;
                             }
                             BufStream::new(stream)
-                        }
+                        },
                         Err(_) => continue,
                     };
                     scoped_debug!("connected");
@@ -94,7 +95,7 @@ impl Client {
                         continue;
                     };
                     stream
-                }
+                },
             };
             if serialize::write_message(&mut connection, message).is_err() {
                 continue;
@@ -117,30 +118,29 @@ impl Client {
                         Ok(command_response::Which::Success(data)) => {
                             scoped_debug!("received response Success");
                             self.leader_connection = Some(connection);
-                            return data.map(Vec::from)
-                                       .map_err(|e| e.into()); // Exit the function.
-                        }
+                            return data.map(Vec::from).map_err(|e| e.into()); // Exit the function.
+                        },
                         Ok(command_response::Which::UnknownLeader(())) => {
                             scoped_debug!("received response UnknownLeader");
                             () // Keep looping.
-                        }
+                        },
                         Ok(command_response::Which::NotLeader(leader)) => {
                             scoped_debug!("received response NotLeader");
-                            let leader_str = try!(leader);
-                            if !self.cluster.contains(&try!(SocketAddr::from_str(leader_str))) {
+                            let leader_str = leader?;
+                            if !self.cluster.contains(&SocketAddr::from_str(leader_str)?) {
                                 scoped_debug!("cluster violation detected");
                                 return Err(RaftError::ClusterViolation.into()); // Exit the function.
                             }
-                            let mut connection: TcpStream = try!(TcpStream::connect(leader_str));
+                            let mut connection: TcpStream = TcpStream::connect(leader_str)?;
                             let preamble = messages::client_connection_preamble(self.id);
                             if serialize::write_message(&mut connection, &*preamble).is_err() {
                                 continue;
                             };
                             self.leader_connection = Some(BufStream::new(connection));
-                        }
+                        },
                         Err(_) => continue,
                     }
-                }
+                },
                 _ => panic!("Unexpected message type"), // TODO: return a proper error
             };
         }
@@ -160,22 +160,22 @@ mod tests {
 
     use std::collections::HashSet;
     use std::io::Write;
-    use std::net::{TcpStream, TcpListener};
+    use std::net::{TcpListener, TcpStream};
     use std::thread;
 
-    use uuid::Uuid;
-    use capnp::serialize;
-    use capnp::message::ReaderOptions;
     use bufstream::BufStream;
+    use capnp::message::ReaderOptions;
+    use capnp::serialize;
+    use uuid::Uuid;
 
-    use {Client, messages, Result};
-    use messages_capnp::{connection_preamble, client_request};
+    use {Client, Result, messages};
+    use messages_capnp::{client_request, connection_preamble};
 
     fn expect_preamble(connection: &mut TcpStream, client_id: Uuid) -> Result<bool> {
-        let message = try!(serialize::read_message(connection, ReaderOptions::new()));
-        let preamble = try!(message.get_root::<connection_preamble::Reader>());
+        let message = serialize::read_message(connection, ReaderOptions::new())?;
+        let preamble = message.get_root::<connection_preamble::Reader>()?;
         // Test to make sure preamble has the right id.
-        if let connection_preamble::id::Which::Client(Ok(id)) = try!(preamble.get_id().which()) {
+        if let connection_preamble::id::Which::Client(Ok(id)) = preamble.get_id().which()? {
             Ok(Uuid::from_bytes(id).unwrap() == client_id)
         } else {
             Ok(false)
@@ -183,10 +183,10 @@ mod tests {
     }
 
     fn expect_proposal(connection: &mut TcpStream, value: &[u8]) -> Result<bool> {
-        let message = try!(serialize::read_message(connection, ReaderOptions::new()));
-        let request = try!(message.get_root::<client_request::Reader>());
+        let message = serialize::read_message(connection, ReaderOptions::new())?;
+        let request = message.get_root::<client_request::Reader>()?;
         // Test to make sure request has the right value.
-        if let client_request::Which::Proposal(Ok(proposal)) = try!(request.which()) {
+        if let client_request::Which::Proposal(Ok(proposal)) = request.which()? {
             Ok(proposal.get_entry().unwrap() == value)
         } else {
             Ok(false)

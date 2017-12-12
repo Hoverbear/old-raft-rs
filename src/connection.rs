@@ -2,20 +2,20 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use mio::tcp::TcpStream;
-use mio::Timeout as TimeoutHandle;
-use mio::{EventLoop, EventSet, PollOpt, Token};
 use capnp::message::{Builder, HeapAllocator, Reader, ReaderOptions};
 use capnp_nonblock::{MessageStream, Segments};
+use mio::{EventLoop, EventSet, PollOpt, Token};
+use mio::Timeout as TimeoutHandle;
+use mio::tcp::TcpStream;
 
 use ClientId;
 use Result;
 use ServerId;
 use backoff::Backoff;
 use messages;
+use persistent_log::Log;
 use server::{Server, ServerTimeout};
 use state_machine::StateMachine;
-use persistent_log::Log;
 
 fn poll_opt() -> PollOpt {
     PollOpt::edge() | PollOpt::oneshot()
@@ -59,7 +59,7 @@ impl Connection {
     /// Note: the caller must manually set the token field after inserting the
     /// connection into a slab.
     pub fn unknown(socket: TcpStream) -> Result<Connection> {
-        let addr = try!(socket.peer_addr());
+        let addr = socket.peer_addr()?;
         Ok(Connection {
             kind: ConnectionKind::Unknown,
             addr: addr,
@@ -70,7 +70,7 @@ impl Connection {
 
     /// Creates a new peer connection.
     pub fn peer(id: ServerId, addr: SocketAddr) -> Result<Connection> {
-        let stream = try!(TcpStream::connect(&addr));
+        let stream = TcpStream::connect(&addr)?;
         Ok(Connection {
             kind: ConnectionKind::Peer(id),
             addr: addr,
@@ -106,8 +106,9 @@ impl Connection {
 
     /// Returns the connection's mutable stream.
     /// Must only be called while the connection is active.
-    fn stream_mut(&mut self)
-                  -> &mut MessageStream<TcpStream, HeapAllocator, Rc<Builder<HeapAllocator>>> {
+    fn stream_mut(
+        &mut self,
+    ) -> &mut MessageStream<TcpStream, HeapAllocator, Rc<Builder<HeapAllocator>>> {
         match self.stream {
             Some(ref mut stream) => stream,
             None => panic!(format!("{:?}: not connected", self)),
@@ -117,8 +118,13 @@ impl Connection {
     /// Writes queued messages to the socket.
     pub fn writable(&mut self) -> Result<()> {
         scoped_trace!("{:?}: writable", self);
-        if let Connection { stream: Some(ref mut stream), ref mut backoff, .. } = *self {
-            try!(stream.write());
+        if let Connection {
+            stream: Some(ref mut stream),
+            ref mut backoff,
+            ..
+        } = *self
+        {
+            stream.write()?;
             backoff.reset();
             Ok(())
         } else {
@@ -147,9 +153,9 @@ impl Connection {
                 // optimistically sends messages, so it's likely that small
                 // messages can be sent without ever registering.
                 let unregistered = stream.outbound_queue_len() == 0;
-                try!(stream.write_message(message));
+                stream.write_message(message)?;
                 Ok(unregistered && stream.outbound_queue_len() > 0)
-            }
+            },
             None => Ok(false),
         }
     }
@@ -163,35 +169,41 @@ impl Connection {
     }
 
     /// Registers the connection with the event loop.
-    pub fn register<L, M>(&mut self,
-                          event_loop: &mut EventLoop<Server<L, M>>,
-                          token: Token)
-                          -> Result<()>
-        where L: Log,
-              M: StateMachine
+    pub fn register<L, M>(
+        &mut self,
+        event_loop: &mut EventLoop<Server<L, M>>,
+        token: Token,
+    ) -> Result<()>
+    where
+        L: Log,
+        M: StateMachine,
     {
         scoped_trace!("{:?}: register", self);
-        event_loop.register(self.stream().inner(), token, self.events(), poll_opt())
-                  .map_err(|error| {
-                      scoped_warn!("{:?}: reregister failed: {}", self, error);
-                      From::from(error)
-                  })
+        event_loop
+            .register(self.stream().inner(), token, self.events(), poll_opt())
+            .map_err(|error| {
+                scoped_warn!("{:?}: reregister failed: {}", self, error);
+                From::from(error)
+            })
     }
 
     /// Reregisters the connection with the event loop.
-    pub fn reregister<L, M>(&mut self,
-                            event_loop: &mut EventLoop<Server<L, M>>,
-                            token: Token)
-                            -> Result<()>
-        where L: Log,
-              M: StateMachine
+    pub fn reregister<L, M>(
+        &mut self,
+        event_loop: &mut EventLoop<Server<L, M>>,
+        token: Token,
+    ) -> Result<()>
+    where
+        L: Log,
+        M: StateMachine,
     {
         scoped_trace!("{:?}: reregister", self);
-        event_loop.reregister(self.stream().inner(), token, self.events(), poll_opt())
-                  .map_err(|error| {
-                      scoped_warn!("{:?}: register failed: {}", self, error);
-                      From::from(error)
-                  })
+        event_loop
+            .reregister(self.stream().inner(), token, self.events(), poll_opt())
+            .map_err(|error| {
+                scoped_warn!("{:?}: register failed: {}", self, error);
+                From::from(error)
+            })
     }
 
     /// Reconnects to the given peer ID and sends the preamble, advertising the
@@ -199,19 +211,25 @@ impl Connection {
     pub fn reconnect_peer(&mut self, id: ServerId, local_addr: &SocketAddr) -> Result<()> {
         scoped_assert!(self.kind.is_peer());
         scoped_trace!("{:?}: reconnect", self);
-        self.stream = Some(MessageStream::new(try!(TcpStream::connect(&self.addr)),
-                                              ReaderOptions::new()));
-        try!(self.send_message(messages::server_connection_preamble(id, local_addr)));
+        self.stream = Some(MessageStream::new(
+            TcpStream::connect(&self.addr)?,
+            ReaderOptions::new(),
+        ));
+        self.send_message(
+            messages::server_connection_preamble(id, local_addr)
+        )?;
         Ok(())
     }
 
     /// Resets a peer connection.
-    pub fn reset_peer<L, M>(&mut self,
-                            event_loop: &mut EventLoop<Server<L, M>>,
-                            token: Token)
-                            -> Result<(ServerTimeout, TimeoutHandle)>
-        where L: Log,
-              M: StateMachine
+    pub fn reset_peer<L, M>(
+        &mut self,
+        event_loop: &mut EventLoop<Server<L, M>>,
+        token: Token,
+    ) -> Result<(ServerTimeout, TimeoutHandle)>
+    where
+        L: Log,
+        M: StateMachine,
     {
         scoped_assert!(self.kind.is_peer());
         self.stream = None;
@@ -219,9 +237,11 @@ impl Connection {
         let timeout = ServerTimeout::Reconnect(token);
         let handle = event_loop.timeout_ms(timeout, duration).unwrap();
 
-        scoped_info!("{:?}: reset, will attempt to reconnect in {}ms",
-                     self,
-                     duration);
+        scoped_info!(
+            "{:?}: reset, will attempt to reconnect in {}ms",
+            self,
+            duration
+        );
         Ok((timeout, handle))
     }
 

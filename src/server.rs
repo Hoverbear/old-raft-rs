@@ -4,29 +4,29 @@
 //! time as described by the Raft Consensus Algorithm.
 
 use std::{fmt, io};
-use std::str::FromStr;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::thread::{self, JoinHandle};
 use std::rc::Rc;
+use std::str::FromStr;
+use std::thread::{self, JoinHandle};
 
-use mio::tcp::TcpListener;
-use mio::util::Slab;
+use capnp::message::{Builder, HeapAllocator};
 use mio::{EventLoop, EventSet, Handler, PollOpt, Token};
 use mio::Timeout as TimeoutHandle;
-use capnp::message::{Builder, HeapAllocator};
+use mio::tcp::TcpListener;
+use mio::util::Slab;
 
 use ClientId;
-use Result;
 use Error;
 use RaftError;
+use Result;
 use ServerId;
+use connection::{Connection, ConnectionKind};
+use consensus::{Actions, Consensus, ConsensusTimeout, TimeoutConfiguration};
 use messages;
 use messages_capnp::connection_preamble;
-use consensus::{Consensus, Actions, ConsensusTimeout, TimeoutConfiguration};
-use state_machine::StateMachine;
 use persistent_log::Log;
-use connection::{Connection, ConnectionKind};
+use state_machine::StateMachine;
 
 const LISTENER: Token = Token(0);
 
@@ -53,14 +53,12 @@ where
     heartbeat_millis: u64,
 }
 
-impl <L, M> ServerBuilder<L, M>
+impl<L, M> ServerBuilder<L, M>
 where
     L: Log,
     M: StateMachine,
 {
     fn new(id: ServerId, addr: SocketAddr, store: L, state_machine: M) -> ServerBuilder<L, M> {
-        /// Create a ServerBuilder with default values
-        /// for optional members.
         ServerBuilder {
             id: id,
             addr: addr,
@@ -132,8 +130,9 @@ where
 /// and election results. The debug level is used for frequent events such as client proposals and
 /// heartbeats. The trace level is used for very high frequency debugging output.
 pub struct Server<L, M>
-    where L: Log,
-          M: StateMachine
+where
+    L: Log,
+    M: StateMachine,
 {
     /// Id of this server.
     id: ServerId,
@@ -165,15 +164,12 @@ pub struct Server<L, M>
 
 /// The implementation of the Server.
 impl<L, M> Server<L, M>
-    where L: Log,
-          M: StateMachine
+where
+    L: Log,
+    M: StateMachine,
 {
     #[cfg_attr(feature = "cargo-clippy", allow(new_ret_no_self))]
-    pub fn new(
-        id: ServerId,
-        addr: SocketAddr,
-        store: L,
-        state_machine: M,) -> ServerBuilder<L, M> {
+    pub fn new(id: ServerId, addr: SocketAddr, store: L, state_machine: M) -> ServerBuilder<L, M> {
         ServerBuilder::new(id, addr, store, state_machine)
     }
 
@@ -181,16 +177,16 @@ impl<L, M> Server<L, M>
     /// *Gotcha:* `peers` must not contain the local `id`.
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     fn finalize(
-            id: ServerId,
-            addr: SocketAddr,
-            peers: HashMap<ServerId, SocketAddr>,
-            store: L,
-            state_machine: M,
-            election_min_millis: u64,
-            election_max_millis: u64,
-            heartbeat_millis: u64,
-            max_connections: usize)
-            -> Result<Server<L, M>> {
+        id: ServerId,
+        addr: SocketAddr,
+        peers: HashMap<ServerId, SocketAddr>,
+        store: L,
+        state_machine: M,
+        election_min_millis: u64,
+        election_max_millis: u64,
+        heartbeat_millis: u64,
+        max_connections: usize,
+    ) -> Result<Server<L, M>> {
         if peers.contains_key(&id) {
             return Err(Error::Raft(RaftError::InvalidPeerSet));
         }
@@ -201,7 +197,7 @@ impl<L, M> Server<L, M>
             heartbeat_ms: heartbeat_millis,
         };
         let consensus = Consensus::new(id, peers.clone(), store, state_machine);
-        let listener = try!(TcpListener::bind(&addr));
+        let listener = TcpListener::bind(&addr)?;
 
         let mut server = Server {
             id: id,
@@ -216,11 +212,10 @@ impl<L, M> Server<L, M>
         };
 
         for (peer_id, peer_addr) in peers {
-            let token: Token = try!(server.connections
-                                          .insert(try!(Connection::peer(peer_id, peer_addr)))
-                                          .map_err(|_| {
-                                              Error::Raft(RaftError::ConnectionLimitReached)
-                                          }));
+            let token: Token = server
+                .connections
+                .insert(Connection::peer(peer_id, peer_addr)?)
+                .map_err(|_| Error::Raft(RaftError::ConnectionLimitReached))?;
             scoped_assert!(server.peer_tokens.insert(peer_id, token).is_none());
         }
         Ok(server)
@@ -229,10 +224,15 @@ impl<L, M> Server<L, M>
     fn start_loop(&mut self) -> Result<EventLoop<Server<L, M>>>
     where
         L: Log,
-        M: StateMachine
+        M: StateMachine,
     {
-        let mut event_loop = try!(EventLoop::<Server<L, M>>::new());
-        try!(event_loop.register(&self.listener, LISTENER, EventSet::all(), PollOpt::level()));
+        let mut event_loop = EventLoop::<Server<L, M>>::new()?;
+        event_loop.register(
+            &self.listener,
+            LISTENER,
+            EventSet::all(),
+            PollOpt::level()
+        )?;
         let mut tokens = vec![];
         for token in self.peer_tokens.values() {
             tokens.push(*token);
@@ -240,10 +240,12 @@ impl<L, M> Server<L, M>
         let id = self.id;
         let addr = self.listener.local_addr()?;
         for token in tokens {
-            try!(self.connections[token].register(&mut event_loop, token));
-            self.send_message(&mut event_loop,
-                                token,
-                                messages::server_connection_preamble(id, &addr));
+            self.connections[token].register(&mut event_loop, token)?;
+            self.send_message(
+                &mut event_loop,
+                token,
+                messages::server_connection_preamble(id, &addr),
+            );
         }
         Ok(event_loop)
     }
@@ -257,7 +259,7 @@ impl<L, M> Server<L, M>
     /// * `store` - The persistent log store.
     /// * `state_machine` - The client state machine to which client commands will be applied.
     pub fn run(&mut self) -> Result<()> {
-        let mut event_loop = try!(self.start_loop());
+        let mut event_loop = self.start_loop()?;
         let actions = self.consensus.init();
         self.execute_actions(&mut event_loop, actions);
         event_loop.run(self).map_err(From::from)
@@ -272,47 +274,53 @@ impl<L, M> Server<L, M>
     /// * `peers` - The ID and address of all peers in the Raft cluster.
     /// * `store` - The persistent log store.
     /// * `state_machine` - The client state machine to which client commands will be applied.
-    pub fn spawn(id: ServerId,
-                 addr: SocketAddr,
-                 peers: HashMap<ServerId, SocketAddr>,
-                 store: L,
-                 state_machine: M)
-                 -> Result<JoinHandle<Result<()>>> {
+    pub fn spawn(
+        id: ServerId,
+        addr: SocketAddr,
+        peers: HashMap<ServerId, SocketAddr>,
+        store: L,
+        state_machine: M,
+    ) -> Result<JoinHandle<Result<()>>> {
         thread::Builder::new()
             .name(format!("raft::Server({})", id))
             .spawn(move || {
-                let mut server = try!(Server::finalize(id, addr, peers, store, state_machine, 1500, 3000, 1000, 129));
+                let mut server =
+                    Server::finalize(id, addr, peers, store, state_machine, 1500, 3000, 1000, 129)?;
                 server.run()
             })
             .map_err(From::from)
     }
     /// Sends the message to the connection associated with the provided token.
     /// If sending the message fails, the connection is reset.
-    fn send_message(&mut self,
-                    event_loop: &mut EventLoop<Server<L, M>>,
-                    token: Token,
-                    message: Rc<Builder<HeapAllocator>>) {
+    fn send_message(
+        &mut self,
+        event_loop: &mut EventLoop<Server<L, M>>,
+        token: Token,
+        message: Rc<Builder<HeapAllocator>>,
+    ) {
         match self.connections[token].send_message(message) {
             Ok(false) => (),
             Ok(true) => {
                 self.connections[token]
                     .reregister(event_loop, token)
                     .unwrap_or_else(|_| self.reset_connection(event_loop, token));
-            }
+            },
             Err(error) => {
                 scoped_warn!("{:?}: error while sending message: {:?}", self, error);
                 self.reset_connection(event_loop, token);
-            }
+            },
         }
     }
 
     fn execute_actions(&mut self, event_loop: &mut EventLoop<Server<L, M>>, actions: Actions) {
         scoped_trace!("executing actions: {:?}", actions);
-        let Actions { peer_messages,
-                      client_messages,
-                      timeouts,
-                      clear_timeouts,
-                      clear_peer_messages } = actions;
+        let Actions {
+            peer_messages,
+            client_messages,
+            timeouts,
+            clear_timeouts,
+            clear_peer_messages,
+        } = actions;
 
         if clear_peer_messages {
             for &token in self.peer_tokens.values() {
@@ -330,9 +338,11 @@ impl<L, M> Server<L, M>
         }
         if clear_timeouts {
             for (timeout, &handle) in &self.consensus_timeouts {
-                scoped_assert!(event_loop.clear_timeout(handle),
-                               "unable to clear timeout: {:?}",
-                               timeout);
+                scoped_assert!(
+                    event_loop.clear_timeout(handle),
+                    "unable to clear timeout: {:?}",
+                    timeout
+                );
             }
             self.consensus_timeouts.clear();
         }
@@ -342,15 +352,18 @@ impl<L, M> Server<L, M>
             // Registering a timeout may only fail if the maximum number of timeouts
             // is already registered, which is by default 65,536. We use a
             // maximum of one timeout per peer, so this unwrap should be safe.
-            let handle = event_loop.timeout_ms(ServerTimeout::Consensus(timeout), duration)
-                                   .unwrap();
-            self.consensus_timeouts
-                .insert(timeout, handle)
-                .map(|handle| {
-                    scoped_assert!(event_loop.clear_timeout(handle),
-                                   "unable to clear timeout: {:?}",
-                                   timeout)
-                });
+            let handle = event_loop
+                .timeout_ms(ServerTimeout::Consensus(timeout), duration)
+                .unwrap();
+            self.consensus_timeouts.insert(timeout, handle).map(
+                |handle| {
+                    scoped_assert!(
+                        event_loop.clear_timeout(handle),
+                        "unable to clear timeout: {:?}",
+                        timeout
+                    )
+                },
+            );
         }
     }
 
@@ -366,22 +379,32 @@ impl<L, M> Server<L, M>
             ConnectionKind::Peer(..) => {
                 // Crash if reseting the connection fails.
                 let (timeout, handle) = self.connections[token]
-                                            .reset_peer(event_loop, token)
-                                            .unwrap();
+                    .reset_peer(event_loop, token)
+                    .unwrap();
 
-                scoped_assert!(self.reconnection_timeouts.insert(token, handle).is_none(),
-                               "timeout already registered: {:?}",
-                               timeout);
-            }
+                scoped_assert!(
+                    self.reconnection_timeouts.insert(token, handle).is_none(),
+                    "timeout already registered: {:?}",
+                    timeout
+                );
+            },
             ConnectionKind::Client(ref id) => {
-                self.connections.remove(token).expect("unable to find client connection");
-                scoped_assert!(self.client_tokens.remove(id).is_some(),
-                               "client {:?} not connected",
-                               id);
-            }
+                self.connections.remove(token).expect(
+                    "unable to find client \
+                     connection",
+                );
+                scoped_assert!(
+                    self.client_tokens.remove(id).is_some(),
+                    "client {:?} not connected",
+                    id
+                );
+            },
             ConnectionKind::Unknown => {
-                self.connections.remove(token).expect("unable to find unknown connection");
-            }
+                self.connections.remove(token).expect(
+                    "unable to find unknown \
+                     connection",
+                );
+            },
         }
     }
 
@@ -392,80 +415,94 @@ impl<L, M> Server<L, M>
     fn readable(&mut self, event_loop: &mut EventLoop<Server<L, M>>, token: Token) -> Result<()> {
         scoped_trace!("{:?}: readable event", self.connections[token]);
         // Read messages from the connection until there are no more.
-        while let Some(message) = try!(self.connections[token].readable()) {
+        while let Some(message) = self.connections[token].readable()? {
             match *self.connections[token].kind() {
                 ConnectionKind::Peer(id) => {
                     let mut actions = Actions::new();
-                    self.consensus.apply_peer_message(id, &message, &mut actions);
+                    self.consensus.apply_peer_message(
+                        id,
+                        &message,
+                        &mut actions,
+                    );
                     self.execute_actions(event_loop, actions);
-                }
+                },
                 ConnectionKind::Client(id) => {
                     let mut actions = Actions::new();
-                    self.consensus.apply_client_message(id, &message, &mut actions);
+                    self.consensus.apply_client_message(
+                        id,
+                        &message,
+                        &mut actions,
+                    );
                     self.execute_actions(event_loop, actions);
-                }
+                },
                 ConnectionKind::Unknown => {
-                    let preamble = try!(message.get_root::<connection_preamble::Reader>());
-                    match try!(preamble.get_id().which()) {
+                    let preamble = message.get_root::<connection_preamble::Reader>()?;
+                    match preamble.get_id().which()? {
                         connection_preamble::id::Which::Server(peer) => {
-                            let peer = try!(peer);
+                            let peer = peer?;
                             let peer_id = ServerId(peer.get_id());
 
                             // Not the source address of this connection, but the
                             // address the peer tells us it's listening on.
-                            let peer_addr = SocketAddr::from_str(try!(peer.get_addr())).unwrap();
-                            scoped_debug!("received new connection from {:?} ({})",
-                                          peer_id,
-                                          peer_addr);
+                            let peer_addr = SocketAddr::from_str(peer.get_addr()?).unwrap();
+                            scoped_debug!(
+                                "received new connection from {:?} ({})",
+                                peer_id,
+                                peer_addr
+                            );
 
                             self.connections[token].set_kind(ConnectionKind::Peer(peer_id));
                             // Use the advertised address, not the remote's source
                             // address, for future retries in this connection.
                             self.connections[token].set_addr(peer_addr);
 
-                            let prev_token = Some(self.peer_tokens
-                                                      .insert(peer_id, token)
-                                                      .expect("peer token not found"));
+                            let prev_token = Some(self.peer_tokens.insert(peer_id, token).expect(
+                                "peer token \
+                                 not found",
+                            ));
 
                             // Close the existing connection, if any.
                             // Currently, prev_token is never `None`; see above.
                             // With config changes, this will have to be handled.
                             match prev_token {
                                 Some(tok) => {
-                                    self.connections
-                                        .remove(tok)
-                                        .expect("peer connection not found");
+                                    self.connections.remove(tok).expect(
+                                        "peer connection not found",
+                                    );
 
                                     // Clear any timeouts associated with the existing connection.
-                                    self.reconnection_timeouts
-                                        .remove(&tok)
-                                        .map(|handle| {
-                                            scoped_assert!(event_loop.clear_timeout(handle))
-                                        });
-                                }
+                                    self.reconnection_timeouts.remove(&tok).map(|handle| {
+                                        scoped_assert!(event_loop.clear_timeout(handle))
+                                    });
+                                },
                                 _ => unreachable!(),
                             }
                             // Notify consensus that the connection reset.
                             let mut actions = Actions::new();
-                            self.consensus.peer_connection_reset(peer_id, peer_addr, &mut actions);
+                            self.consensus.peer_connection_reset(
+                                peer_id,
+                                peer_addr,
+                                &mut actions,
+                            );
                             self.execute_actions(event_loop, actions);
-                        }
+                        },
                         connection_preamble::id::Which::Client(Ok(id)) => {
-                            let client_id = try!(ClientId::from_bytes(id));
+                            let client_id = ClientId::from_bytes(id)?;
                             scoped_debug!("received new client connection from {}", client_id);
                             self.connections[token].set_kind(ConnectionKind::Client(client_id));
-                            let prev_token = self.client_tokens
-                                                 .insert(client_id, token);
-                            scoped_assert!(prev_token.is_none(),
-                                           "{:?}: two clients connected with the same id: {:?}",
-                                           self,
-                                           client_id);
-                        }
+                            let prev_token = self.client_tokens.insert(client_id, token);
+                            scoped_assert!(
+                                prev_token.is_none(),
+                                "{:?}: two clients connected with the same id: {:?}",
+                                self,
+                                client_id
+                            );
+                        },
                         _ => {
                             return Err(Error::Raft(RaftError::UnknownConnectionType));
-                        }
+                        },
                     }
-                }
+                },
             }
         }
         Ok(())
@@ -480,17 +517,20 @@ impl<L, M> Server<L, M>
             .map_err(From::from)
             .and_then(|stream_opt| {
                 stream_opt.ok_or_else(|| {
-                    Error::Io(io::Error::new(io::ErrorKind::WouldBlock,
-                                             "listener.accept() returned None"))
+                    Error::Io(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "listener.accept() returned None",
+                    ))
                 })
             })
             .and_then(|(stream, _)| Connection::unknown(stream))
             .and_then(|conn| {
-                self.connections
-                    .insert(conn)
-                    .map_err(|_| Error::Raft(RaftError::ConnectionLimitReached))
+                self.connections.insert(conn).map_err(|_| {
+                    Error::Raft(RaftError::ConnectionLimitReached)
+                })
             })
-            .and_then(|token|
+            .and_then(
+                |token|
                 // Until this point if any failures occur the connection is simply dropped. From
                 // this point down, the connection is stored in the slab, so dropping it would
                 // result in a leaked TCP stream and slab entry. Instead of dropping the
@@ -502,13 +542,15 @@ impl<L, M> Server<L, M>
                         Err(Error::Raft(RaftError::ConnectionRegisterFailed))
                     })
                     .map(|_| scoped_debug!("new connection accepted from {}",
-                                           self.connections[token].addr())))
+                                           self.connections[token].addr())),
+            )
     }
 }
 
 impl<L, M> Handler for Server<L, M>
-    where L: Log,
-          M: StateMachine
+where
+    L: Log,
+    M: StateMachine,
 {
     type Message = ();
     type Timeout = ServerTimeout;
@@ -547,8 +589,9 @@ impl<L, M> Handler for Server<L, M>
 
         if events.is_readable() {
             if token == LISTENER {
-                self.accept_connection(event_loop)
-                    .unwrap_or_else(|error| scoped_warn!("unable to accept connection: {}", error));
+                self.accept_connection(event_loop).unwrap_or_else(|error| {
+                    scoped_warn!("unable to accept connection: {}", error)
+                });
             } else {
                 self.readable(event_loop, token)
                     // Only reregister the connection with the event loop if no error occurs and
@@ -568,19 +611,23 @@ impl<L, M> Handler for Server<L, M>
         scoped_trace!("timeout: {:?}", &timeout);
         match timeout {
             ServerTimeout::Consensus(consensus) => {
-                scoped_assert!(self.consensus_timeouts.remove(&consensus).is_some(),
-                               "missing timeout: {:?}",
-                               timeout);
+                scoped_assert!(
+                    self.consensus_timeouts.remove(&consensus).is_some(),
+                    "missing timeout: {:?}",
+                    timeout
+                );
                 let mut actions = Actions::new();
                 self.consensus.apply_timeout(consensus, &mut actions);
                 self.execute_actions(event_loop, actions);
-            }
+            },
 
             ServerTimeout::Reconnect(token) => {
-                scoped_assert!(self.reconnection_timeouts.remove(&token).is_some(),
-                               "{:?} missing timeout: {:?}",
-                               self.connections[token],
-                               timeout);
+                scoped_assert!(
+                    self.reconnection_timeouts.remove(&token).is_some(),
+                    "{:?} missing timeout: {:?}",
+                    self.connections[token],
+                    timeout
+                );
                 let local_addr = self.listener.local_addr();
                 scoped_assert!(local_addr.is_ok(), "could not obtain listener address");
                 let id = match *self.connections[token].kind() {
@@ -597,19 +644,22 @@ impl<L, M> Handler for Server<L, M>
                         self.execute_actions(event_loop, actions);
                     })
                     .unwrap_or_else(|error| {
-                        scoped_warn!("unable to reconnect connection {:?}: {}",
-                                     self.connections[token],
-                                     error);
+                        scoped_warn!(
+                            "unable to reconnect connection {:?}: {}",
+                            self.connections[token],
+                            error
+                        );
                         self.reset_connection(event_loop, token);
                     });
-            }
+            },
         }
     }
 }
 
 impl<L, M> fmt::Debug for Server<L, M>
-    where L: Log,
-          M: StateMachine
+where
+    L: Log,
+    M: StateMachine,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "Server({})", self.id)
@@ -630,43 +680,49 @@ mod tests {
     use capnp::serialize;
     use mio::EventLoop;
 
+    use super::*;
     use ClientId;
     use Result;
     use ServerId;
+    use consensus::Actions;
     use messages;
     use messages_capnp::connection_preamble;
-    use consensus::Actions;
-    use state_machine::NullStateMachine;
     use persistent_log::MemLog;
-    use super::*;
+    use state_machine::NullStateMachine;
 
     type TestServer = Server<MemLog, NullStateMachine>;
 
-    fn new_test_server(peers: HashMap<ServerId, SocketAddr>)
-                       -> Result<(TestServer, EventLoop<TestServer>)> {
-        let mut server = try!(Server::new(ServerId::from(0),
-                                          SocketAddr::from_str("127.0.0.1:0").unwrap(),
-                                          MemLog::new(),
-                                          NullStateMachine)
-                                          .with_peers(peers)
-                                          .with_election_min_millis(1500)
-                                          .with_election_max_millis(3000)
-                                          .with_heartbeat_millis(1000)
-                                          .with_max_connections(129)
-                                          .finalize());
-        let event_loop = try!(server.start_loop());
+    fn new_test_server(
+        peers: HashMap<ServerId, SocketAddr>,
+    ) -> Result<(TestServer, EventLoop<TestServer>)> {
+        let mut server = Server::new(
+            ServerId::from(0),
+            SocketAddr::from_str("127.0.0.1:0").unwrap(),
+            MemLog::new(),
+            NullStateMachine
+        ).with_peers(peers)
+            .with_election_min_millis(1500)
+            .with_election_max_millis(3000)
+            .with_heartbeat_millis(1000)
+            .with_max_connections(129)
+            .finalize()?;
+        let event_loop = server.start_loop()?;
         Ok((server, event_loop))
     }
 
     /// Attempts to grab a local, unbound socket address for testing.
     fn get_unbound_address() -> SocketAddr {
-        TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
     }
 
     /// Verifies that the proved stream has been sent a valid connection
     /// preamble.
     fn read_server_preamble<R>(read: &mut R) -> ServerId
-        where R: Read
+    where
+        R: Read,
     {
         let message = serialize::read_message(read, ReaderOptions::new()).unwrap();
         let preamble = message.get_root::<connection_preamble::Reader>().unwrap();
@@ -675,7 +731,7 @@ mod tests {
             connection_preamble::id::Which::Server(peer) => ServerId::from(peer.unwrap().get_id()),
             _ => {
                 panic!("unexpected preamble id");
-            }
+            },
         }
     }
 
@@ -781,9 +837,10 @@ mod tests {
         // This is what the new peer tells the server is listening address is.
         let fake_peer_addr = SocketAddr::from_str("192.168.0.1:12345").unwrap();
         // Send server the preamble message to the server.
-        serialize::write_message(&mut out_stream,
-                                 &*messages::server_connection_preamble(peer_id, &fake_peer_addr))
-            .unwrap();
+        serialize::write_message(
+            &mut out_stream,
+            &*messages::server_connection_preamble(peer_id, &fake_peer_addr),
+        ).unwrap();
         out_stream.flush().unwrap();
         event_loop.run_once(&mut server, None).unwrap();
 
@@ -794,7 +851,9 @@ mod tests {
         assert!(stream_shutdown(&mut in_stream));
         // Check that there's a connection which has the fake address
         // stored for reconnection purposes.
-        assert!(server.connections.iter().any(|conn| conn.addr().port() == 12345))
+        assert!(server.connections.iter().any(
+            |conn| conn.addr().port() == 12345,
+        ))
     }
 
     /// Tests that the server will accept a client connection, then disposes of
@@ -813,9 +872,10 @@ mod tests {
         let client_id = ClientId::new();
 
         // Send the client preamble message to the server.
-        serialize::write_message(&mut stream,
-                                 &*messages::client_connection_preamble(client_id))
-            .unwrap();
+        serialize::write_message(
+            &mut stream,
+            &*messages::client_connection_preamble(client_id),
+        ).unwrap();
         stream.flush().unwrap();
         event_loop.run_once(&mut server, None).unwrap();
 
@@ -900,9 +960,10 @@ mod tests {
         let client_id = ClientId::new();
 
         // Send the client preamble message to the server.
-        serialize::write_message(&mut stream,
-                                 &*messages::client_connection_preamble(client_id))
-            .unwrap();
+        serialize::write_message(
+            &mut stream,
+            &*messages::client_connection_preamble(client_id),
+        ).unwrap();
         stream.flush().unwrap();
         event_loop.run_once(&mut server, None).unwrap();
 
@@ -954,8 +1015,10 @@ mod tests {
 
         // Send a test message (the type is not important).
         let mut actions = Actions::new();
-        actions.peer_messages
-               .push((peer_id, messages::server_connection_preamble(peer_id, &peer_addr)));
+        actions.peer_messages.push((
+            peer_id,
+            messages::server_connection_preamble(peer_id, &peer_addr),
+        ));
         server.execute_actions(&mut event_loop, actions);
 
         assert_eq!(peer_id, read_server_preamble(&mut in_stream));

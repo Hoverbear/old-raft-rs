@@ -10,8 +10,8 @@ use std::path::Path;
 
 use rand::Rng;
 
-use raft::persistent_log::FsLog;
 use raft::{Log, LogIndex, Term};
+use raft::persistent_log::FsLog;
 
 #[bench]
 fn bench_log_control(b: &mut test::Bencher) {
@@ -32,24 +32,33 @@ fn do_bench_append(b: &mut test::Bencher, name: &str, count: usize) {
     let values: Vec<u8> = (0..255).collect();
     let mut entries = vec![];
     for x in 0..count {
-        entries.push((Term::from(0x1234abcd8765fedc), &values[(x % 100)..(x % 100 + 100)]));
+        entries.push((
+            Term::from(0x1234abcd8765fedc),
+            &values[(x % 100)..(x % 100 + 100)],
+        ));
     }
     b.iter(|| {
         let i: u64 = rng.gen();
         let name = format!("/tmp/raft-rs-bench-log-{}-{:016x}", name, i);
         let filename = Path::new(&name);
         let mut log = FsLog::new(&filename).unwrap();
-        log.append_entries(
-            LogIndex::from(1), 
-            &entries[..],
-        ).expect("appending entries");
+        log.append_entries(LogIndex::from(1), &entries[..]).expect(
+            "appending \
+             entries",
+        );
         let x = log.latest_log_index();
         remove_file(&filename).expect("Could not remove file");
         x
     });
 }
 
-fn do_bench_append_then_rewrite(b: &mut test::Bencher, name: &str, count: usize, rewrite: usize, from: LogIndex) {
+fn do_bench_append_then_rewrite(
+    b: &mut test::Bencher,
+    name: &str,
+    count: usize,
+    rewrite: usize,
+    from: LogIndex,
+) {
     let mut rng = rand::OsRng::new().unwrap();
     let values: Vec<u8> = (0..100).collect();
     let mut initial_entries = vec![];
@@ -58,15 +67,21 @@ fn do_bench_append_then_rewrite(b: &mut test::Bencher, name: &str, count: usize,
         initial_entries.push((Term::from(0x12), &values[(x % 100)..(x % 100 + 1)]));
     }
     for x in 0..rewrite {
-        rewrite_entries.push((Term::from(0x30af), &values[((rewrite - x) % 100)..((rewrite - x) % 100 + 1)]));
+        rewrite_entries.push((
+            Term::from(0x30af),
+            &values[((rewrite - x) % 100)..((rewrite - x) % 100 + 1)],
+        ));
     }
     b.iter(|| {
         let i: u64 = rng.gen();
         let name = format!("/tmp/raft-rs-bench-log-{}-{:016x}", name, i);
         let filename = Path::new(&name);
         let mut log = FsLog::new(&filename).unwrap();
-        log.append_entries(LogIndex::from(1), &initial_entries[..]).expect("append entries");
-        log.append_entries(from, &rewrite_entries[..]).expect("rewrite entries");
+        log.append_entries(LogIndex::from(1), &initial_entries[..])
+            .expect("append entries");
+        log.append_entries(from, &rewrite_entries[..]).expect(
+            "rewrite entries",
+        );
 
         let x = log.latest_log_index();
         remove_file(&filename).expect("Could not remove file");

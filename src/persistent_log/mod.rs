@@ -14,11 +14,11 @@ use std::fmt::Debug;
 use std::result;
 
 pub use persistent_log::fs::FsLog;
-pub use persistent_log::mem::{MemLog, Error};
+pub use persistent_log::mem::{Error, MemLog};
 
 use LogIndex;
-use Term;
 use ServerId;
+use Term;
 
 /// A store of persistent Raft state.
 pub trait Log: Clone + Debug + Send + 'static {
@@ -50,10 +50,11 @@ pub trait Log: Clone + Debug + Send + 'static {
     fn entry(&self, index: LogIndex) -> result::Result<(Term, &[u8]), Self::Error>;
 
     /// Returns the given range of entries (excluding the right endpoint).
-    fn entries(&self,
-               lo: LogIndex,
-               hi: LogIndex)
-               -> result::Result<Vec<(Term, &[u8])>, Self::Error> {
+    fn entries(
+        &self,
+        lo: LogIndex,
+        hi: LogIndex,
+    ) -> result::Result<Vec<(Term, &[u8])>, Self::Error> {
         // TODO: can make LogIndex compatible for use in ranges.
         (lo.as_u64()..hi.as_u64())
             .map(|index| self.entry(LogIndex::from(index)))
@@ -62,8 +63,9 @@ pub trait Log: Clone + Debug + Send + 'static {
 
 
     /// Appends the provided entries to the log beginning at the given index.
-    fn append_entries(&mut self,
-                      from: LogIndex,
-                      entries: &[(Term, &[u8])])
-                      -> result::Result<(), Self::Error>;
+    fn append_entries(
+        &mut self,
+        from: LogIndex,
+        entries: &[(Term, &[u8])],
+    ) -> result::Result<(), Self::Error>;
 }

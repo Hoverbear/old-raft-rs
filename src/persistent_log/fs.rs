@@ -1,12 +1,12 @@
 use std::{error, fmt, fs, path, result};
-use std::io::prelude::*;
 use std::io::{BufReader, BufWriter, SeekFrom};
+use std::io::prelude::*;
 
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use persistent_log::Log;
 use LogIndex;
 use ServerId;
 use Term;
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use persistent_log::Log;
 
 /// This is a `Log` implementation that stores entries in the filesystem
 /// as well as in a struct. It is chiefly intended for testing.
@@ -16,9 +16,7 @@ use Term;
 /// No bounds checking is performed and attempted access to non-existing log
 /// indexes will panic.
 
-
 /// Error type for FsLog
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct Error;
 
@@ -68,18 +66,16 @@ pub struct FsLog {
 impl FsLog {
     pub fn new(filename: &path::Path) -> Result<FsLog> {
 
-        let mut w = BufWriter::new(
-            fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .open(&filename)?);
+        let mut w = BufWriter::new(fs::OpenOptions::new().create(true).write(true).open(
+            &filename,
+        )?);
 
         let filelen = w.get_ref().metadata()?.len();
 
         if filelen == 0 {
-            w.write_u64::<BigEndian>(VERSION)?;  // Term (0)
-            w.write_u64::<BigEndian>(0)?;  // Term (0)
-            w.write_u64::<BigEndian>(<u64>::max_value())?;  // Voted for (None)
+            w.write_u64::<BigEndian>(VERSION)?; // Term (0)
+            w.write_u64::<BigEndian>(0)?; // Term (0)
+            w.write_u64::<BigEndian>(<u64>::max_value())?; // Voted for (None)
             w.flush()?;
         }
 
@@ -88,11 +84,11 @@ impl FsLog {
         let version = r.read_u64::<BigEndian>()?;
         if version != VERSION {
             return Err(Error);
-        } 
+        }
         let current_term: Term = r.read_u64::<BigEndian>()?.into();
         let voted_for: Option<ServerId> = match r.read_u64::<BigEndian>()? {
             x if x == <u64>::max_value() => None,
-            x => Some(x.into())
+            x => Some(x.into()),
         };
 
         let mut log = FsLog {
@@ -125,12 +121,10 @@ impl FsLog {
 
     fn write_voted_for(&mut self) -> Result<()> {
         self.writer.seek(SeekFrom::Start(16))?;
-        self.writer.write_u64::<BigEndian>(
-            match self.voted_for {
-                None => <u64>::max_value(),
-                Some(ServerId(n)) => n,
-            }
-        )?;
+        self.writer.write_u64::<BigEndian>(match self.voted_for {
+            None => <u64>::max_value(),
+            Some(ServerId(n)) => n,
+        })?;
         self.writer.flush()?;
         Ok(())
     }
@@ -179,7 +173,9 @@ impl FsLog {
         self.truncate_file(index)?;
         self.entries.truncate(index);
         self.offsets.truncate(index);
-        self.entries.extend(entries.iter().map(|&(term, command)| (term, command.to_vec())));
+        self.entries.extend(entries.iter().map(
+            |&(term, command)| (term, command.to_vec()),
+        ));
         for &(term, command) in entries {
             self.write_entry(index, term, command)?;
             index += 1;
@@ -240,10 +236,7 @@ impl Log for FsLog {
     }
 
     /// Append entries sent from the leader.
-    fn append_entries(&mut self,
-                      from: LogIndex,
-                      entries: &[(Term, &[u8])])
-                      -> Result<()> {
+    fn append_entries(&mut self, from: LogIndex, entries: &[(Term, &[u8])]) -> Result<()> {
         assert!(self.latest_log_index()? + 1 >= from);
         let from_idx = (from - 1).as_u64() as usize;
         for idx in 0..entries.len() {
@@ -260,7 +253,7 @@ impl Log for FsLog {
                 None => {
                     self.rewrite_entries(from + idx as u64, &entries[idx..])?;
                     break;
-                }
+                },
             };
         }
         Ok(())
@@ -272,8 +265,12 @@ impl Clone for FsLog {
     fn clone(&self) -> FsLog {
         // Wish I didn't have to unwrap the filehandles...
         FsLog {
-            reader: BufReader::new(self.reader.get_ref().try_clone().expect("cloning self.reader")),
-            writer: BufWriter::new(self.writer.get_ref().try_clone().expect("cloning self.writer")),
+            reader: BufReader::new(self.reader.get_ref().try_clone().expect(
+                "cloning self.reader",
+            )),
+            writer: BufWriter::new(self.writer.get_ref().try_clone().expect(
+                "cloning self.writer",
+            )),
             current_term: self.current_term,
             voted_for: self.voted_for,
             entries: self.entries.clone(),
@@ -285,19 +282,28 @@ impl Clone for FsLog {
 
 #[cfg(test)]
 mod test {
-    use std::fs::remove_file;
-    use std::path::Path;
     use super::*;
     use LogIndex;
     use ServerId;
     use Term;
     use persistent_log::Log;
+    use std::fs::remove_file;
+    use std::path::Path;
 
     fn assert_entries_equal(store: &FsLog, expected: Vec<(Term, &[u8])>) {
-        assert_eq!(LogIndex::from(expected.len() as u64), store.latest_log_index().unwrap());
-        assert_eq!(expected[expected.len() - 1].0, store.latest_log_term().unwrap());
+        assert_eq!(
+            LogIndex::from(expected.len() as u64),
+            store.latest_log_index().unwrap()
+        );
+        assert_eq!(
+            expected[expected.len() - 1].0,
+            store.latest_log_term().unwrap()
+        );
         for i in 0..expected.len() {
-            assert_eq!(store.entry(LogIndex::from((i + 1) as u64)).unwrap(), expected[i]);
+            assert_eq!(
+                store.entry(LogIndex::from((i + 1) as u64)).unwrap(),
+                expected[i]
+            );
         }
     }
 
@@ -337,51 +343,90 @@ mod test {
         assert_eq!(Term::from(0), store.latest_log_term().unwrap());
 
         // [0.1, 0.2, 0.3, 1.4]  Initial log
-        store.append_entries(LogIndex(1),
-                             &[(Term::from(0), &[1]),
-                               (Term::from(0), &[2]),
-                               (Term::from(0), &[3]),
-                               (Term::from(1), &[4])])
-             .unwrap();
-        assert_entries_equal(&store, vec![(Term::from(0), &*vec![1]),
-                                          (Term::from(0), &*vec![2]),
-                                          (Term::from(0), &*vec![3]),
-                                          (Term::from(1), &*vec![4])]);
+        store
+            .append_entries(
+                LogIndex(1),
+                &[
+                    (Term::from(0), &[1]),
+                    (Term::from(0), &[2]),
+                    (Term::from(0), &[3]),
+                    (Term::from(1), &[4]),
+                ],
+            )
+            .unwrap();
+        assert_entries_equal(
+            &store,
+            vec![
+                (Term::from(0), &*vec![1]),
+                (Term::from(0), &*vec![2]),
+                (Term::from(0), &*vec![3]),
+                (Term::from(1), &*vec![4]),
+            ],
+        );
 
         // [0.1, 0.2, 0.3, 1.4]  Empty log, no modification
         store.append_entries(LogIndex::from(3), &[]).unwrap();
-        assert_entries_equal(&store, vec![(Term::from(0), &*vec![1]),
-                                          (Term::from(0), &*vec![2]),
-                                          (Term::from(0), &*vec![3]),
-                                          (Term::from(1), &*vec![4])]);
+        assert_entries_equal(
+            &store,
+            vec![
+                (Term::from(0), &*vec![1]),
+                (Term::from(0), &*vec![2]),
+                (Term::from(0), &*vec![3]),
+                (Term::from(1), &*vec![4]),
+            ],
+        );
 
         // [0.1, 0.2, 0.3, 1.4]  All match, non-exhaustive
-        store.append_entries(LogIndex::from(2),
-                             &[(Term::from(0), &[2]),
-                               (Term::from(0), &[3])])
-             .unwrap();
-        assert_entries_equal(&store, vec![(Term::from(0), &[1u8]),
-                                         (Term::from(0), &[2u8]),
-                                         (Term::from(0), &[3u8]),
-                                         (Term::from(1), &[4u8])]);
+        store
+            .append_entries(
+                LogIndex::from(2),
+                &[(Term::from(0), &[2]), (Term::from(0), &[3])],
+            )
+            .unwrap();
+        assert_entries_equal(
+            &store,
+            vec![
+                (Term::from(0), &[1u8]),
+                (Term::from(0), &[2u8]),
+                (Term::from(0), &[3u8]),
+                (Term::from(1), &[4u8]),
+            ],
+        );
 
         // [0.1, 0.2, 2.5, 2.6]  One match, two new
-        store.append_entries(LogIndex::from(2),
-                             &[(Term::from(0), &[2]),
-                               (Term::from(2), &[5]),
-                               (Term::from(2), &[6])])
-             .unwrap();
-        assert_entries_equal(&store, vec![(Term::from(0), &*vec![1]),
-                                          (Term::from(0), &*vec![2u8]),
-                                          (Term::from(2), &*vec![5u8]),
-                                          (Term::from(2), &*vec![6u8])]);
+        store
+            .append_entries(
+                LogIndex::from(2),
+                &[
+                    (Term::from(0), &[2]),
+                    (Term::from(2), &[5]),
+                    (Term::from(2), &[6]),
+                ],
+            )
+            .unwrap();
+        assert_entries_equal(
+            &store,
+            vec![
+                (Term::from(0), &*vec![1]),
+                (Term::from(0), &*vec![2u8]),
+                (Term::from(2), &*vec![5u8]),
+                (Term::from(2), &*vec![6u8]),
+            ],
+        );
 
         // [0.1, 0.2, 4.7, 5.8]  All new entries
-        store.append_entries(LogIndex::from(3), &[(Term(4), &[7]), (Term(5), &[8])]).unwrap();
-        assert_entries_equal(&store, vec![(Term::from(0), &*vec![1]),
-                                          (Term::from(0), &*vec![2]),
-                                          (Term::from(4), &*vec![7]),
-                                          (Term::from(5), &*vec![8])]);
+        store
+            .append_entries(LogIndex::from(3), &[(Term(4), &[7]), (Term(5), &[8])])
+            .unwrap();
+        assert_entries_equal(
+            &store,
+            vec![
+                (Term::from(0), &*vec![1]),
+                (Term::from(0), &*vec![2]),
+                (Term::from(4), &*vec![7]),
+                (Term::from(5), &*vec![8]),
+            ],
+        );
         remove_file(&filename).unwrap();
     }
 
@@ -393,11 +438,16 @@ mod test {
             let mut store = FsLog::new(&filename).unwrap();
             store.set_current_term(Term(42)).unwrap();
             store.set_voted_for(ServerId::from(4)).unwrap();
-            store.append_entries(LogIndex(1),
-                                &[(Term::from(0), &[1]),
-                                (Term::from(0), &[2]),
-                                (Term::from(0), &[3]),
-                                (Term::from(1), &[4])])
+            store
+                .append_entries(
+                    LogIndex(1),
+                    &[
+                        (Term::from(0), &[1]),
+                        (Term::from(0), &[2]),
+                        (Term::from(0), &[3]),
+                        (Term::from(1), &[4]),
+                    ],
+                )
                 .unwrap();
         }
 
@@ -405,10 +455,15 @@ mod test {
         let store = FsLog::new(&filename).unwrap();
         assert_eq!(store.voted_for().unwrap(), Some(ServerId::from(4)));
         assert_eq!(store.current_term().unwrap(), Term(42));
-        assert_entries_equal(&store, vec![(Term::from(0), &[1]),
-                                          (Term::from(0), &[2]),
-                                          (Term::from(0), &[3]),
-                                          (Term::from(1), &[4])]);
+        assert_entries_equal(
+            &store,
+            vec![
+                (Term::from(0), &[1]),
+                (Term::from(0), &[2]),
+                (Term::from(0), &[3]),
+                (Term::from(1), &[4]),
+            ],
+        );
         assert_eq!(store.offsets, [24, 41, 58, 75]);
         remove_file(&filename).unwrap();
     }
